@@ -65,7 +65,7 @@ fn handle(msg: &Value) -> Option<Value> {
                         incidents for crashes and kills; fit before loading a model; \
                         log, diff, show, follow and tag for history (references: ~N, @2h, ids, tag names); \
                         status, logs, restart, stop, start and reload for hearthd's servers (only those: never act on a process hearth did not start); \
-                        config for why hearth did something; bundle for everything at once."
+                        config for why hearth did something; process_memory for what one process really uses; bundle for everything at once."
                 }),
             )
         }
@@ -434,6 +434,20 @@ mod tests {
                 .iter()
                 .all(|t| t.get("cli").is_none())
         );
+    }
+
+    #[test]
+    fn instructions_name_every_tool() {
+        let reply =
+            handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})).unwrap();
+        let text = reply["result"]["instructions"].as_str().unwrap();
+        for t in tools().as_array().unwrap() {
+            let name = t["name"].as_str().unwrap();
+            assert!(
+                text.contains(name),
+                "the instructions do not mention {name}"
+            );
+        }
     }
 
     #[test]
