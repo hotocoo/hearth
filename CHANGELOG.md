@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:45 fit suggests cache types
+
+- When a context does not fit the device, `hearth fit` lists the KV cache types it would fit with, each with its total (`fits_device_with`).
+
 ### 2026-10-15 04:42 fit check refinements
 
 - The fit check before start refuses only a too-big verdict. A check that cannot run is reported, and the start goes ahead. Verdicts are reused across restarts.
