@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:30 futile restart fixes
+
+- **When restarts stop.** Only a start that never served can be judged futile. A missing model file is retried, because it may be on a volume that is not mounted yet. An allocation failed during a load counts as out of memory.
+- **`hearth run`.** Its final error names the last event.
+
 ### 2026-10-15 07:23 futile restarts
 
 - A supervised server that exits before serving because its model does not load or its arguments are refused is not restarted. The decision is `futile`, the restart budget is not charged, and you are notified. `hearth start` revives it once the command is fixed.
