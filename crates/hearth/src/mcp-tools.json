@@ -247,6 +247,19 @@
         "delete": {
           "type": "boolean",
           "description": "Remove the tag instead."
+        },
+        "at": {
+          "type": "string",
+          "description": "Name this one recorded snapshot of kind instead of the latest of every kind, like git tag NAME COMMIT: an id, ~N, @AGE or another tag. For example the first match of log with grep, to compare with it later."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ports",
+            "doctor",
+            "run"
+          ],
+          "description": "Whose snapshot at names (default ports)."
         }
       }
     },

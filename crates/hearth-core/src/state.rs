@@ -489,6 +489,41 @@ impl Journal {
         }
     }
 
+    /// Names one recorded snapshot `name`, like `git tag NAME COMMIT`:
+    /// the tag then holds only that snapshot. Naming it again moves it.
+    pub fn tag_snapshot(&self, name: &str, id: &str) -> Result<(), StateError> {
+        if !valid_tag(name) {
+            return Err(StateError::BadRef(name.to_string()));
+        }
+        let kind = kind_of(id)
+            .filter(|_| valid_id(id))
+            .ok_or_else(|| StateError::BadRef(id.to_string()))?;
+        let ids = std::collections::BTreeMap::from([(kind.to_string(), id.to_string())]);
+        let dir = self.tags_dir();
+        ensure_dir(&dir)?;
+        let path = dir.join(format!("{name}.{EXTENSION}"));
+        let text = serde_json::to_vec(&ids).map_err(|source| StateError::Json {
+            path: path.clone(),
+            source,
+        })?;
+        let tmp = dir.join(format!(".{name}.{}.tmp", unique_nanos()));
+        let written = write_synced(&tmp, &text).and_then(|()| std::fs::rename(&tmp, &path));
+        if let Err(source) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(StateError::Io { path, source });
+        }
+        // A prune may have removed it before the tag protected it.
+        let file = self.file(id);
+        if file.exists() {
+            return Ok(());
+        }
+        self.delete_tag(name)?;
+        Err(StateError::Io {
+            path: file,
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        })
+    }
+
     /// The ids tag `name` holds, by kind.
     pub fn tag(
         &self,
@@ -655,6 +690,25 @@ mod tests {
             j.resolve("doctor", &id),
             Err(StateError::WrongKind { .. })
         ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_tag_can_name_one_earlier_snapshot() {
+        let dir = std::env::temp_dir().join(format!("hearth-tag-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let j = Journal::at(dir.clone(), 2).unwrap();
+        let first = j.record("ports", &1).unwrap().snapshot.id;
+        j.record("ports", &2).unwrap();
+        j.tag_snapshot("first", &first).unwrap();
+        // Kept past the cap, and the tag holds only that snapshot.
+        j.record("ports", &3).unwrap();
+        assert_eq!(j.resolve("ports", "first").unwrap().id, first);
+        assert_eq!(j.tag("first").unwrap().len(), 1);
+        assert!(j.tag_snapshot("bad", "not-an-id").is_err());
+        let gone = first.replace("-ports", "-doctor");
+        assert!(j.tag_snapshot("gone", &gone).is_err());
+        assert!(j.tag("gone").is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

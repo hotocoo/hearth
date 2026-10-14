@@ -134,8 +134,15 @@ pub struct TagArgs {
     /// starting with a letter). Without it, the tags are listed.
     name: Option<String>,
     /// Remove the tag instead; its snapshots are pruned like others again.
-    #[arg(long, requires = "name")]
+    #[arg(long, requires = "name", conflicts_with = "at")]
     delete: bool,
+    /// Name this recorded snapshot instead of the latest of every kind,
+    /// like `git tag NAME COMMIT`: an id, ~N, @AGE or another tag, of
+    /// --kind's snapshots (e.g. the first match of `hearth log --grep`).
+    #[arg(long, requires = "name")]
+    at: Option<String>,
+    #[arg(long, value_enum, default_value_t = Kind::Ports, requires = "at")]
+    kind: Kind,
 }
 
 /// Something that is different between two snapshots.
@@ -603,6 +610,15 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
             journal.delete_tag(name).map_err(|e| e.to_string())?;
             serde_json::json!({ "deleted": name })
         }
+        (Some(name), false) if args.at.is_some() => {
+            let at = args.at.as_deref().unwrap_or_default();
+            let id = journal
+                .resolve(args.kind.name(), at)
+                .map_err(|e| e.to_string())?
+                .id;
+            journal.tag_snapshot(name, &id).map_err(|e| e.to_string())?;
+            serde_json::json!({ "tagged": name, "snapshots": { args.kind.name(): id } })
+        }
         (Some(name), false) => {
             let ids = journal.set_tag(name, &kinds).map_err(|e| e.to_string())?;
             if ids.is_empty() {
@@ -634,13 +650,19 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
             let _ = writeln!(out, "unreadable: {}", e.as_str().unwrap_or_default());
         }
     } else if let Some(name) = value["tagged"].as_str() {
+        let named = value["snapshots"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(kind, id)| format!("{kind} {}", id.as_str().unwrap_or_default()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let which = if args.at.is_some() { "" } else { "the latest " };
         let _ = writeln!(
             out,
-            "{name} now names the latest {}; hearth diff --from {name} compares with it",
-            value["snapshots"]
-                .as_object()
-                .map(|m| m.keys().cloned().collect::<Vec<_>>().join(", "))
-                .unwrap_or_default()
+            "{name} now names {which}{named}; hearth diff --from {name} compares with it"
         );
     } else {
         let _ = writeln!(
