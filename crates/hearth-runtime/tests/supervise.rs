@@ -223,10 +223,12 @@ fn a_port_answered_by_another_model_is_refused_by_name() {
     let port = free_port();
     let t = trigger("refused");
     assert!(free(&preflight(&probe(port), Some("wanted"))));
-    let mut other = Fake::new("someone-else", &t, "exit")
-        .command(port)
-        .spawn()
-        .unwrap();
+    let _other = Reaped(
+        Fake::new("someone-else", &t, "exit")
+            .command(port)
+            .spawn()
+            .unwrap(),
+    );
     wait_for(port, |p| !free(p));
     match preflight(&probe(port), Some("wanted")) {
         Preflight::Occupied { identity } => assert_eq!(identity.models(), ["someone-else"]),
@@ -254,9 +256,16 @@ fn a_port_answered_by_another_model_is_refused_by_name() {
         ),
         "{seen:?}"
     );
-    drop(s);
-    let _ = other.kill();
-    let _ = other.wait();
+}
+
+/// Kills a process the test started directly, even when an assert fails.
+struct Reaped(std::process::Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 #[test]

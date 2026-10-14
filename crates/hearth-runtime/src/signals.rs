@@ -19,6 +19,17 @@ pub enum Signal {
 
 /// `(substring, signal)`, lowercase.
 const SIGNATURES: &[(&str, Signal)] = &[
+    // ggml-metal (ggml-metal-context.m, `ggml_metal_synchronize`): logged when
+    // a command buffer did not complete, right where the context sets
+    // `has_error`. The backend is latched from this line on; the request that
+    // logged it is the first of all the ones that will fail.
+    // "%s: error: command buffer %d failed with status %d". The capture path
+    // logs a similar line at INFO level without latching, under another
+    // function name, so the function name is part of the signature.
+    (
+        "ggml_metal_synchronize: error: command buffer",
+        Signal::Poisoned,
+    ),
     // ggml-metal (ggml-metal-context.m), logged on every graph compute after
     // one command buffer failed: "%s: backend is in error state from a
     // previous command buffer failure - recreate the backend to recover".
@@ -63,6 +74,19 @@ mod tests {
                 "error: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)"
             ),
             Some(Signal::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn the_failing_command_buffer_is_the_moment_metal_latches() {
+        assert_eq!(
+            classify("ggml_metal_synchronize: error: command buffer 0 failed with status 5"),
+            Some(Signal::Poisoned)
+        );
+        // The capture path's line does not latch the backend.
+        assert_eq!(
+            classify("ggml_metal_graph_compute: command buffer 0 failed with status 5"),
+            None
         );
     }
 

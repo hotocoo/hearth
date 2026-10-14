@@ -126,6 +126,22 @@ impl Config {
                 return invalid(key, &0, "must be at least 1");
             }
         }
+        // Deadlines are computed as now + this; a value the clock cannot
+        // represent would make that overflow.
+        let representable = |ms: u64| {
+            std::time::Instant::now()
+                .checked_add(std::time::Duration::from_millis(ms))
+                .is_some()
+        };
+        for (key, value) in [
+            ("supervise.restart_window_ms", v.restart_window_ms),
+            ("supervise.ready_timeout_ms", v.ready_timeout_ms),
+            ("supervise.stop_grace_ms", v.stop_grace_ms),
+        ] {
+            if !representable(value) {
+                return invalid(key, &value, "is too large for this platform's clock");
+            }
+        }
         if v.backoff_max_ms > v.restart_window_ms {
             return invalid(
                 "supervise.backoff_max_ms",
@@ -249,6 +265,17 @@ mod tests {
                 ),
                 "{bad}"
             );
+        }
+    }
+
+    /// What the clock can represent differs by platform, so the check is
+    /// that a value either fails validation or can be used, never panics.
+    #[test]
+    fn huge_durations_are_rejected_or_usable() {
+        let text = format!("[supervise]\nrestart_window_ms = {}\n", i64::MAX);
+        if let Ok(cfg) = from_layers(Some(("test", &text))) {
+            let _ = std::time::Instant::now()
+                + std::time::Duration::from_millis(cfg.supervise.restart_window_ms);
         }
     }
 
