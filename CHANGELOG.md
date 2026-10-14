@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:54 hearth bundle
+
+- `hearth bundle [--since T]` (MCP `bundle`) gathers doctor, ports, incidents, hearthd status, recent `run` events, tags and settings into one JSON document. A part that fails is included as its error.
+- The webhook URL and server arguments are redacted. Process names and paths stay, so read the bundle before sharing it.
+
 ### 2026-10-15 01:52 hearth tag
 
 - `hearth tag NAME` names the latest snapshot of each kind. Tagged snapshots are never pruned, and the name works wherever a snapshot is asked for: `hearth diff --from healthy`, `hearth show healthy`.
