@@ -132,8 +132,12 @@ fn cache_types_from_args(args: &[String]) -> Option<(CacheType, CacheType)> {
     {
         return None;
     }
-    let flag = |names: [&str; 2]| -> Option<CacheType> {
-        let value = args.iter().enumerate().find_map(|(i, a)| {
+    // The last occurrence wins, as in llama.cpp; long flags may be spelt
+    // with `_`. An absent flag is not assumed to mean the f16 default: the
+    // server may take it from LLAMA_ARG_CACHE_TYPE_* in its environment,
+    // which is not read, so the type is then unknown.
+    let flag = |names: [&str; 3]| -> Option<CacheType> {
+        let value = args.iter().enumerate().rev().find_map(|(i, a)| {
             names.iter().find_map(|n| {
                 if a == n {
                     args.get(i + 1).cloned()
@@ -141,16 +145,12 @@ fn cache_types_from_args(args: &[String]) -> Option<(CacheType, CacheType)> {
                     a.strip_prefix(&format!("{n}=")).map(str::to_string)
                 }
             })
-        });
-        match value {
-            Some(v) => CacheType::parse(&v),
-            // llama.cpp's own default for both caches.
-            None => Some(CacheType::F16),
-        }
+        })?;
+        CacheType::parse(&value)
     };
     Some((
-        flag(["-ctk", "--cache-type-k"])?,
-        flag(["-ctv", "--cache-type-v"])?,
+        flag(["-ctk", "--cache-type-k", "--cache_type_k"])?,
+        flag(["-ctv", "--cache-type-v", "--cache_type_v"])?,
     ))
 }
 
@@ -284,6 +284,18 @@ fn alternatives(
         .collect()
 }
 
+/// The key and value cache types: as given, else the server's own.
+fn cache_types(args: &Args) -> Result<(CacheType, CacheType), String> {
+    if let Some(k) = args.cache_type {
+        return Ok((k, args.cache_type_v.unwrap_or(k)));
+    }
+    let (k, v) = args
+        .port
+        .and_then(server_cache_types)
+        .ok_or("give --cache-type: the server's command line does not say it")?;
+    Ok((k, args.cache_type_v.unwrap_or(v)))
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
@@ -301,13 +313,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .sum::<Result<u64, String>>()?;
     let header = gguf::read_header(&files[0]).map_err(|e| e.to_string())?;
     let geometry = Geometry::from_header(&header).map_err(|e| e.to_string())?;
-    let (k, v) = match args.cache_type {
-        Some(k) => (k, args.cache_type_v.unwrap_or(k)),
-        None => args
-            .port
-            .and_then(server_cache_types)
-            .ok_or("give --cache-type: the server's command line does not say it")?,
-    };
+    let (k, v) = cache_types(args)?;
     let swa = args
         .parallel
         .zip(args.ubatch)
@@ -552,8 +558,8 @@ pub(crate) enum Verdict {
 
 /// The fit check a supervisor runs before each start: refuses only what
 /// cannot fit; a check that cannot run is reported and the start goes
-/// ahead, since the server's own failure is then the honest answer. The
-/// device ceiling does not change, so a verdict is kept for later starts.
+/// ahead, since the server's own failure is then the honest answer. A
+/// "fits" verdict is kept for later starts.
 pub(crate) fn start_check(
     label: String,
     model: String,
@@ -573,10 +579,9 @@ pub(crate) fn start_check(
                 *known = Some(Ok(()));
                 Ok(())
             }
-            Verdict::TooBig(why) => {
-                *known = Some(Err(why.clone()));
-                Err(why)
-            }
+            // Not kept: the ceiling can be raised (iogpu.wired_limit_mb),
+            // and the next start should see it.
+            Verdict::TooBig(why) => Err(why),
             Verdict::Unknown(why) => {
                 eprintln!("{label} fit check could not run ({why}); starting anyway");
                 Ok(())
@@ -603,9 +608,21 @@ mod args_tests {
             ])),
             Some((CacheType::Q8_0, CacheType::Q4_0))
         );
+        assert_eq!(cache_types_from_args(&args(&["llama-server"])), None);
         assert_eq!(
-            cache_types_from_args(&args(&["llama-server"])),
-            Some((CacheType::F16, CacheType::F16))
+            cache_types_from_args(&args(&[
+                "llama-server",
+                "-ctk",
+                "f16",
+                "-ctv",
+                "f16",
+                "-ctk",
+                "q8_0",
+                "--cache_type_v",
+                "q8_0"
+            ])),
+            Some((CacheType::Q8_0, CacheType::Q8_0)),
+            "the last flag wins"
         );
         assert_eq!(cache_types_from_args(&args(&["ollama", "serve"])), None);
         assert_eq!(

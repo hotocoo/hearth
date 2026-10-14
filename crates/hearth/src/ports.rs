@@ -493,8 +493,11 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                     r["ceiling"]["source"].as_str().unwrap_or("device")
                 ),
                 remediation: format!(
-                    "it will run out of accelerator memory as its context fills; restart it with -c at most {}{}",
-                    r["max_ctx_device"],
+                    "it will run out of accelerator memory as its context fills; {}{}",
+                    r["max_ctx_device"].as_u64().map_or_else(
+                        || "the weights alone do not fit: use a smaller model or quantization".to_string(),
+                        |n| format!("restart it with -c at most {n}"),
+                    ),
                     if kinds.is_empty() {
                         String::new()
                     } else {

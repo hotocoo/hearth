@@ -169,7 +169,7 @@ Tests read a fixture sysfs tree and recorded `nvidia-smi` output. CI has no GPU.
 
 `hearth fit --port P` needs nothing else for a llama.cpp server:
 - **Context.** It is `/props` `n_ctx` times `total_slots`, since `n_ctx` is per sequence.
-- **Cache types.** They are read from the server's own command line (`-ctk`/`--cache-type-k`, `-ctv`/`--cache-type-v`, f16 when absent, llama.cpp's default). `hearth_sense::process_args` reads it: `KERN_PROCARGS2` on macOS, `/proc/PID/cmdline` on Linux. The kernel only lets this user read their own processes' arguments.
+- **Cache types.** They are read from the server's own command line (`-ctk`/`--cache-type-k`, `-ctv`/`--cache-type-v`). The last occurrence wins, as in llama.cpp. When a flag is absent the type is unknown and `--cache-type` is needed: the server may take it from `LLAMA_ARG_CACHE_TYPE_*` in its environment, which is not read. Known limits, left for later: `ports` re-runs the fit per server and probes loopback only; a transient failure of that fit drops the finding for a round. `hearth_sense::process_args` reads it: `KERN_PROCARGS2` on macOS, `/proc/PID/cmdline` on Linux. The kernel only lets this user read their own processes' arguments.
 
 When the context does not fit, `fits_device_with` names the cache types it would fit with. hearthd's refusal message suggests them too.
 

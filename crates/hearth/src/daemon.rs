@@ -329,7 +329,9 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
     let model_path = server.model.clone().map(|m| {
         let relative = std::path::Path::new(&m);
         match &server.dir {
-            Some(d) if relative.is_relative() && relative.components().count() > 1 => {
+            // Only a file that exists there: org/repo and Ollama names are
+            // not paths.
+            Some(d) if relative.is_relative() && d.join(relative).is_file() => {
                 d.join(relative).display().to_string()
             }
             _ => m,
