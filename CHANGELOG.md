@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:03 models fixes
+
+- **Paths.** `models --json` gives each file's path as found, not the cache blob it links to.
+- **Folder walking.** Symlinked folders are not followed. An unreadable folder is reported as an error.
+- **`--serving`.** If the server probe fails, the error is reported and the list is still printed.
+
 ### 2026-10-15 06:56 quantization folders
 
 - `fit`, `models` and `org/repo:QUANT` names find GGUFs kept in a repo's quantization folders, such as `Q4_K_M/model-Q4_K_M-00001-of-00002.gguf`. Such a file is named `org/repo/Q4_K_M/file.gguf`.
