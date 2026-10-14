@@ -173,3 +173,18 @@ Tests read a fixture sysfs tree and recorded `nvidia-smi` output. CI has no GPU.
 
 When the context does not fit, `fits_device_with` names the cache types it would fit with. hearthd's refusal message suggests them too.
 
+## Addendum (2026-10-15): MLX and safetensors models
+
+`fit` also takes a model directory with `config.json` and `.safetensors` files, which is how MLX (`mlx_lm.server`) and Transformers models are stored. The Hugging Face cache lookup returns such a repo as a directory. The weights are the safetensors files' total size; for MLX they are already quantized.
+
+The geometry follows the same rules as for GGUF, from the config's Transformers keys:
+- `num_hidden_layers`;
+- `num_key_value_heads`, defaulting to the attention heads;
+- `head_dim`, defaulting to `hidden_size / heads`;
+- `sliding_window` with per-layer `layer_types`, where linear or mamba layers are recurrent;
+- `max_position_embeddings` as the trained context.
+
+A multimodal config's `text_config` is used.
+
+A sliding window without `layer_types` is costed as full attention and marked medium confidence.
+

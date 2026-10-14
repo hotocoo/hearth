@@ -49,7 +49,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "Path to a .gguf file (any shard of a split model); a Hugging Face or LM Studio name such as org/repo:Q6_K or org/repo/file.gguf, read from their download stores; or an Ollama model name such as qwen3:8b, read from Ollama's store. Nothing is downloaded or loaded. Required unless port is given."
+          "description": "Path to a .gguf file (any shard of a split model), or to a model directory with config.json and .safetensors (MLX, Transformers); a Hugging Face or LM Studio name such as org/repo:Q6_K or org/repo/file.gguf, read from their download stores; or an Ollama model name such as qwen3:8b, read from Ollama's store. Nothing is downloaded or loaded. Required unless port is given."
         },
         "ctx": {
           "type": "integer",

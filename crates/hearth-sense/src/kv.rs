@@ -152,6 +152,88 @@ impl Geometry {
         })
     }
 
+    /// Geometry from a Transformers `config.json`, the convention MLX and
+    /// safetensors models follow. Multimodal configs keep the language
+    /// model's under `text_config`. Keys: `num_hidden_layers`,
+    /// `num_key_value_heads` (defaults to `num_attention_heads`), `head_dim`
+    /// (defaults to `hidden_size / num_attention_heads`), `sliding_window`
+    /// with `layer_types` naming each layer's attention, and
+    /// `max_position_embeddings` as the trained context.
+    pub fn from_hf_config(config: &serde_json::Value) -> Result<Self> {
+        let c = if config["text_config"].is_object() {
+            &config["text_config"]
+        } else {
+            config
+        };
+        let num = |k: &str| c[k].as_u64();
+        let need = |k: &'static str| {
+            num(k).ok_or(SenseError::Parse {
+                what: "config.json geometry",
+                detail: format!("missing {k}"),
+            })
+        };
+        let arch = c["model_type"]
+            .as_str()
+            .or_else(|| config["model_type"].as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let n = usize::try_from(need("num_hidden_layers")?).map_err(|_| SenseError::Parse {
+            what: "config.json geometry",
+            detail: "num_hidden_layers too large".into(),
+        })?;
+        let heads = need("num_attention_heads")?;
+        let kv_heads = num("num_key_value_heads").unwrap_or(heads);
+        let head_dim = match num("head_dim") {
+            Some(d) => d,
+            None => need("hidden_size")? / heads.max(1),
+        };
+        let mut notes = Vec::new();
+        let mut confidence = Confidence::High;
+        let window = num("sliding_window");
+        let kinds: Option<Vec<&str>> = c["layer_types"]
+            .as_array()
+            .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect());
+        let layers = (0..n)
+            .map(|i| {
+                let kind = kinds.as_ref().and_then(|k| k.get(i).copied());
+                match (kind, window) {
+                    (Some("sliding_attention"), Some(window)) => Layer::Sliding {
+                        kv_heads,
+                        k_len: head_dim,
+                        v_len: head_dim,
+                        window,
+                    },
+                    (Some(k), _) if k.contains("linear") || k.contains("mamba") => Layer::Recurrent,
+                    _ => Layer::Full {
+                        kv_heads,
+                        k_len: head_dim,
+                        v_len: head_dim,
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        if window.is_some() && kinds.is_none() {
+            confidence = Confidence::Medium;
+            notes.push(
+                "sliding_window is set but layer_types is not: every layer is costed as full attention, which errs high"
+                    .into(),
+            );
+        }
+        if layers.contains(&Layer::Recurrent) {
+            confidence = confidence.min(Confidence::Medium);
+            notes.push(
+                "recurrent layers keep a per-sequence state that is not counted here".to_string(),
+            );
+        }
+        Ok(Self {
+            arch,
+            trained_context: num("max_position_embeddings"),
+            layers,
+            confidence,
+            notes,
+        })
+    }
+
     /// Bytes of KV cache for `cache_tokens` tokens of total context.
     ///
     /// `sequences` and `ubatch` only matter for sliding-window layers, whose
@@ -336,6 +418,41 @@ impl CacheType {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transformers_config_gives_the_same_geometry_rules() {
+        let cfg = serde_json::json!({
+            "model_type": "gemma3",
+            "text_config": {
+                "num_hidden_layers": 4, "num_attention_heads": 8, "num_key_value_heads": 4,
+                "head_dim": 256, "sliding_window": 1024, "max_position_embeddings": 131_072,
+                "layer_types": ["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"]
+            }
+        });
+        let g = Geometry::from_hf_config(&cfg).unwrap();
+        assert_eq!(g.layers.len(), 4);
+        assert_eq!(g.trained_context, Some(131_072));
+        assert!(matches!(g.layers[0], Layer::Sliding { window: 1024, .. }));
+        assert!(matches!(
+            g.layers[3],
+            Layer::Full {
+                kv_heads: 4,
+                k_len: 256,
+                ..
+            }
+        ));
+        let plain = serde_json::json!({"model_type":"llama","num_hidden_layers":2,"num_attention_heads":32,"hidden_size":4096});
+        let g = Geometry::from_hf_config(&plain).unwrap();
+        assert!(matches!(
+            g.layers[0],
+            Layer::Full {
+                kv_heads: 32,
+                k_len: 128,
+                ..
+            }
+        ));
+        assert!(Geometry::from_hf_config(&serde_json::json!({})).is_err());
+    }
+
     use super::*;
     use crate::gguf::tests::{build, s, u32_array, u32v};
     use std::io::Cursor;

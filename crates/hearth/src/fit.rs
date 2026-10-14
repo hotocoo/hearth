@@ -16,7 +16,8 @@ use crate::units::bytes;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// GGUF file (any shard of a split model); a Hugging Face or LM Studio
+    /// GGUF file (any shard of a split model); a model directory with
+    /// config.json and .safetensors (MLX, Transformers); a Hugging Face or LM Studio
     /// name such as `org/repo:Q6_K` or `org/repo/file.gguf`, found in their
     /// download stores; or an Ollama model name such as `qwen3:8b`, found
     /// in Ollama's store. Nothing is downloaded or loaded.
@@ -296,23 +297,60 @@ fn cache_types(args: &Args) -> Result<(CacheType, CacheType), String> {
     Ok((k, args.cache_type_v.unwrap_or(v)))
 }
 
+/// The model's files, their total size, and its cache geometry: from the
+/// GGUF header, or for a directory with `config.json` (MLX, safetensors)
+/// from that config and the `.safetensors` files beside it.
+fn weights_and_geometry(model: &std::path::Path) -> Result<(Vec<PathBuf>, u64, Geometry), String> {
+    let size = |files: &[PathBuf]| {
+        files
+            .iter()
+            .map(|f| {
+                std::fs::metadata(f)
+                    .map(|m| m.len())
+                    .map_err(|e| format!("{}: {e}", f.display()))
+            })
+            .sum::<Result<u64, String>>()
+    };
+    if model.is_dir() {
+        let config_path = model.join("config.json");
+        let text = std::fs::read_to_string(&config_path).map_err(|e| {
+            format!(
+                "{}: {e}; a model directory needs config.json",
+                config_path.display()
+            )
+        })?;
+        let config: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", config_path.display()))?;
+        let mut files: Vec<PathBuf> = std::fs::read_dir(model)
+            .map_err(|e| format!("{}: {e}", model.display()))?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
+            })
+            .collect();
+        files.sort();
+        if files.is_empty() {
+            return Err(format!("{}: no .safetensors weights", model.display()));
+        }
+        let geometry = Geometry::from_hf_config(&config).map_err(|e| e.to_string())?;
+        return Ok((files.clone(), size(&files)?, geometry));
+    }
+    let files = gguf::model_files(model);
+    let weights = size(&files)?;
+    let header = gguf::read_header(&files[0]).map_err(|e| e.to_string())?;
+    let geometry = Geometry::from_header(&header).map_err(|e| e.to_string())?;
+    Ok((files, weights, geometry))
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
         .ctx
         .or(server_ctx)
         .ok_or("the server does not say its context; give --ctx (tokens of KV cache to fit)")?;
-    let files = gguf::model_files(&model);
-    let weights_bytes = files
-        .iter()
-        .map(|f| {
-            std::fs::metadata(f)
-                .map(|m| m.len())
-                .map_err(|e| format!("{}: {e}", f.display()))
-        })
-        .sum::<Result<u64, String>>()?;
-    let header = gguf::read_header(&files[0]).map_err(|e| e.to_string())?;
-    let geometry = Geometry::from_header(&header).map_err(|e| e.to_string())?;
+    let (files, weights_bytes, geometry) = weights_and_geometry(&model)?;
     let (k, v) = cache_types(args)?;
     let swa = args
         .parallel
