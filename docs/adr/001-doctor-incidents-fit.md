@@ -97,3 +97,15 @@ Reading the kernel log usually needs the `systemd-journal` or `adm` group. When 
 - **Stores.** The store is `OLLAMA_MODELS` when set. Otherwise it is Ollama's default for a user install (`~/.ollama/models`) or for the Linux system service (`/usr/share/ollama/.ollama/models`).
 - **Paths win.** A path that exists is always taken as a path. Anything starting with `.`, `/` or `~`, or containing `..`, is never taken as a model name.
 
+## Addendum (2026-10-15): MCP prompts
+
+`hearth mcp` declares the `prompts` capability and serves diagnostic workflows from `mcp-prompts.json`:
+- `diagnose-slow-machine`;
+- `server-died`;
+- `can-i-load`;
+- `what-changed`.
+
+Each workflow names the tools to call in order, how to read their answers, and the shape of the reply. Each also states what not to do: never load a model, and restart only servers hearthd owns. Arguments have documented defaults, and a missing required argument is a JSON-RPC invalid-params error.
+
+A test fails when a workflow names a tool that does not exist. The workflows therefore cannot drift from the tool list.
+

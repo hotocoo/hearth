@@ -1,0 +1,57 @@
+[
+  {
+    "name": "diagnose-slow-machine",
+    "description": "The machine is slow, swapping, or close to falling over: find which resource is running out, who holds it, and what to do.",
+    "arguments": [],
+    "template": "This machine is slow or unstable. Diagnose it with hearth's tools, in this order, and stop as soon as the cause is clear:\n\n1. Call `doctor` with watch_seconds 30. Note memory pressure, available memory, swap, and any open-file, thread or CLOSE_WAIT growth with its projected time to the limit.\n2. Call `diff` with kind \"doctor\" and from \"~10\" to see what moved across recent recorded observations; steady growth in one process across snapshots is a leak.\n3. Call `incidents` with since set to today's date to see whether the kernel already panicked, killed (jetsam or OOM) or found hung tasks.\n4. Call `ports` with runtimes_only true to see which model servers are resident and how much memory each holds.\n\nThen answer in this shape: the resource that is running out; the process responsible, with evidence from the tools; what to do now, naming the exact server or process; and what to watch for. Do not stop or restart anything yourself unless it is a server hearthd owns (see `status`) and the user asked for it."
+  },
+  {
+    "name": "server-died",
+    "description": "A model server stopped answering, crashed, or keeps failing requests: find out why and whether hearth already recovered it.",
+    "arguments": [
+      {
+        "name": "server",
+        "description": "Name in hearthd's [servers], or the port the server listens on.",
+        "required": false,
+        "default": "the one that failed; find it from status and ports"
+      }
+    ],
+    "template": "A model server ({server}) stopped working. Find out why:\n\n1. Call `status` to see whether hearthd owns it: its state (ready, waiting, gave_up), restart count and last event. If hearthd is not running, say so and continue.\n2. Call `log` with kind \"run\" and limit 30. Read the events for this server in order: exited (with code or signal), wedged (stopped answering), poisoned (backend latched after an out-of-memory error; it answers /health but fails every request), not_ready, give_up.\n3. Call `ports` to see what answers on its port now, and whether it is reported as not answering.\n4. Call `incidents` with since set to today's date: a jetsam or OOM kill of this process explains an exit with signal 9.\n5. Call `diff` with kind \"ports\" to see when it vanished or restarted.\n\nAnswer with: the cause (exit, wedge, poisoned backend, killed for memory, or crash loop), the evidence, and the fix. If hearthd owns it and is no longer restarting it, offer `restart` and say what will happen. If memory was the cause, say which other servers to unload first (from `ports`) and suggest a smaller context, checked with `fit`."
+  },
+  {
+    "name": "can-i-load",
+    "description": "Before starting a model server: will this model at this context fit the device, and right now, and what would have to go first?",
+    "arguments": [
+      {
+        "name": "model",
+        "description": "Path to a .gguf file, or an Ollama model name such as qwen3:8b.",
+        "required": true
+      },
+      {
+        "name": "ctx",
+        "description": "Total context tokens the server will allocate (llama.cpp -c; Ollama num_ctx x parallel).",
+        "required": true
+      },
+      {
+        "name": "cache_type",
+        "description": "KV cache type, e.g. f16 or q8_0.",
+        "required": false,
+        "default": "f16"
+      }
+    ],
+    "template": "Decide whether {model} with {ctx} tokens of context can be loaded on this machine.\n\n1. Call `fit` with model \"{model}\", ctx {ctx} and cache_type \"{cache_type}\". Note fits_device, fits_now, the largest context that would fit, and the notes (fits_now is provisional until the P0 gate has measured how memory-mapped weights count).\n2. Call `doctor` to see memory pressure and available memory now.\n3. Call `ports` with runtimes_only true to see which models are resident and their footprints.\n\nAnswer yes or no for the device and for right now. If it does not fit now, say which resident servers would have to be unloaded (largest first, from `ports`), or the largest context that fits. Never load or start the model yourself."
+  },
+  {
+    "name": "what-changed",
+    "description": "What changed on this machine since an earlier observation: servers that appeared, vanished, restarted or went silent; memory and descriptor movement; supervision events.",
+    "arguments": [
+      {
+        "name": "since",
+        "description": "How many recorded snapshots back to compare against, e.g. 5 (default 1).",
+        "required": false,
+        "default": "1"
+      }
+    ],
+    "template": "Report what changed on this machine over the last {since} recorded snapshot(s).\n\n1. Call `diff` with kind \"ports\" and from \"~{since}\": model servers that appeared, vanished, restarted (new pid) or stopped answering, and footprint movement.\n2. Call `diff` with kind \"doctor\" and from \"~{since}\" and limit 10: memory pressure, available memory, swap, and the processes whose open files, threads or CLOSE_WAIT sockets moved most.\n3. Call `log` with kind \"run\" and limit 20 for supervision events in that time.\n\nIf `diff` says there are not enough snapshots, call `ports` and `doctor` once to record a fresh one and say that history starts now. Summarize the changes that matter first: restarts, silences, pressure, growth toward a limit."
+  }
+]

@@ -57,7 +57,7 @@ fn handle(msg: &Value) -> Option<Value> {
                 id,
                 json!({
                     "protocolVersion": version,
-                    "capabilities": { "tools": {} },
+                    "capabilities": { "tools": {}, "prompts": {} },
                     "serverInfo": { "name": "hearth", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": "hearth inspects a machine that runs local models. \
                         Use doctor before loading a model or when the machine is slow, \
@@ -70,6 +70,14 @@ fn handle(msg: &Value) -> Option<Value> {
         }
         Some("ping") => ok(id, json!({})),
         Some("tools/list") => ok(id, json!({ "tools": tools() })),
+        Some("prompts/list") => ok(id, json!({ "prompts": prompt_list() })),
+        Some("prompts/get") => match prompt(
+            params["name"].as_str().unwrap_or_default(),
+            &params["arguments"],
+        ) {
+            Ok(result) => ok(id, result),
+            Err(e) => error(id, -32602, &e),
+        },
         Some("tools/call") => {
             let name = params["name"].as_str().unwrap_or_default();
             match call(name, &params["arguments"]) {
@@ -94,6 +102,55 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
         "structuredContent": structured,
         "isError": is_error,
     })
+}
+
+/// Diagnostic workflows: which tools to call in which order for a question
+/// agents keep being asked. Kept as data next to this file.
+fn prompts() -> Vec<Value> {
+    serde_json::from_str::<Vec<Value>>(include_str!("mcp-prompts.json")).unwrap_or_default()
+}
+
+fn prompt_list() -> Vec<Value> {
+    prompts()
+        .into_iter()
+        .map(|mut p| {
+            if let Some(o) = p.as_object_mut() {
+                o.remove("template");
+            }
+            p
+        })
+        .collect()
+}
+
+/// The prompt `name` with `arguments` filled in. A missing argument takes
+/// its documented default; a missing required one is an error.
+fn prompt(name: &str, arguments: &Value) -> Result<Value, String> {
+    let p = prompts()
+        .into_iter()
+        .find(|p| p["name"] == name)
+        .ok_or_else(|| format!("no prompt named {name:?}; prompts/list has them"))?;
+    let mut text = p["template"].as_str().unwrap_or_default().to_string();
+    for arg in p["arguments"].as_array().into_iter().flatten() {
+        let key = arg["name"].as_str().unwrap_or_default();
+        let given = arguments[key].as_str().map(str::to_string).or_else(|| {
+            arguments[key]
+                .is_number()
+                .then(|| arguments[key].to_string())
+        });
+        let value = match (given, arg["default"].as_str()) {
+            (Some(v), _) => v,
+            (None, Some(default)) => default.to_string(),
+            (None, None) if arg["required"] == true => {
+                return Err(format!("{name} needs the argument {key}"));
+            }
+            (None, None) => "not given".into(),
+        };
+        text = text.replace(&format!("{{{key}}}"), &value);
+    }
+    Ok(json!({
+        "description": p["description"],
+        "messages": [{ "role": "user", "content": { "type": "text", "text": text } }],
+    }))
 }
 
 /// The tool list, kept as data next to this file. Its validity is checked by
@@ -220,6 +277,49 @@ mod tests {
         assert!(handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
         let reply = handle(&json!({"jsonrpc":"2.0","id":3,"method":"nope"})).unwrap();
         assert_eq!(reply["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn prompts_are_listed_and_filled_in() {
+        let reply = handle(&json!({"jsonrpc":"2.0","id":7,"method":"prompts/list"})).unwrap();
+        let listed = reply["result"]["prompts"].as_array().unwrap();
+        assert!(listed.len() >= 4);
+        assert!(listed.iter().all(|p| p.get("template").is_none()));
+        let tools: Vec<String> = tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        // Every tool a workflow names must exist.
+        for p in prompts() {
+            let text = p["template"].as_str().unwrap();
+            for named in text.split('`').skip(1).step_by(2) {
+                assert!(
+                    tools.contains(&named.to_string()),
+                    "{}: `{named}` is not a tool",
+                    p["name"]
+                );
+            }
+        }
+        let reply = handle(&json!({"jsonrpc":"2.0","id":8,"method":"prompts/get",
+            "params":{"name":"can-i-load","arguments":{"model":"qwen3:8b","ctx":"32768"}}}))
+        .unwrap();
+        let text = reply["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("qwen3:8b") && text.contains("32768") && !text.contains("{model}"));
+        let missing = handle(&json!({"jsonrpc":"2.0","id":9,"method":"prompts/get",
+            "params":{"name":"can-i-load","arguments":{}}}))
+        .unwrap();
+        assert_eq!(missing["error"]["code"], -32602);
+        let reply = handle(&json!({"jsonrpc":"2.0","id":10,"method":"prompts/get",
+            "params":{"name":"what-changed"}}))
+        .unwrap();
+        let text = reply["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("\"~1\""), "defaults fill in");
     }
 
     #[test]
