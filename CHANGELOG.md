@@ -4,6 +4,18 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:53 hearthd, hearth status and restart (ADR-007)
+
+- `hearthd` keeps every `[servers.NAME]` from the user's configuration alive, each exactly as `hearth run` would. A server is given by `port`, `command`, and optionally `host` and `expect`. Names, commands and port clashes are validated.
+- Control socket `hearthd.sock`, in the owner-only state directory, with one JSON line per request:
+  - `hearth status` (MCP `status`): state, pid, restarts and last event per server.
+  - `hearth restart NAME` (MCP `restart`): restart now without charging the budget, also after a give-up. Unknown names are refused.
+- A second hearthd refuses to start; a stale socket is replaced. A socket path that is too long is explained with the fix.
+- `run` journal records carry the server's name.
+- The MCP tool list lives in `mcp-tools.json`.
+- The `hearth` crate is a library with the `hearth` and `hearthd` binaries.
+- End-to-end test of the built binaries, ending with SIGKILL of hearthd and its server's port closing.
+
 ### 2026-10-15 00:45 watch and notify hardening
 
 - **Memory pressure.** Keyed by level: warn rising to critical is reported, and the warn clears.
