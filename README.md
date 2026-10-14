@@ -85,7 +85,7 @@ Set `[notify] desktop = true` or `webhook_url` in your config to be told when `h
 
 Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
 
-For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `show`, `follow`, `tag`, `status`, `restart`, `stop`, `start`, `logs`, `config`, `bundle` and `process_memory`. `restart`, `stop` and `start` reach only servers hearthd started. It also serves five workflows as MCP prompts: `diagnose-slow-machine`, `server-died`, `can-i-load`, `what-changed` and `find-a-leak`. Each says which tools to call, in which order, and how to answer. For Claude Code:
+For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `show`, `follow`, `tag`, `status`, `restart`, `stop`, `start`, `logs`, `config`, `bundle` and `process_memory`. `restart`, `stop` and `start` reach only servers hearthd started. It also serves five workflows as MCP prompts: `diagnose-slow-machine`, `server-died`, `can-i-load`, `what-changed` and `find-a-leak`. Each says which tools to call, in which order, and how to answer. [docs/agents.md](docs/agents.md) maps questions to tools. For Claude Code:
 
 ```sh
 claude mcp add hearth -- /path/to/hearth mcp
