@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:18 poisoned backends restarted from their own log
+
+- `hearth run` reads the server's stdout and stderr line by line. The lines are passed on to hearth's stderr; hearth's stdout carries only events.
+- **Poisoned.** A server is stopped and restarted when its log says the backend is permanently broken. On Metal that is llama.cpp's "backend is in error state from a previous command buffer failure - recreate the backend to recover". Such a server still answers `/health` 200, and fails every request in milliseconds until restarted.
+- **Noticed.** Accelerator out-of-memory lines (Metal, CUDA, Vulkan) are reported as `noticed` events.
+- `hearth-runtime::signals`: log signatures taken from the runtimes' own format strings.
+
 ### 2026-10-15 00:14 hearth run: supervised owned servers (ADR-004)
 
 - `hearth run --port P [--expect NAME] -- <command>` starts a model server and keeps it alive.
