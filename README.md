@@ -72,6 +72,7 @@ cargo build --release -p hearth
 ./target/release/hearth log --since 30m     # only what was recorded in the last 30 minutes
 ./target/release/hearth log --stats         # how much history each kind keeps, how far back it reaches
 ./target/release/hearth log --grep oom      # only snapshots that mention it, each with its ~N, like git log -S
+./target/release/hearth log --all --limit 20   # every kind in one timeline: snapshots, run events, notes
 ./target/release/hearth tag oom-start --at "~4"   # name one earlier snapshot, like git tag NAME COMMIT
 ./target/release/hearth note --by me lowered -c to 131072 after the pressure   # what you did, in the journal
 ./target/release/hearth run --port 8081 --expect qwen3 --model qwen3.gguf --ctx 32768 --cache-type q8_0 \

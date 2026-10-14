@@ -29,6 +29,8 @@ pub enum Kind {
 }
 
 impl Kind {
+    const ALL: [Self; 4] = [Self::Ports, Self::Doctor, Self::Run, Self::Note];
+
     fn name(self) -> &'static str {
         match self {
             Self::Ports => crate::ports::KIND,
@@ -91,6 +93,10 @@ pub struct LogArgs {
     /// counts matches.
     #[arg(long)]
     grep: Option<String>,
+    /// Every kind in one timeline, newest first, like `git log --all`:
+    /// snapshots, run events and notes as they happened.
+    #[arg(long, conflicts_with = "kind")]
+    all: bool,
 }
 
 fn parse_age(text: &str) -> Result<std::time::Duration, String> {
@@ -246,6 +252,7 @@ fn age(taken_at_ms: u64) -> String {
 
 #[derive(Serialize)]
 struct LogEntry {
+    kind: &'static str,
     /// How far before the latest snapshot of its kind: `~back` refers to it.
     back: usize,
     id: String,
@@ -265,7 +272,7 @@ struct LogReport {
 
 fn stats(journal: &Journal, json: bool) -> Result<String, String> {
     let mut kinds = Vec::new();
-    for kind in [Kind::Ports, Kind::Doctor, Kind::Run] {
+    for kind in Kind::ALL {
         let (count, oldest, newest, bytes) =
             journal.stats(kind.name()).map_err(|e| e.to_string())?;
         kinds.push(serde_json::json!({
@@ -326,39 +333,48 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     if args.stats {
         return stats(&journal, json);
     }
-    let kind = args.kind;
+    let kinds: &[Kind] = if args.all {
+        &Kind::ALL
+    } else {
+        std::slice::from_ref(&args.kind)
+    };
     let mut report = LogReport {
-        kind: kind.name(),
+        kind: if args.all { "all" } else { args.kind.name() },
         directory: journal.path().display().to_string(),
         snapshots: Vec::new(),
         unreadable: Vec::new(),
     };
     let limit = args.limit.map_or(usize::MAX, NonZeroUsize::get);
-    let ids = match args.since {
-        Some(age) => journal.ids_since(kind.name(), age),
-        None => journal.ids(kind.name()),
+    // (kind, id, ~N within its kind), newest first across kinds: ids begin
+    // with their time, zero-padded, so they sort in time order.
+    let mut timeline = Vec::new();
+    for &kind in kinds {
+        let ids = match args.since {
+            Some(age) => journal.ids_since(kind.name(), age),
+            None => journal.ids(kind.name()),
+        }
+        .map_err(|e| e.to_string())?;
+        timeline.extend(
+            ids.into_iter()
+                .rev()
+                .enumerate()
+                .map(|(back, id)| (kind, id, back)),
+        );
     }
-    .map_err(|e| e.to_string())?;
-    // Newest first and read lazily: with --grep, --limit counts matches
-    // and reading stops at the last one needed.
-    let mut back = 0;
-    for id in ids.iter().rev() {
+    timeline.sort_by(|a, b| b.1.cmp(&a.1));
+    // Read lazily: with --grep, --limit counts matches and reading stops
+    // at the last one needed.
+    for (kind, id, back) in timeline {
         if report.snapshots.len() == limit {
             break;
         }
-        let snapshot = journal.read(id);
-        // A snapshot thinned away between listing and reading is not an
-        // error, and not a ~N any more: it is just gone.
-        if matches!(&snapshot, Err(hearth_core::state::StateError::Io { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound)
-        {
-            continue;
-        }
-        back += 1;
-        let back = back - 1;
-        match snapshot {
+        match journal.read(&id) {
+            // Thinned away between listing and reading: just gone.
+            Err(hearth_core::state::StateError::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound => {}
             Ok(s) if args.grep.as_deref().is_some_and(|n| !mentions(&s.body, n)) => {}
             Ok(s) => report.snapshots.push(LogEntry {
+                kind: kind.name(),
                 back,
                 summary: kind.summary(&s.body),
                 id: s.id,
@@ -375,6 +391,11 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     if report.snapshots.is_empty() {
         let _ = match &args.grep {
             Some(g) => writeln!(out, "no {} snapshot mentions {g:?}", report.kind),
+            None if args.all => writeln!(
+                out,
+                "nothing recorded in {} yet: run hearth ports or hearth doctor",
+                report.directory
+            ),
             None => writeln!(
                 out,
                 "no {} snapshots in {} yet: run hearth {}",
@@ -383,9 +404,14 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
         };
     }
     for s in &report.snapshots {
+        let kind = if args.all {
+            format!("{:<7}", s.kind)
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "~{:<3} {}  {:>11}  {}",
+            "{kind}~{:<3} {}  {:>11}  {}",
             s.back,
             s.id,
             age(s.taken_at_ms),

@@ -138,6 +138,10 @@
         "grep": {
           "type": "string",
           "description": "Only snapshots that mention this: a key or text value containing it (case ignored), or a number equal to it, such as a pid, model name, port, error text or finding code. Finds when something first or last appeared; limit then counts matches."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Every kind in one timeline, newest first, like git log --all: ports and doctor snapshots, run events and notes as they happened. Each entry says its kind and its ~N within that kind. Leave kind out."
         }
       }
     },
