@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:39 hearth models
+
+- **`hearth models [FILTER] [--cache-type T]`.** Lists every model in the Hugging Face cache, LM Studio and Ollama's store. Each line gives its architecture, weights, trained context and the largest context the device holds it at. Names are what `fit` takes. Only files are read.
+- **MCP and workflows.** MCP serves `models`. `can-i-load` suggests models already on disk that would fit.
+
 ### 2026-10-15 06:36 show --pointer
 
 - `hearth show --pointer /body/health/memory` prints one part of a snapshot, like `git show REF:PATH`. A wrong path names the deepest part that exists and what it holds. MCP's `show` takes `pointer`.
