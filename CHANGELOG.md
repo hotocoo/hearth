@@ -4,6 +4,14 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:20 Linux incidents
+
+- `hearth incidents` on Linux reads the kernel log with `journalctl -k`. It reports:
+  - OOM kills: the process, its pid, the anonymous memory freed, and whether a cgroup limit did it;
+  - hung tasks: the process, its pid and how long it was stuck.
+- When the kernel log cannot be read, the command reports why.
+- CI smoke-tests the command on the Linux runners.
+
 ### 2026-10-15 01:17 supply-chain checks in CI
 
 - `cargo deny check` runs on every push. Licenses must be compatible with Apache-2.0 OR MIT. Yanked crates, wildcard versions, unknown registries and git sources fail the build, as do RustSec advisories.
