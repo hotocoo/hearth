@@ -356,6 +356,7 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
         .collect();
     let mut findings = findings(&ports);
     findings.extend(oversized(&ports));
+    findings.extend(partially_offloaded(&ports));
     let mut report = Report {
         ports,
         uninspectable_processes: uninspectable,
@@ -450,6 +451,44 @@ pub fn alarms(
 
 fn is_runtime(identity: &Identity) -> bool {
     identity.is_runtime()
+}
+
+/// Ollama models loaded only partly onto the accelerator: Ollama reports a
+/// loaded model's `size` and how much of it sits in GPU memory
+/// (`size_vram`). Less than all of it means the rest runs on the CPU, many
+/// times slower, because the accelerator had no room for it.
+fn partially_offloaded(ports: &[Port]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for p in ports {
+        let Identity::Ollama { loaded, .. } = &p.fingerprint.identity else {
+            continue;
+        };
+        for m in loaded {
+            let (Some(size), Some(vram)) = (m.size_bytes, m.size_vram_bytes) else {
+                continue;
+            };
+            if vram >= size {
+                continue;
+            }
+            out.push(Finding {
+                severity: "warn",
+                code: "partial_offload",
+                pid: p.pid,
+                message: format!(
+                    "{} on {}: only {} of {} is on the accelerator; the rest runs on the CPU",
+                    m.name,
+                    p.fingerprint.addr,
+                    bytes(vram),
+                    bytes(size)
+                ),
+                remediation: format!(
+                    "there was no room for all of {}: unload other models, or lower its num_ctx (hearth fit {} --ctx N shows what fits)",
+                    m.name, m.name
+                ),
+            });
+        }
+    }
+    out
 }
 
 /// llama.cpp servers configured past what the device holds: their model
@@ -1001,6 +1040,36 @@ mod tests {
         assert!(alarms(&second, &third, &std::collections::BTreeSet::default()).is_empty());
         // Answering again is reported too.
         assert_eq!(alarms(&second, &first, &known)[0].kind, "changed");
+    }
+
+    #[test]
+    fn a_model_only_partly_on_the_accelerator_is_a_finding() {
+        let mk = |vram: u64| Port {
+            pid: 1,
+            process: "ollama".into(),
+            path: None,
+            bound: vec![],
+            fingerprint: Fingerprint {
+                addr: "127.0.0.1:11434".parse().unwrap(),
+                identity: Identity::Ollama {
+                    version: "0".into(),
+                    models: vec![],
+                    loaded: vec![hearth_runtime::fingerprint::Loaded {
+                        name: "big:70b".into(),
+                        size_bytes: Some(100),
+                        size_vram_bytes: Some(vram),
+                        context_length: None,
+                    }],
+                },
+                latency_us: None,
+            },
+            memory: None,
+            deadline: Deadline::FirstContact { us: 1, samples: 0 },
+            slow: false,
+            owned_by: None,
+        };
+        assert_eq!(partially_offloaded(&[mk(60)]).len(), 1);
+        assert!(partially_offloaded(&[mk(100)]).is_empty());
     }
 
     #[test]
