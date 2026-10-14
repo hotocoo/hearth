@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:17 steadier ports warnings in watch
+
+- `watch` and hearthd apply `watch.confirm_rounds` to `ports` warnings too, so a transient probe failure no longer makes them flap.
+
 ### 2026-10-15 05:14 snapshots as MCP resources
 
 - `hearth mcp` serves recorded snapshots as resources at `hearth://KIND/REFERENCE`, for example `hearth://doctor/@1h` or `hearth://ports/healthy`, with a list and a URI template.
