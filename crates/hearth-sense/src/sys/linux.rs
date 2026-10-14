@@ -5,7 +5,7 @@ use std::fs;
 
 use crate::{
     Accelerator, HostMemory, LinuxMem, ProcessCounts, ProcessEntry, ProcessFootprint, RawHost,
-    Result, SenseError, SystemLimits, now_ms,
+    Result, SenseError, SystemLimits, TcpSocket, TcpState, now_ms,
 };
 
 /// Parses `Key:   123 kB` lines into bytes.
@@ -192,6 +192,100 @@ pub fn process_counts(pid: i32) -> Result<ProcessCounts> {
     })
 }
 
+/// Socket inodes a process holds, from its `fd/` symlinks (`socket:[123]`).
+fn socket_inodes(pid: i32) -> Result<std::collections::HashSet<u64>> {
+    let dir = fs::read_dir(format!("/proc/{pid}/fd")).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => SenseError::NoProcess(pid),
+        _ => SenseError::NotPermitted(pid),
+    })?;
+    Ok(dir
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| fs::read_link(e.path()).ok())
+        .filter_map(|target| {
+            target
+                .to_str()?
+                .strip_prefix("socket:[")?
+                .strip_suffix(']')?
+                .parse()
+                .ok()
+        })
+        .collect())
+}
+
+/// `0100007F:1F90` (IPv4, little-endian words) or 32 hex digits (IPv6, four
+/// little-endian words), as `/proc/net/tcp{,6}` print them.
+fn parse_proc_addr(text: &str) -> Option<std::net::SocketAddr> {
+    let (ip, port) = text.split_once(':')?;
+    let port = u16::from_str_radix(port, 16).ok()?;
+    let words: Vec<u32> = (0..ip.len() / 8)
+        .map(|i| u32::from_str_radix(ip.get(i * 8..i * 8 + 8)?, 16).ok())
+        .collect::<Option<_>>()?;
+    let ip: std::net::IpAddr = match words.as_slice() {
+        [w] => std::net::Ipv4Addr::from(w.swap_bytes()).into(),
+        [a, b, c, d] => {
+            let mut bytes = [0u8; 16];
+            for (i, w) in [a, b, c, d].iter().enumerate() {
+                bytes[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+            }
+            std::net::Ipv6Addr::from(bytes).into()
+        }
+        _ => return None,
+    };
+    Some(std::net::SocketAddr::new(ip, port))
+}
+
+/// `TCP_*` values from the kernel's `include/net/tcp_states.h`.
+fn linux_tcp_state(code: u8) -> TcpState {
+    match code {
+        1 => TcpState::Established,
+        2 => TcpState::SynSent,
+        3 => TcpState::SynReceived,
+        4 => TcpState::FinWait1,
+        5 => TcpState::FinWait2,
+        6 => TcpState::TimeWait,
+        7 => TcpState::Closed,
+        8 => TcpState::CloseWait,
+        9 => TcpState::LastAck,
+        10 => TcpState::Listen,
+        11 => TcpState::Closing,
+        _ => TcpState::Unknown,
+    }
+}
+
+fn parse_proc_net_tcp(text: &str) -> Vec<(u64, TcpSocket)> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let local = parse_proc_addr(f.get(1)?)?;
+            let remote = parse_proc_addr(f.get(2)?)?;
+            let state = linux_tcp_state(u8::from_str_radix(f.get(3)?, 16).ok()?);
+            let inode = f.get(9)?.parse().ok()?;
+            Some((
+                inode,
+                TcpSocket {
+                    local,
+                    remote: (state != TcpState::Listen).then_some(remote),
+                    state,
+                },
+            ))
+        })
+        .collect()
+}
+
+pub fn tcp_sockets(pid: i32) -> Result<Vec<TcpSocket>> {
+    let inodes = socket_inodes(pid)?;
+    // The process's own network namespace, which is what its sockets live in.
+    let tables = ["tcp", "tcp6"]
+        .iter()
+        .filter_map(|t| fs::read_to_string(format!("/proc/{pid}/net/{t}")).ok());
+    Ok(tables
+        .flat_map(|t| parse_proc_net_tcp(&t))
+        .filter(|(inode, _)| inodes.contains(inode))
+        .map(|(_, socket)| socket)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +320,33 @@ mod tests {
         let limits = system_limits().unwrap();
         assert!(limits.files_open.unwrap() <= limits.files_max.unwrap());
         assert!(limits.threads_total.unwrap() >= me.threads.unwrap());
+    }
+
+    #[test]
+    fn proc_net_tcp_lines_parse() {
+        let text = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0 100 0 0 10 0\n   1: 0100007F:C350 0100007F:1F90 08 00000000:00000000 00:00000000 00000000  1000        0 4343 1 0 100 0 0 10 0\n";
+        let parsed = parse_proc_net_tcp(text);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].0, 4242);
+        assert_eq!(parsed[0].1.local, "127.0.0.1:8080".parse().unwrap());
+        assert_eq!(parsed[0].1.state, TcpState::Listen);
+        assert!(parsed[0].1.remote.is_none());
+        assert_eq!(parsed[1].1.state, TcpState::CloseWait);
+        assert_eq!(parsed[1].1.remote, Some("127.0.0.1:8080".parse().unwrap()));
+        let v6 = parse_proc_addr("00000000000000000000000001000000:0050").unwrap();
+        assert_eq!(v6, "[::1]:80".parse().unwrap());
+    }
+
+    #[test]
+    fn live_listening_socket_is_seen() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let sockets = tcp_sockets(std::process::id().cast_signed()).unwrap();
+        assert!(
+            sockets
+                .iter()
+                .any(|s| s.state == TcpState::Listen && s.local.port() == port)
+        );
     }
 
     #[test]

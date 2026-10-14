@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 
 use crate::{
     Accelerator, HostMemory, MacVm, PressureLevel, ProcessCounts, ProcessEntry, ProcessFootprint,
-    RawHost, Result, SenseError, SystemLimits, now_ms,
+    RawHost, Result, SenseError, SystemLimits, TcpSocket, TcpState, now_ms,
 };
 
 fn os_error(call: &'static str) -> SenseError {
@@ -344,20 +344,96 @@ pub fn process_counts(pid: i32) -> Result<ProcessCounts> {
     })
 }
 
-fn open_files(pid: i32) -> Option<u64> {
+/// The descriptor table of a process.
+fn fd_list(pid: i32) -> Option<Vec<libc::proc_fdinfo>> {
     // SAFETY: a null buffer asks only for the size of the descriptor table.
     let size =
         unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
     let size = usize::try_from(size).ok().filter(|&s| s > 0)?;
     let entry = size_of::<libc::proc_fdinfo>();
-    let mut fds = vec![MaybeUninit::<libc::proc_fdinfo>::uninit(); size.div_ceil(entry)];
+    let mut fds = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0
+        };
+        size.div_ceil(entry)
+    ];
     let cap = i32::try_from(fds.len() * entry).ok()?;
-    // SAFETY: `fds` is writable for `cap` bytes; the kernel reports how many
-    // bytes it filled and nothing is read from the buffer itself.
+    // SAFETY: `fds` is initialised and writable for `cap` bytes.
     let filled =
         unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, fds.as_mut_ptr().cast(), cap) };
-    let filled = usize::try_from(filled).ok()?;
-    u64::try_from(filled / entry).ok()
+    fds.truncate(usize::try_from(filled).ok()? / entry);
+    Some(fds)
+}
+
+fn open_files(pid: i32) -> Option<u64> {
+    u64::try_from(fd_list(pid)?.len()).ok()
+}
+
+/// `insi_vflag` bits from `<sys/proc_info.h>`.
+const INI_IPV4: u8 = 0x1;
+const INI_IPV6: u8 = 0x2;
+
+pub fn tcp_sockets(pid: i32) -> Result<Vec<TcpSocket>> {
+    use libproc::libproc::file_info::pidfdinfo;
+    use libproc::libproc::net_info::{SocketFDInfo, SocketInfoKind};
+
+    let fds = fd_list(pid).ok_or(SenseError::NotPermitted(pid))?;
+    let socket_type = u32::try_from(libc::PROX_FDTYPE_SOCKET).unwrap_or(u32::MAX);
+    Ok(fds
+        .iter()
+        .filter(|fd| fd.proc_fdtype == socket_type)
+        .filter_map(|fd| pidfdinfo::<SocketFDInfo>(pid, fd.proc_fd).ok())
+        .filter(|info| matches!(SocketInfoKind::from(info.psi.soi_kind), SocketInfoKind::Tcp))
+        .filter_map(|info| {
+            // SAFETY: `soi_kind` is Tcp, so the kernel filled `pri_tcp`.
+            let tcp = unsafe { info.psi.soi_proto.pri_tcp };
+            let ini = tcp.tcpsi_ini;
+            let addr = |a: libproc::libproc::net_info::InSIAddr| -> Option<std::net::IpAddr> {
+                if ini.insi_vflag & INI_IPV4 != 0 {
+                    // SAFETY: the IPv4 flag means the v4 member was written.
+                    let raw = unsafe { a.ina_46.i46a_addr4.s_addr };
+                    Some(std::net::Ipv4Addr::from(u32::from_be(raw)).into())
+                } else if ini.insi_vflag & INI_IPV6 != 0 {
+                    // SAFETY: the IPv6 flag means the v6 member was written.
+                    let raw = unsafe { a.ina_6.s6_addr };
+                    Some(std::net::Ipv6Addr::from(raw).into())
+                } else {
+                    None
+                }
+            };
+            let port = |p: libc::c_int| u16::from_be(u16::try_from(p & 0xffff).unwrap_or(0));
+            let state = mac_tcp_state(tcp.tcpsi_state);
+            let local = std::net::SocketAddr::new(addr(ini.insi_laddr)?, port(ini.insi_lport));
+            let remote = (state != TcpState::Listen)
+                .then(|| addr(ini.insi_faddr))
+                .flatten()
+                .map(|ip| std::net::SocketAddr::new(ip, port(ini.insi_fport)));
+            Some(TcpSocket {
+                local,
+                remote,
+                state,
+            })
+        })
+        .collect())
+}
+
+/// `TCPS_*` values from `<netinet/tcp_fsm.h>`.
+fn mac_tcp_state(state: libc::c_int) -> TcpState {
+    match state {
+        0 => TcpState::Closed,
+        1 => TcpState::Listen,
+        2 => TcpState::SynSent,
+        3 => TcpState::SynReceived,
+        4 => TcpState::Established,
+        5 => TcpState::CloseWait,
+        6 => TcpState::FinWait1,
+        7 => TcpState::Closing,
+        8 => TcpState::LastAck,
+        9 => TcpState::FinWait2,
+        10 => TcpState::TimeWait,
+        _ => TcpState::Unknown,
+    }
 }
 
 fn threads(pid: i32) -> Option<u64> {
@@ -451,6 +527,18 @@ mod tests {
         let limits = system_limits().unwrap();
         assert!(limits.files_open.unwrap() <= limits.files_max.unwrap());
         assert!(limits.threads_total.unwrap() >= me.threads.unwrap());
+    }
+
+    #[test]
+    fn live_listening_socket_is_seen() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let sockets = tcp_sockets(std::process::id().cast_signed()).unwrap();
+        assert!(
+            sockets
+                .iter()
+                .any(|s| s.state == TcpState::Listen && s.local.port() == port)
+        );
     }
 
     #[test]

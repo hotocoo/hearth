@@ -28,6 +28,8 @@ struct Report {
     file_majority: Vec<Holder>,
     /// Fewest processes that together hold at least half of all threads.
     thread_majority: Vec<Holder>,
+    /// Processes holding TCP sockets in `CLOSE_WAIT`, most first.
+    close_wait: Vec<Holder>,
     /// Process with the largest share of its own open-file limit.
     nearest_file_limit: Option<Holder>,
     trend: Option<Trend>,
@@ -130,6 +132,13 @@ fn trend(a: &BoxHealth, b: &BoxHealth, seconds: f64) -> Trend {
                 per_process_files,
             ),
             ("threads", p.threads, old.threads, per_process_threads),
+            // CLOSE_WAIT sockets are open files, so they share that limit.
+            (
+                "close_wait",
+                p.close_wait,
+                old.close_wait,
+                per_process_files,
+            ),
         ] {
             let (Some(now), Some(then)) = (now, then) else {
                 continue;
@@ -174,6 +183,18 @@ fn trend(a: &BoxHealth, b: &BoxHealth, seconds: f64) -> Trend {
 fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
     let file_majority = majority(&health.processes, |p| p.open_files);
     let thread_majority = majority(&health.processes, |p| p.threads);
+    let mut close_wait: Vec<Holder> = health
+        .processes
+        .iter()
+        .filter_map(|p| {
+            Some(Holder {
+                pid: p.pid,
+                name: p.name.clone(),
+                count: p.close_wait.filter(|&n| n > 0)?,
+            })
+        })
+        .collect();
+    close_wait.sort_by_key(|h| std::cmp::Reverse(h.count));
     let nearest_file_limit = health.limits.files_per_process_max.and_then(|limit| {
         health
             .processes
@@ -231,10 +252,14 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
                         g.per_second,
                         duration(secs)
                     ),
-                    remediation: format!(
-                        "if this continues, restart {} or fix the leak (for sockets: close on client disconnect)",
-                        g.name
-                    ),
+                    remediation: if g.resource == "close_wait" {
+                        format!(
+                            "{} is not closing sockets after clients disconnect; fix the handler (close or destroy the upstream on client close) or restart it",
+                            g.name
+                        )
+                    } else {
+                        format!("if this continues, restart {} or fix the leak", g.name)
+                    },
                 });
             }
         }
@@ -243,6 +268,7 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
         health,
         file_majority,
         thread_majority,
+        close_wait,
         nearest_file_limit,
         trend,
         findings,
@@ -330,6 +356,9 @@ fn render(r: &Report) -> String {
         "half of all threads:    {}",
         holders(&r.thread_majority)
     );
+    if !r.close_wait.is_empty() {
+        let _ = writeln!(out, "CLOSE_WAIT sockets:     {}", holders(&r.close_wait));
+    }
     if let (Some(h), Some(limit)) = (&r.nearest_file_limit, l.files_per_process_max) {
         let _ = writeln!(
             out,
@@ -376,6 +405,8 @@ mod tests {
             name: format!("p{pid}"),
             open_files: Some(files),
             threads: None,
+            close_wait: None,
+            listening: Vec::new(),
         }
     }
 

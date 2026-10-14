@@ -14,6 +14,7 @@ use serde::Serialize;
 
 pub use sys::{
     accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
+    tcp_sockets,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -170,6 +171,34 @@ pub struct ProcessCounts {
     pub threads: Option<u64>,
 }
 
+/// A TCP socket held by a process.
+#[derive(Debug, Clone, Serialize)]
+pub struct TcpSocket {
+    pub local: std::net::SocketAddr,
+    /// Absent for listening sockets.
+    pub remote: Option<std::net::SocketAddr>,
+    pub state: TcpState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TcpState {
+    Closed,
+    Listen,
+    SynSent,
+    SynReceived,
+    Established,
+    /// The peer closed and this process has not: a socket it forgot to close
+    /// when a client went away. Growth here is how descriptor leaks show up.
+    CloseWait,
+    FinWait1,
+    Closing,
+    LastAck,
+    FinWait2,
+    TimeWait,
+    Unknown,
+}
+
 /// One snapshot of everything `hearth doctor` reasons about.
 #[derive(Debug, Clone, Serialize)]
 pub struct BoxHealth {
@@ -188,6 +217,10 @@ pub struct ProcessLoad {
     pub name: String,
     pub open_files: Option<u64>,
     pub threads: Option<u64>,
+    /// TCP sockets whose peer has closed but this process has not.
+    pub close_wait: Option<u64>,
+    /// Ports this process listens on.
+    pub listening: Vec<std::net::SocketAddr>,
 }
 
 pub fn box_health() -> Result<BoxHealth> {
@@ -201,11 +234,21 @@ pub fn box_health() -> Result<BoxHealth> {
             if counts.as_ref().is_none_or(|c| c.threads.is_none()) {
                 uninspectable += 1;
             }
+            let sockets = tcp_sockets(p.pid).ok();
             ProcessLoad {
                 pid: p.pid,
                 name: p.name,
                 open_files: counts.as_ref().and_then(|c| c.open_files),
                 threads: counts.and_then(|c| c.threads),
+                close_wait: sockets
+                    .as_ref()
+                    .map(|s| s.iter().filter(|t| t.state == TcpState::CloseWait).count() as u64),
+                listening: sockets
+                    .into_iter()
+                    .flatten()
+                    .filter(|t| t.state == TcpState::Listen)
+                    .map(|t| t.local)
+                    .collect(),
             }
         })
         .collect();

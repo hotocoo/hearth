@@ -27,4 +27,5 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libproc = "0.14.11"
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice"] }
