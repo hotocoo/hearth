@@ -112,3 +112,13 @@ Both are MCP tools. MCP tool calls are now translated to the CLI from each tool'
 
 On the development machine, `follow llama-server` showed the user's server footprint going from 34.5 GiB to 35.0 GiB and then to 24.2 GiB. `follow remoting --kind doctor` showed a remote-desktop host's open files climbing from 41 to 54.
 
+## Addendum (2026-10-15): tags
+
+`hearth tag NAME` names the latest snapshot of every kind (ports, doctor, run), like `git tag`.
+- **Use.** The name works wherever a snapshot is asked for, for example `diff --from healthy` or `show healthy`.
+- **Retention.** Tagged snapshots are never pruned and do not count against `state.max_snapshots_per_kind`.
+- **Move and delete.** Tagging again moves the name. `--delete` releases it.
+- **Names.** Names start with a lowercase letter, then letters, digits, `-`, `_` or `.`, without `..`. So a tag can never be mistaken for an id or a `~N` reference, and is a safe file name. Tags live in `tags/NAME.json` in the state directory.
+
+The `what-changed` workflow accepts a tag.
+

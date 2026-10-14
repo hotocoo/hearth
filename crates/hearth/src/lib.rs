@@ -61,6 +61,9 @@ enum Command {
     /// One process, port or server across every recorded snapshot: when it
     /// appeared, changed, restarted, grew or went away.
     Follow(history::FollowArgs),
+    /// Name this moment (the latest snapshot of each kind), like `git tag`:
+    /// kept past retention, and usable wherever a snapshot is asked for.
+    Tag(history::TagArgs),
     /// Start a model server and keep it alive: restart it when it exits or
     /// stops answering, give up on a crash loop, and stop it when hearth
     /// stops. Refuses a port another server already holds.
@@ -109,6 +112,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Diff(args) => history::diff(args, cli.json),
         Command::Show(args) => history::show(args, cli.json),
         Command::Follow(args) => history::follow(args, cli.json),
+        Command::Tag(args) => history::tag(args, cli.json),
         Command::Run(args) => run::run(args, cli.json),
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),

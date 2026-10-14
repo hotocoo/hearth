@@ -43,16 +43,16 @@
   },
   {
     "name": "what-changed",
-    "description": "What changed on this machine since an earlier observation: servers that appeared, vanished, restarted or went silent; memory and descriptor movement; supervision events.",
+    "description": "What changed on this machine since an earlier observation: servers that appeared, vanished, restarted or went silent; memory and descriptor movement; supervision events. Compare with a tag (hearth tag healthy) to see what differs from a known good state.",
     "arguments": [
       {
         "name": "since",
-        "description": "How many recorded snapshots back to compare against, e.g. 5 (default 1).",
+        "description": "How far back to compare: N snapshots back, or a tag name such as healthy (default 1).",
         "required": false,
-        "default": "1"
+        "default": "~1"
       }
     ],
-    "template": "Report what changed on this machine over the last {since} recorded snapshot(s).\n\n1. Call `diff` with kind \"ports\" and from \"~{since}\": model servers that appeared, vanished, restarted (new pid) or stopped answering, and footprint movement.\n2. Call `diff` with kind \"doctor\" and from \"~{since}\" and limit 10: memory pressure, available memory, swap, and the processes whose open files, threads or CLOSE_WAIT sockets moved most.\n3. Call `log` with kind \"run\" and limit 20 for supervision events in that time.\n\nIf `diff` says there are not enough snapshots, call `ports` and `doctor` once to record a fresh one and say that history starts now. Summarize the changes that matter first: restarts, silences, pressure, growth toward a limit."
+    "template": "Report what changed on this machine against {since} (a number N means N snapshots back, written ~N; a name is a tag). Call `tag` with no name to list tags.\n\n1. Call `diff` with kind \"ports\" and from \"{since}\": model servers that appeared, vanished, restarted (new pid) or stopped answering, and footprint movement.\n2. Call `diff` with kind \"doctor\" and from \"{since}\" and limit 10: memory pressure, available memory, swap, and the processes whose open files, threads or CLOSE_WAIT sockets moved most.\n3. Call `log` with kind \"run\" and limit 20 for supervision events in that time.\n\nIf `diff` says there are not enough snapshots, call `ports` and `doctor` once to record a fresh one and say that history starts now. Summarize the changes that matter first: restarts, silences, pressure, growth toward a limit."
   },
   {
     "name": "find-a-leak",

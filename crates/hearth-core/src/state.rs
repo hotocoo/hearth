@@ -42,8 +42,10 @@ pub enum StateError {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error("not a snapshot id or ~N reference: {0:?}")]
+    #[error("not a snapshot id, ~N reference or tag: {0:?}")]
     BadRef(String),
+    #[error("tag {tag:?} has no {kind} snapshot")]
+    TagWithout { tag: String, kind: String },
     #[error("{id} is not a {kind} snapshot")]
     WrongKind { id: String, kind: String },
     #[error("no {kind} snapshot at {reference}: {available} recorded")]
@@ -118,6 +120,16 @@ fn valid_id(id: &str) -> bool {
     let digits =
         |s: Option<&str>| s.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
     digits(parts.next()) && digits(parts.next()) && parts.next().is_some_and(valid_kind)
+}
+
+/// Tag names start with a letter, so they can never be mistaken for an id
+/// (digits first) or a `~N` reference, and are safe as file names.
+fn valid_tag(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.".contains(&b))
+        && !name.contains("..")
 }
 
 fn kind_of(id: &str) -> Option<&str> {
@@ -235,6 +247,14 @@ impl Journal {
     /// Resolves a full id, or `~N` meaning N snapshots of `kind` before the
     /// latest (`~0` is the latest).
     pub fn resolve(&self, kind: &str, reference: &str) -> Result<Snapshot, StateError> {
+        if valid_tag(reference) {
+            let ids = self.tag(reference)?;
+            let id = ids.get(kind).ok_or_else(|| StateError::TagWithout {
+                tag: reference.to_string(),
+                kind: kind.to_string(),
+            })?;
+            return self.read(id);
+        }
         let Some(back) = reference.strip_prefix('~') else {
             if kind_of(reference) != Some(kind) {
                 return Err(StateError::WrongKind {
@@ -279,8 +299,111 @@ impl Journal {
             .collect())
     }
 
+    fn tags_dir(&self) -> PathBuf {
+        self.dir.join("tags")
+    }
+
+    /// Names the latest snapshot of every kind `name`, so it can be referred
+    /// to by that name and is never pruned. Naming a moment again moves the
+    /// name. Returns the ids tagged, by kind.
+    pub fn set_tag(
+        &self,
+        name: &str,
+        kinds: &[&str],
+    ) -> Result<std::collections::BTreeMap<String, String>, StateError> {
+        if !valid_tag(name) {
+            return Err(StateError::BadRef(name.to_string()));
+        }
+        let mut ids = std::collections::BTreeMap::new();
+        for kind in kinds {
+            if let Some(id) = self.ids(kind)?.pop() {
+                ids.insert((*kind).to_string(), id);
+            }
+        }
+        let dir = self.tags_dir();
+        ensure_dir(&dir)?;
+        let path = dir.join(format!("{name}.{EXTENSION}"));
+        let text = serde_json::to_vec(&ids).map_err(|source| StateError::Json {
+            path: path.clone(),
+            source,
+        })?;
+        let tmp = dir.join(format!(".{name}.tmp"));
+        write_synced(&tmp, &text)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|source| StateError::Io { path, source })?;
+        Ok(ids)
+    }
+
+    /// The ids tag `name` holds, by kind.
+    pub fn tag(
+        &self,
+        name: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, StateError> {
+        if !valid_tag(name) {
+            return Err(StateError::BadRef(name.to_string()));
+        }
+        let path = self.tags_dir().join(format!("{name}.{EXTENSION}"));
+        let text = std::fs::read(&path).map_err(|source| StateError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        serde_json::from_slice(&text).map_err(|source| StateError::Json { path, source })
+    }
+
+    /// Every tag, by name.
+    pub fn tags(
+        &self,
+    ) -> Result<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+        StateError,
+    > {
+        let dir = self.tags_dir();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(std::collections::BTreeMap::default());
+            }
+            Err(source) => return Err(StateError::Io { path: dir, source }),
+        };
+        let mut out = std::collections::BTreeMap::new();
+        for entry in entries {
+            let entry = entry.map_err(|source| StateError::Io {
+                path: dir.clone(),
+                source,
+            })?;
+            let Ok(file) = entry.file_name().into_string() else {
+                continue;
+            };
+            if let Some(name) = file.strip_suffix(&format!(".{EXTENSION}"))
+                && valid_tag(name)
+            {
+                out.insert(name.to_string(), self.tag(name)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Removes tag `name`; its snapshots are pruned like any other again.
+    pub fn delete_tag(&self, name: &str) -> Result<(), StateError> {
+        if !valid_tag(name) {
+            return Err(StateError::BadRef(name.to_string()));
+        }
+        let path = self.tags_dir().join(format!("{name}.{EXTENSION}"));
+        std::fs::remove_file(&path).map_err(|source| StateError::Io { path, source })
+    }
+
     fn prune(&self, kind: &str) -> Result<(), StateError> {
-        let ids = self.ids(kind)?;
+        let tagged: std::collections::BTreeSet<String> = self
+            .tags()?
+            .into_values()
+            .flat_map(std::collections::BTreeMap::into_values)
+            .collect();
+        // Tagged snapshots are kept and do not count against retention.
+        let ids: Vec<String> = self
+            .ids(kind)?
+            .into_iter()
+            .filter(|id| !tagged.contains(id))
+            .collect();
         let excess = ids.len().saturating_sub(self.keep);
         for id in &ids[..excess] {
             let path = self.file(id);
@@ -356,6 +479,42 @@ mod tests {
             j.resolve("doctor", &id),
             Err(StateError::WrongKind { .. })
         ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tags_name_moments_and_survive_pruning() {
+        let (j, dir) = journal("tags", 2);
+        j.record("ports", &serde_json::json!({ "n": 0 })).unwrap();
+        j.record("doctor", &serde_json::json!({ "d": 0 })).unwrap();
+        let tagged = j.set_tag("healthy", &["ports", "doctor"]).unwrap();
+        assert_eq!(tagged.len(), 2);
+        for n in 1..5 {
+            j.record("ports", &serde_json::json!({ "n": n })).unwrap();
+        }
+        assert_eq!(
+            j.resolve("ports", "healthy").unwrap().body["n"],
+            0,
+            "kept past retention"
+        );
+        assert_eq!(
+            j.ids("ports").unwrap().len(),
+            3,
+            "two kept plus the tagged one"
+        );
+        assert_eq!(j.resolve("doctor", "healthy").unwrap().body["d"], 0);
+        assert!(j.resolve("run", "healthy").is_err());
+        assert!(j.tags().unwrap().contains_key("healthy"));
+        for bad in ["1abc", "~1", "../x", "A", "a/b", "a..b"] {
+            assert!(j.set_tag(bad, &["ports"]).is_err(), "{bad}");
+        }
+        j.delete_tag("healthy").unwrap();
+        j.record("ports", &serde_json::json!({ "n": 5 })).unwrap();
+        assert_eq!(
+            j.ids("ports").unwrap().len(),
+            2,
+            "pruned again once untagged"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -145,11 +145,11 @@
         },
         "from": {
           "type": "string",
-          "description": "Older snapshot: an id from log, or ~N (default ~1)."
+          "description": "Older snapshot: an id from log, ~N, or a tag name (default ~1)."
         },
         "to": {
           "type": "string",
-          "description": "Newer snapshot, same forms (default ~0, the latest)."
+          "description": "Newer snapshot (id, ~N or tag) (default ~0, the latest)."
         },
         "limit": {
           "type": "integer",
@@ -177,7 +177,7 @@
         },
         "reference": {
           "type": "string",
-          "description": "An id from log, or ~N for N before the latest (default ~0)."
+          "description": "An id from log, ~N, or a tag name for N before the latest (default ~0)."
         }
       }
     },
@@ -218,6 +218,28 @@
     "cli": {
       "positional": [
         "pattern"
+      ]
+    }
+  },
+  {
+    "name": "tag",
+    "description": "Name this moment, like git tag: the latest ports, doctor and run snapshots get the name, are kept past retention, and can be used wherever a snapshot is asked for (diff from, show reference). Tag a healthy state, then diff against it when something goes wrong. Without a name, lists the tags.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Lowercase letters, digits, '-', '_', '.'; starting with a letter."
+        },
+        "delete": {
+          "type": "boolean",
+          "description": "Remove the tag instead."
+        }
+      }
+    },
+    "cli": {
+      "positional": [
+        "name"
       ]
     }
   },

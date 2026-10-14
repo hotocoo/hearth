@@ -76,7 +76,8 @@ pub struct LogArgs {
 pub struct DiffArgs {
     #[arg(long, value_enum, default_value_t = Kind::Ports)]
     kind: Kind,
-    /// Older snapshot: an id from `hearth log`, or ~N for N before the latest.
+    /// Older snapshot: an id from `hearth log`, ~N for N before the latest,
+    /// or a tag.
     #[arg(long, default_value = "~1")]
     from: String,
     /// Newer snapshot, same forms; ~0 is the latest.
@@ -92,7 +93,7 @@ pub struct DiffArgs {
 pub struct ShowArgs {
     #[arg(long, value_enum, default_value_t = Kind::Ports)]
     kind: Kind,
-    /// An id from `hearth log`, or ~N for N before the latest.
+    /// An id from `hearth log`, ~N for N before the latest, or a tag.
     #[arg(default_value = "~0")]
     reference: String,
 }
@@ -107,6 +108,16 @@ pub struct FollowArgs {
     /// Show every snapshot, not only those where something changed.
     #[arg(long)]
     all: bool,
+}
+
+#[derive(clap::Args)]
+pub struct TagArgs {
+    /// Name for this moment (lowercase letters, digits, '-', '_', '.';
+    /// starting with a letter). Without it, the tags are listed.
+    name: Option<String>,
+    /// Remove the tag instead; its snapshots are pruned like others again.
+    #[arg(long, requires = "name")]
+    delete: bool,
 }
 
 /// Something that is different between two snapshots.
@@ -469,6 +480,58 @@ pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
     }
     for e in &unreadable {
         let _ = writeln!(out, "unreadable: {e}");
+    }
+    Ok(out)
+}
+
+/// `hearth tag`: names the latest snapshot of every kind, like `git tag`, so
+/// `diff --from NAME` can compare with that moment for as long as needed.
+pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
+    let journal = journal()?;
+    let kinds = [Kind::Ports.name(), Kind::Doctor.name(), Kind::Run.name()];
+    let value = match (&args.name, args.delete) {
+        (Some(name), true) => {
+            journal.delete_tag(name).map_err(|e| e.to_string())?;
+            serde_json::json!({ "deleted": name })
+        }
+        (Some(name), false) => {
+            let ids = journal.set_tag(name, &kinds).map_err(|e| e.to_string())?;
+            if ids.is_empty() {
+                journal.delete_tag(name).map_err(|e| e.to_string())?;
+                return Err(
+                    "nothing recorded to tag yet: run hearth ports and hearth doctor".into(),
+                );
+            }
+            serde_json::json!({ "tagged": name, "snapshots": ids })
+        }
+        (None, _) => serde_json::json!({ "tags": journal.tags().map_err(|e| e.to_string())? }),
+    };
+    if json {
+        return crate::to_json(&value);
+    }
+    let mut out = String::new();
+    if let Some(tags) = value["tags"].as_object() {
+        if tags.is_empty() {
+            let _ = writeln!(out, "no tags; hearth tag NAME names this moment");
+        }
+        for (name, ids) in tags {
+            let _ = writeln!(out, "{name}: {ids}");
+        }
+    } else if let Some(name) = value["tagged"].as_str() {
+        let _ = writeln!(
+            out,
+            "{name} now names the latest {}; hearth diff --from {name} compares with it",
+            value["snapshots"]
+                .as_object()
+                .map(|m| m.keys().cloned().collect::<Vec<_>>().join(", "))
+                .unwrap_or_default()
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "removed tag {}",
+            args.name.as_deref().unwrap_or_default()
+        );
     }
     Ok(out)
 }
