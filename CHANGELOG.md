@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:44 review fixes: reload, server pid, metrics
+
+- **reload.** Only one reload runs at a time. Leaving servers stop in parallel. Orders during a reload are refused with "try again", not dropped.
+- **server_pid.** `server_pid` comes from the tether's process group, so a process someone else runs on the port is never taken for the server. It is cleared when the server goes. `hearth_sense::process_group` is new.
+- **Metrics.** A stalled scraper no longer blocks other scrapes: each request has a total deadline and its own handler.
+
 ### 2026-10-15 02:38 owned and observed ports
 
 - `hearth ports` (and MCP `ports`) reports `owned_by` for each listener: the hearthd server it is, or null for processes hearth only observes.
