@@ -6,7 +6,7 @@
 //! has been loaded once, and the report says so instead of guessing them.
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hearth_sense::kv::{CacheType, Confidence, Geometry, Swa};
 use hearth_sense::{PressureLevel, gguf};
@@ -361,17 +361,9 @@ fn weights_and_geometry(model: &std::path::Path) -> Result<(Vec<PathBuf>, u64, G
         })?;
         let config: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("{}: {e}", config_path.display()))?;
-        let mut files: Vec<PathBuf> = std::fs::read_dir(model)
-            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
-            .map_err(|e| format!("{}: {e}", model.display()))?
-            .into_iter()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension()
-                    .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
-            })
-            .collect();
+        let mut files = safetensors_weights(model)?;
         files.sort();
+        files.dedup();
         if files.is_empty() {
             return Err(format!("{}: no .safetensors weights", model.display()));
         }
@@ -383,6 +375,44 @@ fn weights_and_geometry(model: &std::path::Path) -> Result<(Vec<PathBuf>, u64, G
     let header = gguf::read_header(&files[0]).map_err(|e| e.to_string())?;
     let geometry = Geometry::from_header(&header).map_err(|e| e.to_string())?;
     Ok((files, weights, geometry))
+}
+
+/// The weight files of a safetensors model directory: those its
+/// `model.safetensors.index.json` maps tensors to when it has one (so a
+/// `consolidated.safetensors` beside the shards is not counted twice),
+/// else every `.safetensors` file but a `LoRA` adapter's `adapters.safetensors`.
+fn safetensors_weights(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let index = dir.join("model.safetensors.index.json");
+    if index.is_file() {
+        let text =
+            std::fs::read_to_string(&index).map_err(|e| format!("{}: {e}", index.display()))?;
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", index.display()))?;
+        let map = json["weight_map"]
+            .as_object()
+            .ok_or_else(|| format!("{}: no weight_map", index.display()))?;
+        return map
+            .values()
+            .map(|v| {
+                // Shards sit beside the index; a name is never a path.
+                v.as_str()
+                    .filter(|n| Path::new(n).file_name().is_some_and(|f| f == *n))
+                    .map(|n| dir.join(n))
+                    .ok_or_else(|| format!("{}: bad shard name {v}", index.display()))
+            })
+            .collect();
+    }
+    Ok(std::fs::read_dir(dir)
+        .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .into_iter()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
+                && p.file_name().is_some_and(|n| n != "adapters.safetensors")
+        })
+        .collect())
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
@@ -816,5 +846,46 @@ mod port_tests {
         );
         assert_eq!(model_arg(&line("python -m mlx_lm.server --model")), None);
         assert_eq!(model_arg(&line("python -m mlx_lm.server")), None);
+    }
+
+    #[test]
+    fn safetensors_weights_follow_the_index() {
+        let dir = std::env::temp_dir().join(format!("hearth-st-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "a.safetensors",
+            "b.safetensors",
+            "consolidated.safetensors",
+            "adapters.safetensors",
+        ] {
+            std::fs::write(dir.join(f), "").unwrap();
+        }
+        let names = |v: Vec<PathBuf>| {
+            let mut n: Vec<String> = v
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            n.sort();
+            n.dedup();
+            n
+        };
+        assert_eq!(
+            names(safetensors_weights(&dir).unwrap()),
+            ["a.safetensors", "b.safetensors", "consolidated.safetensors"]
+        );
+        let index = dir.join("model.safetensors.index.json");
+        std::fs::write(
+            &index,
+            r#"{"weight_map":{"x":"a.safetensors","y":"b.safetensors","z":"a.safetensors"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            names(safetensors_weights(&dir).unwrap()),
+            ["a.safetensors", "b.safetensors"]
+        );
+        std::fs::write(&index, r#"{"weight_map":{"x":"../a.safetensors"}}"#).unwrap();
+        assert!(safetensors_weights(&dir).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
