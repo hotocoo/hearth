@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:44 log --grep
+
+- `hearth log --grep TEXT` lists only the snapshots whose recorded JSON mentions TEXT (case ignored), like `git log -S`. Each keeps its `~N`, and `--limit` counts matches. MCP's `log` takes `grep`.
+
 ### 2026-10-15 05:40 safetensors weights from the index
 
 - `fit DIR` sums only the shards `model.safetensors.index.json` names, so a `consolidated.safetensors` copy is not counted twice. Without an index, `adapters.safetensors` is left out.
