@@ -4,6 +4,17 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:45 watch and notify hardening
+
+- **Memory pressure.** Keyed by level: warn rising to critical is reported, and the warn clears.
+- **Clears.** Clears are notified as well as printed.
+- **Failed rounds.** A round that fails (journal, process table) is reported once, and the watch continues.
+- **Confirmation.** A projected limit must hold for `watch.confirm_rounds` (new key) rounds in a row to be reported, and be gone as long to clear.
+- **Runtimes.** Any runtime seen during a watch stays known, so silent-then-vanished and answering-again are reported.
+- **Delivery.** A delivery is killed after `notify.timeout_ms`. curl gets the URL and body on stdin, never on the command line, with `-q` and `--globoff`.
+- **Run events.** They keep only the program, not its arguments, which can hold keys.
+- **Exit.** `hearth run` waits for pending deliveries on every exit path.
+
 ### 2026-10-15 00:37 hearth config
 
 - `hearth config [FILTER]` and MCP `config`: every setting in effect, with its value, its source (built in, the user's file, or unset) and the shipped file's explanation of it.
