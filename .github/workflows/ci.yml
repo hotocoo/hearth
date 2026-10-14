@@ -70,6 +70,19 @@ jobs:
           test "$($h --json log --kind note --grep SMOKE | python3 -c "import json,sys; print(len(json.load(sys.stdin)['snapshots']))")" = 1
           $h tag ci-start --at '~1'
           $h diff --from ci-start
+      - name: models smoke test (an MLX repo in a fake Hugging Face cache)
+        env:
+          HF_HUB_CACHE: ${{ runner.temp }}/hf
+          HOME: ${{ runner.temp }}/home
+        run: |
+          cargo build -p hearth --bin hearth
+          snap="$HF_HUB_CACHE/models--org--tiny-mlx/snapshots/abc123"
+          mkdir -p "$snap" "$HOME"
+          printf '{"model_type":"llama","num_hidden_layers":2,"num_attention_heads":4,"num_key_value_heads":2,"head_dim":8,"max_position_embeddings":4096,"torch_dtype":"bfloat16"}' > "$snap/config.json"
+          head -c 1024 /dev/zero > "$snap/model.safetensors"
+          ./target/debug/hearth models
+          ./target/debug/hearth --json models | python3 -c "import json,sys; m=json.load(sys.stdin)['models']; assert [x['name'] for x in m] == ['org/tiny-mlx'], m; assert m[0]['arch'] == 'llama' and m[0]['weights_bytes'] == 1024 and m[0]['cache_type'] == 'bf16', m"
+          ./target/debug/hearth fit org/tiny-mlx --ctx 4096
       - name: probe smoke test
         run: |
           cargo build --release -p hearth-sense --bin hearth-probe
