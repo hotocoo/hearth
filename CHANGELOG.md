@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:52 fit a running server with no arguments
+
+- `hearth fit --port P` reads a llama-server's cache types from its command line, with f16 when absent. `--cache-type` is optional with `--port`.
+- New `hearth_sense::process_args`.
+- A too-big refusal from hearthd or `hearth run` names the cache types that would keep the context.
+
 ### 2026-10-15 04:45 fit suggests cache types
 
 - When a context does not fit the device, `hearth fit` lists the KV cache types it would fit with, each with its total (`fits_device_with`).
