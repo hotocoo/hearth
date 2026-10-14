@@ -235,6 +235,22 @@ fn from_server(
                 })
                 .map(|p| (p, None))
         }
+        // mlx_lm.server and other OpenAI-compatible servers name their
+        // model by repo id or path, which fit resolves like any name.
+        Identity::OpenAiCompatible { models } => {
+            let name = match (model, models.as_slice()) {
+                (Some(m), _) => m.to_string_lossy().into_owned(),
+                (None, [only]) => only.clone(),
+                (None, []) => return Err(format!("{addr} lists no model; name one with --model")),
+                (None, several) => {
+                    return Err(format!(
+                        "{addr} lists several models ({}); pick one with --model",
+                        several.join(", ")
+                    ));
+                }
+            };
+            from_name(std::path::Path::new(&name)).map(|p| (p, None))
+        }
         Identity::LlamaCpp { .. } if model.is_some() => Err(
             "--model and --port name the model twice: a llama.cpp server reports its own".into(),
         ),
