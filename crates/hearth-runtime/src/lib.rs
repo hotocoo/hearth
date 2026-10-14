@@ -2,5 +2,6 @@
 
 pub mod fingerprint;
 pub mod http;
+pub mod ollama_store;
 pub mod signals;
 pub mod supervise;

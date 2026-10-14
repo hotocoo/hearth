@@ -16,7 +16,9 @@ use crate::units::bytes;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// GGUF file (any shard of a split model).
+    /// GGUF file (any shard of a split model), or an Ollama model name such
+    /// as `qwen3:8b`, found in Ollama's store (`OLLAMA_MODELS`, else its
+    /// default) without asking Ollama.
     model: PathBuf,
     /// Total tokens of KV cache the runtime will allocate (llama.cpp `-c`;
     /// for Ollama, `num_ctx` × `OLLAMA_NUM_PARALLEL`).
@@ -73,8 +75,26 @@ struct Ceiling {
     source: String,
 }
 
+/// The model's file: the path given, or the Ollama model of that name.
+fn locate(model: &std::path::Path) -> Result<PathBuf, String> {
+    if model.exists() {
+        return Ok(model.to_path_buf());
+    }
+    let name = model.to_string_lossy();
+    if hearth_runtime::ollama_store::parse_name(&name).is_none() {
+        return Err(format!("{}: no such file", model.display()));
+    }
+    hearth_runtime::ollama_store::weights(&name).map_err(|e| {
+        format!(
+            "{} is not a file, and as an Ollama model: {e}",
+            model.display()
+        )
+    })
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
-    let files = gguf::model_files(&args.model);
+    let model = locate(&args.model)?;
+    let files = gguf::model_files(&model);
     let weights_bytes = files
         .iter()
         .map(|f| {
@@ -136,7 +156,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         notes.push("sliding-window layers costed as full; pass --parallel and --ubatch for the bounded size".into());
     }
     let report = Report {
-        model: args.model.clone(),
+        model: model.clone(),
         files,
         weights_bytes,
         ctx: args.ctx,

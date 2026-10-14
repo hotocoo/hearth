@@ -90,3 +90,10 @@ Lines are matched on the kernel's own format strings, from `mm/oom_kill.c` and `
 
 Reading the kernel log usually needs the `systemd-journal` or `adm` group. When it is refused, the command says so and why, rather than reporting no incidents.
 
+## Addendum (2026-10-15): Ollama model names in `fit`
+
+`hearth fit` also accepts an Ollama model name (`qwen3:8b`, `user/model:tag`, `host/ns/model:tag`), split the way Ollama splits it.
+- **Lookup.** The weights are found in Ollama's on-disk store, not by asking Ollama: the manifest for that tag, then its layer of media type `application/vnd.ollama.image.model`, then `blobs/sha256-<hex>`. Ollama need not be running.
+- **Stores.** The store is `OLLAMA_MODELS` when set. Otherwise it is Ollama's default for a user install (`~/.ollama/models`) or for the Linux system service (`/usr/share/ollama/.ollama/models`).
+- **Paths win.** A path that exists is always taken as a path. Anything starting with `.`, `/` or `~`, or containing `..`, is never taken as a model name.
+

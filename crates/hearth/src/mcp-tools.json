@@ -15,7 +15,7 @@
   },
   {
     "name": "incidents",
-    "description": "Kernel panics (classified watchdog / GPU memory driver / other), jetsam kills with the largest process, shutdown stalls, and optionally resource-limit reports, read from the OS's own crash reports.",
+    "description": "macOS: kernel panics (classified watchdog / GPU memory driver / other), jetsam kills with the largest process, shutdown stalls, and optionally resource-limit reports, from the OS's own crash reports. Linux: OOM kills (machine or cgroup, with memory freed) and hung tasks from the kernel log (journalctl -k).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -32,7 +32,7 @@
   },
   {
     "name": "fit",
-    "description": "Whether a GGUF model at a total KV context fits this machine's accelerator and fits right now, with weights and KV bytes from the model's own metadata and the largest context that would fit. Excludes runtime compute buffers.",
+    "description": "Whether a GGUF model (a path or an Ollama model name) at a total KV context fits this machine's accelerator and fits right now, with weights and KV bytes from the model's own metadata and the largest context that would fit. Excludes runtime compute buffers.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -43,7 +43,7 @@
       "properties": {
         "model": {
           "type": "string",
-          "description": "Path to a .gguf file (any shard of a split model)."
+          "description": "Path to a .gguf file (any shard of a split model), or an Ollama model name such as qwen3:8b, read from Ollama's store without asking Ollama."
         },
         "ctx": {
           "type": "integer",

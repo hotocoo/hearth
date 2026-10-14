@@ -51,6 +51,7 @@ cargo build --release -p hearth
 ./target/release/hearth doctor --watch 30   # project time to each limit from measured growth
 ./target/release/hearth incidents           # macOS: panics (watchdog / GPU driver), jetsam, stalls; Linux: OOM kills, hung tasks
 ./target/release/hearth fit model.gguf --ctx 32768 --cache-type q8_0   # fits the device? fits now? max context?
+./target/release/hearth fit qwen3:8b --ctx 32768 --cache-type q8_0     # an Ollama model, read from its store
 ./target/release/hearth ports --runtimes    # which model runtime answers on which port, with memory
 ./target/release/hearth log                 # snapshots ports recorded, newest first (--kind doctor)
 ./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory
