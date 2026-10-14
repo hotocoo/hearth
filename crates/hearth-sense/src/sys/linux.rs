@@ -517,6 +517,19 @@ pub fn process_group(pid: i32) -> Result<i32> {
         })
 }
 
+/// The arguments `pid` was started with, its program first.
+pub fn process_args(pid: i32) -> Result<Vec<String>> {
+    let raw = fs::read(format!("/proc/{pid}/cmdline")).map_err(|e| SenseError::Os {
+        call: "read /proc/PID/cmdline",
+        detail: e.to_string(),
+    })?;
+    Ok(raw
+        .split(|&b| b == 0)
+        .filter(|a| !a.is_empty())
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

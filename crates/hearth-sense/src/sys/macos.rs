@@ -504,8 +504,79 @@ pub fn process_group(pid: i32) -> Result<i32> {
     })
 }
 
+/// The arguments `pid` was started with, its program first. Readable for
+/// this user's processes; another user's are refused by the kernel.
+pub fn process_args(pid: i32) -> Result<Vec<String>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    // SAFETY: a null buffer with a valid mib asks only for the size.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(os_error("sysctl KERN_PROCARGS2"));
+    }
+    let mut buf = vec![0u8; size];
+    // SAFETY: `buf` is writable for `size` bytes and `size` holds that.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return Err(os_error("sysctl KERN_PROCARGS2"));
+    }
+    buf.truncate(size);
+    parse_procargs2(&buf).ok_or_else(|| SenseError::Parse {
+        what: "KERN_PROCARGS2",
+        detail: format!("unexpected layout for pid {pid}"),
+    })
+}
+
+/// `KERN_PROCARGS2` layout: argc as a native int, the executable path, NUL
+/// padding, then argc NUL-terminated arguments (the environment follows).
+fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
+    let count = usize::try_from(i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?)).ok()?;
+    let rest = buf.get(4..)?;
+    let path_end = rest.iter().position(|&b| b == 0)?;
+    let mut at = path_end;
+    while rest.get(at) == Some(&0) {
+        at += 1;
+    }
+    let args: Vec<String> = rest
+        .get(at..)?
+        .split(|&b| b == 0)
+        .take(count)
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    (args.len() == count).then_some(args)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_this_process_arguments() {
+        let pid = i32::try_from(std::process::id()).unwrap();
+        let args = process_args(pid).unwrap();
+        let mine: Vec<String> = std::env::args().collect();
+        assert_eq!(args, mine);
+        let mut fake = 2i32.to_ne_bytes().to_vec();
+        fake.extend_from_slice(b"/bin/x\0\0\0x\0-c\0HOME=/\0");
+        assert_eq!(parse_procargs2(&fake).unwrap(), ["x", "-c"]);
+    }
+
     use super::*;
 
     #[test]

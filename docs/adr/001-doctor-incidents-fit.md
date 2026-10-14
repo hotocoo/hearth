@@ -165,3 +165,11 @@ Tests read a fixture sysfs tree and recorded `nvidia-smi` output. CI has no GPU.
 - **Model stores.** `fit --port` on LM Studio looks only in LM Studio's directory. In both stores, projectors (`*mmproj*`) and later shards (`-NNNNN-of-NNNNN`, index above 1) are not candidates. A Hugging Face revision must be a plain hash. Several snapshots without `refs/main` is an error, not "not found". `HUGGINGFACE_HUB_CACHE` and `XDG_CACHE_HOME` are honoured.
 - **Configuration errors.** A configuration that does not load is an error for the commands that derive a pressure level, not a silent "no level".
 
+## Addendum (2026-10-15): fitting a running server as it runs
+
+`hearth fit --port P` needs nothing else for a llama.cpp server:
+- **Context.** It is `/props` `n_ctx` times `total_slots`, since `n_ctx` is per sequence.
+- **Cache types.** They are read from the server's own command line (`-ctk`/`--cache-type-k`, `-ctv`/`--cache-type-v`, f16 when absent, llama.cpp's default). `hearth_sense::process_args` reads it: `KERN_PROCARGS2` on macOS, `/proc/PID/cmdline` on Linux. The kernel only lets this user read their own processes' arguments.
+
+When the context does not fit, `fits_device_with` names the cache types it would fit with. hearthd's refusal message suggests them too.
+

@@ -33,8 +33,10 @@ pub struct Args {
     ctx: Option<u64>,
     /// KV cache type for keys, and for values unless --cache-type-v is given
     /// (llama.cpp --cache-type-k, Ollama `OLLAMA_KV_CACHE_TYPE`).
-    #[arg(long, value_parser = parse_cache)]
-    cache_type: CacheType,
+    /// With --port and no --cache-type, the server's own command line is
+    /// read for it (llama.cpp -ctk/-ctv; f16, its default, when absent).
+    #[arg(long, value_parser = parse_cache, required_unless_present = "port")]
+    cache_type: Option<CacheType>,
     #[arg(long, value_parser = parse_cache)]
     cache_type_v: Option<CacheType>,
     /// Parallel sequences; with --ubatch, bounds sliding-window caches.
@@ -101,6 +103,55 @@ fn locate(args: &Args) -> Result<(PathBuf, Option<u64>), String> {
         (None, Some(model)) => from_name(model).map(|p| (p, None)),
         (None, None) => Err("give a model or --port".into()),
     }
+}
+
+/// The KV cache types the llama.cpp server listening on `port` was started
+/// with, from its command line: `-ctk`/`--cache-type-k` and
+/// `-ctv`/`--cache-type-v`, each f16 (llama.cpp's default) when absent.
+/// `None` when no readable llama-server listens there.
+fn server_cache_types(port: u16) -> Option<(CacheType, CacheType)> {
+    let pid = hearth_sense::list_processes()
+        .ok()?
+        .into_iter()
+        .find_map(|p| {
+            hearth_sense::tcp_sockets(p.pid)
+                .ok()?
+                .iter()
+                .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
+                .then_some(p.pid)
+        })?;
+    cache_types_from_args(&hearth_sense::process_args(pid).ok()?)
+}
+
+/// See [`server_cache_types`]: only a llama-server's arguments say this.
+fn cache_types_from_args(args: &[String]) -> Option<(CacheType, CacheType)> {
+    let program = args.first()?;
+    if !std::path::Path::new(program)
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().contains("llama-server"))
+    {
+        return None;
+    }
+    let flag = |names: [&str; 2]| -> Option<CacheType> {
+        let value = args.iter().enumerate().find_map(|(i, a)| {
+            names.iter().find_map(|n| {
+                if a == n {
+                    args.get(i + 1).cloned()
+                } else {
+                    a.strip_prefix(&format!("{n}=")).map(str::to_string)
+                }
+            })
+        });
+        match value {
+            Some(v) => CacheType::parse(&v),
+            // llama.cpp's own default for both caches.
+            None => Some(CacheType::F16),
+        }
+    };
+    Some((
+        flag(["-ctk", "--cache-type-k"])?,
+        flag(["-ctv", "--cache-type-v"])?,
+    ))
 }
 
 /// Asks the server on `port` which model it serves, read-only.
@@ -250,10 +301,13 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .sum::<Result<u64, String>>()?;
     let header = gguf::read_header(&files[0]).map_err(|e| e.to_string())?;
     let geometry = Geometry::from_header(&header).map_err(|e| e.to_string())?;
-    let (k, v) = (
-        args.cache_type,
-        args.cache_type_v.unwrap_or(args.cache_type),
-    );
+    let (k, v) = match args.cache_type {
+        Some(k) => (k, args.cache_type_v.unwrap_or(k)),
+        None => args
+            .port
+            .and_then(server_cache_types)
+            .ok_or("give --cache-type: the server's command line does not say it")?,
+    };
     let swa = args
         .parallel
         .zip(args.ubatch)
@@ -528,6 +582,36 @@ pub(crate) fn start_check(
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod args_tests {
+    use super::*;
+
+    #[test]
+    fn cache_types_come_from_a_llama_server_command_line() {
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            cache_types_from_args(&args(&[
+                "/x/llama-server",
+                "-c",
+                "8",
+                "--cache-type-k",
+                "q8_0",
+                "-ctv=q4_0"
+            ])),
+            Some((CacheType::Q8_0, CacheType::Q4_0))
+        );
+        assert_eq!(
+            cache_types_from_args(&args(&["llama-server"])),
+            Some((CacheType::F16, CacheType::F16))
+        );
+        assert_eq!(cache_types_from_args(&args(&["ollama", "serve"])), None);
+        assert_eq!(
+            cache_types_from_args(&args(&["llama-server", "-ctk", "nonsense"])),
+            None
+        );
     }
 }
 
