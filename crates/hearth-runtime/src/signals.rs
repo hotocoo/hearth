@@ -69,6 +69,18 @@ pub enum Cause {
     BadArgument,
 }
 
+impl Cause {
+    /// Whether starting the same command again can only fail the same way.
+    /// A taken port may free up, and memory may be released by others.
+    #[must_use]
+    pub const fn is_permanent(self) -> bool {
+        matches!(
+            self,
+            Self::ModelMissing | Self::LoadFailed | Self::BadArgument
+        )
+    }
+}
+
 /// `(substring, cause)`, lowercase, from llama.cpp's own messages.
 const CAUSES: &[(&str, Cause)] = &[
     // gguf.cpp: "%s: failed to open GGUF file '%s'"

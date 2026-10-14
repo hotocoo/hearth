@@ -119,7 +119,7 @@ fn cause_name(c: hearth_runtime::signals::Cause) -> &'static str {
 
 /// Events a person should hear about without watching the terminal.
 pub(crate) fn alarming(event: &Event) -> bool {
-    let gave_up = |d: &Decision| matches!(d, Decision::GiveUp { .. });
+    let gave_up = |d: &Decision| matches!(d, Decision::GiveUp { .. } | Decision::Futile);
     match event {
         Event::Poisoned { .. } | Event::Wedged { .. } | Event::Lost { .. } => true,
         Event::Exited { decision, .. }
@@ -173,13 +173,20 @@ pub(crate) fn find_program(program: &std::ffi::OsStr) -> Result<std::path::PathB
         .ok_or_else(|| format!("{} was not found in PATH", path.display()))
 }
 
-pub(crate) fn describe(event: &Event) -> String {
-    let next = |d: &Decision| match d {
+/// What the supervisor does next, in words.
+fn next(d: &Decision) -> String {
+    match d {
         Decision::Restart { after_ms } => format!("restarting in {after_ms} ms"),
         Decision::GiveUp { exits, window_ms } => {
             format!("{exits} exits within {window_ms} ms: a crash loop, giving up")
         }
-    };
+        Decision::Futile => {
+            "a restart cannot fix that: not restarting; fix the command, then hearth start".into()
+        }
+    }
+}
+
+pub(crate) fn describe(event: &Event) -> String {
     match event {
         Event::Started { pid } => format!("started pid {pid}"),
         Event::Ready {

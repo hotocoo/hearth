@@ -63,6 +63,10 @@ pub enum Decision {
     Restart { after_ms: u64 },
     /// It exited `exits` times inside one window: a crash loop.
     GiveUp { exits: usize, window_ms: u64 },
+    /// Its log said why it exited, and a restart cannot cure that (a
+    /// missing or unloadable model, a refused argument): it is not
+    /// restarted until it is started again by hand.
+    Futile,
 }
 
 fn ms(d: Duration) -> u64 {
@@ -471,7 +475,7 @@ impl Supervised {
             Decision::Restart { after_ms } => State::Waiting {
                 until: now + Duration::from_millis(after_ms),
             },
-            Decision::GiveUp { .. } => State::GaveUp,
+            Decision::GiveUp { .. } | Decision::Futile => State::GaveUp,
         };
         decision
     }
@@ -663,7 +667,14 @@ impl Supervised {
                 .map(|(c, line, _)| (c, line))
                 .unzip()
         };
-        let decision = self.after_exit(ready_since);
+        // A cause no restart can cure is not charged to the restart budget.
+        let decision = if cause.is_some_and(Cause::is_permanent) {
+            self.signals = None;
+            self.state = State::GaveUp;
+            Decision::Futile
+        } else {
+            self.after_exit(ready_since)
+        };
         Event::Exited {
             code,
             signal,

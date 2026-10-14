@@ -43,6 +43,10 @@ class H(BaseHTTPRequestHandler):
         b = json.dumps({"data": [{"id": ident}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def log_message(self, *a): pass
+if mode == "missing":
+    # What llama.cpp logs for a model path that does not exist.
+    print("gguf_init_from_file_impl: failed to open GGUF file '/no/such.gguf' (No such file or directory)", file=sys.stderr, flush=True)
+    sys.exit(1)
 # What llama.cpp logs while it loads, before it answers.
 print("llama_context:      Metal compute buffer size =   300.75 MiB", file=sys.stderr, flush=True)
 print("llama_context:        CPU compute buffer size =    16.01 MiB", file=sys.stderr, flush=True)
@@ -493,4 +497,33 @@ fn a_server_whose_log_says_it_is_poisoned_is_restarted() {
             .any(|e| matches!(e, Event::Ready { .. })),
         "restarted after the poison: {seen:?}"
     );
+}
+
+/// A server that cannot find its model is not restarted: a restart would
+/// fail the same way, and the budget would go on nothing.
+#[test]
+fn a_missing_model_is_not_restarted() {
+    let port = free_port();
+    let t = trigger("missing");
+    let mut s = Supervised::new(
+        probe(port),
+        Some("fake-model".into()),
+        settings(),
+        Fake::new("fake-model", &t, "missing").make(port),
+    );
+    let seen = drive(
+        &mut s,
+        |_| {},
+        |seen| seen.iter().any(|e| matches!(e, Event::Exited { .. })),
+    );
+    let Some(Event::Exited {
+        cause, decision, ..
+    }) = seen.iter().find(|e| matches!(e, Event::Exited { .. }))
+    else {
+        panic!("{seen:?}");
+    };
+    assert_eq!(*cause, Some(Cause::ModelMissing), "{seen:?}");
+    assert_eq!(*decision, Decision::Futile, "{seen:?}");
+    assert!(s.gave_up());
+    assert_eq!(s.restarts(), 0);
 }
