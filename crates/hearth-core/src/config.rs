@@ -20,6 +20,17 @@ pub struct Config {
     pub supervise: Supervise,
     pub notify: Notify,
     pub watch: Watch,
+    pub servers: std::collections::BTreeMap<String, Server>,
+}
+
+/// A model server hearthd owns.
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Server {
+    pub port: u16,
+    pub host: Option<std::net::IpAddr>,
+    pub expect: Option<String>,
+    pub command: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,6 +120,7 @@ impl Config {
         self.positive()?;
         self.relations()?;
         self.representable()?;
+        self.servers()?;
         if let Some(url) = &self.notify.webhook_url
             && !(url.starts_with("http://") || url.starts_with("https://"))
         {
@@ -119,6 +131,37 @@ impl Config {
             )?;
         }
         Ok(self)
+    }
+
+    /// Server names are used in commands and file names; each needs a
+    /// command, and two cannot share a port.
+    fn servers(&self) -> Result<(), ConfigError> {
+        let mut ports = std::collections::BTreeMap::new();
+        for (name, server) in &self.servers {
+            let valid = !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            if !valid {
+                invalid(
+                    "servers",
+                    name,
+                    "server names are letters, digits, '-' and '_'",
+                )?;
+            }
+            if server.command.first().is_none_or(String::is_empty) {
+                invalid("servers.*.command", name, "needs a program to run")?;
+            }
+            let addr = (server.host, server.port);
+            if let Some(other) = ports.insert(addr, name) {
+                return Err(ConfigError::Invalid {
+                    key: "servers.*.port",
+                    value: format!("{name} and {other}"),
+                    reason: "two servers cannot listen on the same port",
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Counts and durations for which zero means nothing.
@@ -357,6 +400,26 @@ mod tests {
         if let Ok(cfg) = from_layers(Some(("test", &text))) {
             let _ = std::time::Instant::now()
                 + std::time::Duration::from_millis(cfg.supervise.restart_window_ms);
+        }
+    }
+
+    #[test]
+    fn servers_are_parsed_and_checked() {
+        let one = "[servers.qwen]\nport = 8081\ncommand = [\"llama-server\", \"-m\", \"q.gguf\"]\n";
+        let cfg = from_layers(Some(("test", one))).unwrap();
+        assert_eq!(cfg.servers["qwen"].command[0], "llama-server");
+        for bad in [
+            "[servers.qwen]\nport = 8081\ncommand = []\n",
+            "[servers.\"a b\"]\nport = 8081\ncommand = [\"x\"]\n",
+            "[servers.a]\nport = 1\ncommand = [\"x\"]\n[servers.b]\nport = 1\ncommand = [\"y\"]\n",
+        ] {
+            assert!(
+                matches!(
+                    from_layers(Some(("test", bad))),
+                    Err(ConfigError::Invalid { .. })
+                ),
+                "{bad}"
+            );
         }
     }
 

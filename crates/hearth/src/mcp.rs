@@ -96,101 +96,12 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     })
 }
 
+/// The tool list, kept as data next to this file. Its validity is checked by
+/// the tests below.
 fn tools() -> Value {
-    json!([
-        {
-            "name": "doctor",
-            "description": "Memory (available, kernel pressure, swap), open files and threads against the kernel's limits; the processes holding half of each; findings with remediation. With watch_seconds, samples twice and projects time to each limit from measured growth (use it to catch descriptor or thread leaks).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "watch_seconds": { "type": "integer", "minimum": 1, "description": "Seconds between the two samples." }
-                }
-            }
-        },
-        {
-            "name": "incidents",
-            "description": "Kernel panics (classified watchdog / GPU memory driver / other), jetsam kills with the largest process, shutdown stalls, and optionally resource-limit reports, read from the OS's own crash reports.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "since": { "type": "string", "description": "Time prefix, e.g. 2026-10 or 2026-10-12." },
-                    "all": { "type": "boolean", "description": "Include resource-limit reports (disk writes, CPU, wakeups)." }
-                }
-            }
-        },
-        {
-            "name": "fit",
-            "description": "Whether a GGUF model at a total KV context fits this machine's accelerator and fits right now, with weights and KV bytes from the model's own metadata and the largest context that would fit. Excludes runtime compute buffers.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["model", "ctx", "cache_type"],
-                "properties": {
-                    "model": { "type": "string", "description": "Path to a .gguf file (any shard of a split model)." },
-                    "ctx": { "type": "integer", "minimum": 1, "description": "Total tokens of KV cache the runtime will allocate (llama.cpp -c; Ollama num_ctx x OLLAMA_NUM_PARALLEL)." },
-                    "cache_type": { "type": "string", "description": "KV cache type: f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0 iq4_nl." },
-                    "cache_type_v": { "type": "string", "description": "Value cache type when it differs from cache_type." },
-                    "parallel": { "type": "integer", "minimum": 1, "description": "Parallel sequences (with ubatch, bounds sliding-window caches)." },
-                    "ubatch": { "type": "integer", "minimum": 1, "description": "Physical batch size (with parallel)." }
-                }
-            }
-        },
-        {
-            "name": "ports",
-            "description": "Every listening TCP port with its process, and which model runtime answers there: Ollama (models, loaded models with sizes), llama.cpp (model path, n_ctx, slots, health), ComfyUI, LM Studio, OpenAI-compatible. Ports that accept connections but never answer are flagged (a wedged server looks like that). Probes are read-only GETs.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "runtimes_only": { "type": "boolean", "description": "Only ports where a model runtime answers." }
-                }
-            }
-        },
-        {
-            "name": "log",
-            "description": "Snapshots hearth recorded of this machine, newest first, each with a one-line summary. ports and doctor record one on every full run, so this is the machine's history as hearth saw it. Refer to a snapshot by id or as ~N (N before the latest).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "enum": ["ports", "doctor", "run"], "description": "Which command's snapshots (default ports). run lists every event of hearth run: starts, readiness, exits, wedges, poisoned backends, give-ups." },
-                    "limit": { "type": "integer", "minimum": 1, "description": "Only the most recent N." }
-                }
-            }
-        },
-        {
-            "name": "diff",
-            "description": "What changed between two recorded snapshots. ports: listeners that appeared or vanished, runtimes that restarted (new pid), stopped answering, changed health or loaded models, and footprint movement. doctor: memory pressure changes, available memory, swap, kernel-wide open files and threads, and per-process open files, threads and CLOSE_WAIT movement (a leak shows as steady growth across snapshots). Defaults to the last two snapshots; run ports or doctor first to record a fresh one.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "kind": { "type": "string", "enum": ["ports", "doctor"], "description": "Which command's snapshots (default ports)." },
-                    "from": { "type": "string", "description": "Older snapshot: an id from log, or ~N (default ~1)." },
-                    "to": { "type": "string", "description": "Newer snapshot, same forms (default ~0, the latest)." },
-                    "limit": { "type": "integer", "minimum": 1, "description": "Only the N largest movements." }
-                }
-            }
-        },
-        {
-            "name": "config",
-            "description": "Every hearth setting in effect: value, source (built-in or the user's file), and what it means. hearth keeps no numbers in code; use this to see why it waited, retried, restarted or reported something, and which key to change.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "filter": { "type": "string", "description": "Only keys containing this, e.g. supervise or deadline." }
-                }
-            }
-        },
-        {
-            "name": "process_memory",
-            "description": "Memory the kernel charges to processes whose name or path contains a pattern, or to one pid: footprint (includes GPU allocations on Apple Silicon), resident, lifetime peak.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string" },
-                    "pid": { "type": "integer" }
-                }
-            }
-        }
-    ])
+    serde_json::from_str(include_str!("mcp-tools.json")).unwrap_or_else(
+        |e| json!([{ "name": "broken", "description": format!("mcp-tools.json: {e}") }]),
+    )
 }
 
 fn call(name: &str, args: &Value) -> Result<Value, String> {
@@ -248,6 +159,11 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                     command_line.extend([format!("--{key}"), r.into()]);
                 }
             }
+        }
+        "status" => command_line.push("status".into()),
+        "restart" => {
+            command_line.push("restart".into());
+            command_line.push(args["server"].as_str().ok_or("server is required")?.into());
         }
         "config" => {
             command_line.push("config".into());

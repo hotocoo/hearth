@@ -8,6 +8,14 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[[bin]]
+name = "hearth"
+path = "src/bin/hearth.rs"
+
+[[bin]]
+name = "hearthd"
+path = "src/bin/hearthd.rs"
+
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 hearth-core = { path = "../hearth-core", version = "0.0.1" }

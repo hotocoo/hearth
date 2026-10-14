@@ -320,6 +320,11 @@ pub enum Event {
         signal: Signal,
         line: String,
     },
+    /// Stopped because someone asked for a restart; it starts again at once
+    /// and the restart budget is not charged.
+    Requested {
+        stop_error: Option<String>,
+    },
     /// The operating system could not say whether the server still runs; it
     /// was stopped.
     Lost {
@@ -587,6 +592,31 @@ impl Supervised {
             stop_error,
             decision,
         }
+    }
+
+    /// Where the server is in its life, and its pid when one runs.
+    #[must_use]
+    pub fn status(&self) -> (&'static str, Option<u32>) {
+        match &self.state {
+            State::Starting { child, .. } => ("starting", Some(child.id())),
+            State::Ready { child, .. } => ("ready", Some(child.id())),
+            State::Waiting { .. } => ("waiting", None),
+            State::GaveUp => ("gave_up", None),
+        }
+    }
+
+    /// Stops the server if one runs and starts it again at the next poll.
+    /// Works after a give-up too: a person asking is a new start.
+    pub fn restart(&mut self) -> Event {
+        let stop_error = match &mut self.state {
+            State::Starting { child, .. } | State::Ready { child, .. } => stop(child).err(),
+            State::Waiting { .. } | State::GaveUp => None,
+        };
+        self.signals = None;
+        self.state = State::Waiting {
+            until: Instant::now(),
+        };
+        Event::Requested { stop_error }
     }
 
     /// Stops the server, if one runs, and supervises nothing more.

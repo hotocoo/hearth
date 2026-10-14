@@ -1,10 +1,16 @@
-//! `hearth`: inspect a machine that runs local models.
+//! `hearth`: inspect a machine that runs local models, and keep its model
+//! servers alive. The `hearth` CLI and the `hearthd` daemon are both built
+//! from this library.
 //!
 //! Every command prints a human summary, or with `--json` a machine-readable
 //! document meant for scripts and AI agents. Nothing here guesses: values are
 //! measured, read from files, or given on the command line.
 
 mod config_cmd;
+#[cfg(unix)]
+mod control;
+#[cfg(unix)]
+pub mod daemon;
 mod doctor;
 mod fit;
 mod history;
@@ -56,6 +62,14 @@ enum Command {
     /// notify) when memory pressure rises, a resource would reach its limit
     /// soon, or a model runtime vanishes, restarts or stops answering.
     Watch(watch::Args),
+    /// What hearthd keeps alive: each server's state, pid, restarts and last
+    /// event.
+    #[cfg(unix)]
+    Status(control::StatusArgs),
+    /// Ask hearthd to restart one of its servers now (the restart budget is
+    /// not charged).
+    #[cfg(unix)]
+    Restart(control::RestartArgs),
     /// Every setting in effect: its value, whether it is built in or comes
     /// from your file, and what it means.
     Config(config_cmd::Args),
@@ -75,6 +89,10 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Run(args) => run::run(args, cli.json),
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),
+        #[cfg(unix)]
+        Command::Status(args) => control::status(args, cli.json),
+        #[cfg(unix)]
+        Command::Restart(args) => control::restart(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }
@@ -91,7 +109,8 @@ pub(crate) fn dispatch(argv: &[String]) -> Result<String, String> {
     execute(&cli)
 }
 
-fn main() {
+/// The `hearth` command line.
+pub fn main() {
     let cli = Cli::parse();
     let result = execute(&cli);
     match result {

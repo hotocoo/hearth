@@ -106,3 +106,11 @@ limit_horizon_ms = 3600000
 # open and clear on alternate rounds. Kernel memory pressure is reported at
 # once.
 confirm_rounds = 2
+
+# Servers hearthd starts and keeps alive, one table each, named
+# [servers.NAME] in your own file: port (where it listens), command (the
+# program and its arguments, as a list), and optionally host (the address to
+# probe, loopback when unset) and expect (part of the model name the server
+# must report before it counts as ready). None are built in. hearthd
+# supervises each exactly as `hearth run` would, with the [supervise] values.
+[servers]

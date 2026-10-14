@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `run`, `watch`, `config`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `run`, `watch`, `status`, `restart`, `config`, `mcp`) and `hearthd`, which keeps configured model servers alive. hearthd does not proxy inference yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -63,6 +63,9 @@ cargo build --release -p hearth
 ./target/release/hearth watch               # doctor + ports on intervals, all recorded; reports pressure, limits
 #                                             reached within the horizon, runtimes that vanish or go silent
 ./target/release/hearth config supervise    # every setting in effect, its source and meaning; no number lives in code
+./target/release/hearthd                    # keeps every [servers.NAME] in your config alive, like hearth run each
+./target/release/hearth status              # what hearthd keeps: state, pid, restarts, last event
+./target/release/hearth restart vision      # restart one now (owned servers only)
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.
@@ -71,7 +74,7 @@ Set `[notify] desktop = true` or `webhook_url` in your config to be told when `h
 
 Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
 
-For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `config` and `process_memory`. For Claude Code:
+For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `status`, `restart`, `config` and `process_memory`. `restart` reaches only servers hearthd started. For Claude Code:
 
 ```sh
 claude mcp add hearth -- /path/to/hearth mcp

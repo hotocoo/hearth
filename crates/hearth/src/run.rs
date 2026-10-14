@@ -38,7 +38,7 @@ pub struct Args {
     command: Vec<OsString>,
 }
 
-fn settings(c: &hearth_core::config::Supervise) -> Settings {
+pub(crate) fn settings(c: &hearth_core::config::Supervise) -> Settings {
     let ms = Duration::from_millis;
     Settings {
         restart: RestartPolicy {
@@ -69,7 +69,7 @@ pub fn summary(body: &serde_json::Value) -> String {
 }
 
 /// Events a person should hear about without watching the terminal.
-fn alarming(event: &Event) -> bool {
+pub(crate) fn alarming(event: &Event) -> bool {
     let gave_up = |d: &Decision| matches!(d, Decision::GiveUp { .. });
     match event {
         Event::Poisoned { .. } | Event::Wedged { .. } | Event::Lost { .. } => true,
@@ -77,7 +77,10 @@ fn alarming(event: &Event) -> bool {
         | Event::NotReady { decision, .. }
         | Event::PortTaken { decision, .. }
         | Event::SpawnFailed { decision, .. } => gave_up(decision),
-        Event::Started { .. } | Event::Ready { .. } | Event::Noticed { .. } => false,
+        Event::Started { .. }
+        | Event::Ready { .. }
+        | Event::Noticed { .. }
+        | Event::Requested { .. } => false,
     }
 }
 
@@ -93,7 +96,7 @@ fn stopping(error: Option<&String>) -> String {
 /// path is taken as it is, a bare name is searched for in `PATH`. A command
 /// that is not there would otherwise start a tether that exits 127, over and
 /// over, until the restart budget is spent.
-fn find_program(program: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
+pub(crate) fn find_program(program: &std::ffi::OsStr) -> Result<std::path::PathBuf, String> {
     let path = std::path::Path::new(program);
     let executable = |p: &std::path::Path| {
         #[cfg(unix)]
@@ -120,7 +123,7 @@ fn find_program(program: &std::ffi::OsStr) -> Result<std::path::PathBuf, String>
         .ok_or_else(|| format!("{} was not found in PATH", path.display()))
 }
 
-fn describe(event: &Event) -> String {
+pub(crate) fn describe(event: &Event) -> String {
     let next = |d: &Decision| match d {
         Decision::Restart { after_ms } => format!("restarting in {after_ms} ms"),
         Decision::GiveUp { exits, window_ms } => {
@@ -190,6 +193,10 @@ fn describe(event: &Event) -> String {
             next(decision)
         ),
         Event::Noticed { signal, line } => format!("noticed {}: {line}", json(signal)),
+        Event::Requested { stop_error } => format!(
+            "restart requested; stopped{}; starting again",
+            stopping(stop_error.as_ref())
+        ),
         Event::Lost {
             error,
             stop_error,
@@ -199,6 +206,25 @@ fn describe(event: &Event) -> String {
             stopping(stop_error.as_ref()),
             next(decision)
         ),
+    }
+}
+
+/// Records `record` in the journal, and notifies when `event` is alarming.
+/// Failures are reported on stderr: the server is supervised either way.
+pub(crate) fn keep(
+    journal: Option<&Journal>,
+    notify: &hearth_core::config::Notify,
+    sending: &mut Vec<std::thread::JoinHandle<()>>,
+    (title, event, record): (&str, &Event, &serde_json::Value),
+) {
+    if let Some(journal) = journal
+        && let Err(e) = journal.record(KIND, record)
+    {
+        eprintln!("hearth: event not recorded: {e}");
+    }
+    if alarming(event) {
+        sending.retain(|h| !h.is_finished());
+        sending.extend(crate::notify::send(notify, title, &describe(event), record));
     }
 }
 
@@ -265,20 +291,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
                     "t_ms": t_ms,
                     "event": event,
                 });
-                if let Ok(journal) = &journal
-                    && let Err(e) = journal.record(KIND, &record)
-                {
-                    eprintln!("hearth: event not recorded: {e}");
-                }
-                if alarming(&event) {
-                    let title = format!("hearth: {}", probe.addr);
-                    sending.extend(crate::notify::send(
-                        &config.notify,
-                        &title,
-                        &describe(&event),
-                        &record,
-                    ));
-                }
+                keep(
+                    journal.as_ref().ok(),
+                    &config.notify,
+                    &mut sending,
+                    (&format!("hearth: {}", probe.addr), &event, &record),
+                );
                 let line = if json {
                     let mut v = serde_json::to_value(&event).map_err(|e| e.to_string())?;
                     v["t_ms"] = t_ms.into();
