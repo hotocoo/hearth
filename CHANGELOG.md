@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:19 shell completions
+
+- `hearth completions SHELL` prints a completion script for bash, elvish, fish, powershell or zsh, generated from the command definitions.
+- Two follow-up fixes:
+  - `hearth bundle` scrubs configuration error text from every part, including `doctor`'s state errors.
+  - The review fixes above passed CI.
+
 ### 2026-10-15 02:14 review fixes: bundle, MCP arguments, orders, tags, follow, logs
 
 - **bundle.** It no longer includes configuration error text, which quoted the offending line. A webhook token leaked through it.
