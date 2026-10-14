@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:58 Linux memory pressure
+
+- On Linux, the memory pressure level is derived from PSI using the new `[pressure]` keys `psi_some_warn` and `psi_full_critical`. `doctor`, `watch`, `fit` and the metrics use it, and `doctor --explain` shows the derivation. Before this, Linux never warned.
+
 ### 2026-10-15 03:54 review fixes: workflows, journal reads, config checks
 
 - **Workflows.** Arguments are substituted in one pass. Undeclared or mistyped arguments are refused. Argument lists, duplicate names and backticks are validated. Problems are reported on MCP's stderr and in its instructions.
