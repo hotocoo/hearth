@@ -105,10 +105,19 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     })
 }
 
-/// Diagnostic workflows: which tools to call in which order for a question
-/// agents keep being asked. Kept as data next to this file.
+/// The workflows, built-in and the user's (see [`crate::workflows`]).
 fn prompts() -> Vec<Value> {
-    serde_json::from_str::<Vec<Value>>(include_str!("mcp-prompts.json")).unwrap_or_default()
+    crate::workflows::all(&tool_names()).0
+}
+
+/// Names of every tool served.
+pub(crate) fn tool_names() -> Vec<String> {
+    tools()
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect()
 }
 
 fn prompt_list() -> Vec<Value> {
@@ -119,6 +128,7 @@ fn prompt_list() -> Vec<Value> {
             // argument defaults stay on this side.
             if let Some(o) = p.as_object_mut() {
                 o.remove("template");
+                o.remove("source");
                 for arg in o
                     .get_mut("arguments")
                     .and_then(Value::as_array_mut)
@@ -142,24 +152,7 @@ fn prompt(name: &str, arguments: &Value) -> Result<Value, String> {
         .into_iter()
         .find(|p| p["name"] == name)
         .ok_or_else(|| format!("no prompt named {name:?}; prompts/list has them"))?;
-    let mut text = p["template"].as_str().unwrap_or_default().to_string();
-    for arg in p["arguments"].as_array().into_iter().flatten() {
-        let key = arg["name"].as_str().unwrap_or_default();
-        let given = arguments[key].as_str().map(str::to_string).or_else(|| {
-            arguments[key]
-                .is_number()
-                .then(|| arguments[key].to_string())
-        });
-        let value = match (given, arg["default"].as_str()) {
-            (Some(v), _) => v,
-            (None, Some(default)) => default.to_string(),
-            (None, None) if arg["required"] == true => {
-                return Err(format!("{name} needs the argument {key}"));
-            }
-            (None, None) => "not given".into(),
-        };
-        text = text.replace(&format!("{{{key}}}"), &value);
-    }
+    let text = crate::workflows::render(&p, arguments)?;
     Ok(json!({
         "description": p["description"],
         "messages": [{ "role": "user", "content": { "type": "text", "text": text } }],
@@ -357,7 +350,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
         // Every tool a workflow names must exist.
-        for p in prompts() {
+        for p in crate::workflows::builtin() {
             let text = p["template"].as_str().unwrap();
             for named in text.split('`').skip(1).step_by(2) {
                 assert!(

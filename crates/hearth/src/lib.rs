@@ -26,6 +26,7 @@ mod run;
 mod service;
 mod units;
 mod watch;
+mod workflows;
 
 use clap::{Parser, Subcommand};
 
@@ -105,6 +106,10 @@ enum Command {
     /// doctor, ports, incidents, hearthd, recent run events, tags and
     /// settings, with secrets redacted. For bug reports and agents.
     Bundle(bundle::Args),
+    /// Workflows: which tools to call, in which order, for a recurring
+    /// question. Lists them, or prints one filled in. Add your own in
+    /// workflows.json beside your config; MCP serves them as prompts.
+    Workflows(workflows::Args),
     /// Every setting in effect: its value, whether it is built in or comes
     /// from your file, and what it means.
     Config(config_cmd::Args),
@@ -131,6 +136,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),
         Command::Bundle(args) => bundle::run(args, cli.json),
+        Command::Workflows(args) => workflows::run(args, cli.json),
         Command::Completions { shell } => {
             let mut script = Vec::new();
             clap_complete::generate(

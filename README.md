@@ -76,6 +76,7 @@ cargo build --release -p hearth
 #                                             reached within the horizon, runtimes that vanish or go silent
 ./target/release/hearth config supervise    # every setting in effect, its source and meaning; no number lives in code
 ./target/release/hearth bundle > box.json   # everything above in one document, secrets redacted (process names stay)
+./target/release/hearth workflows           # recurring questions as tool-by-tool recipes; add your own in workflows.json
 ./target/release/hearth completions zsh > ~/.zfunc/_hearth   # tab completion (bash, fish, zsh, elvish, powershell)
 ./target/release/hearthd                    # keeps every [servers.NAME] alive like hearth run, and watches like hearth watch
 ./target/release/hearth status              # what hearthd keeps: state, pid, restarts, last event

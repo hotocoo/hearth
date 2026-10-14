@@ -37,6 +37,18 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 - `what-changed`: since N snapshots ago or since a tag.
 - `find-a-leak`: which process, which resource, how fast, how long until the limit.
 
+### Your own workflows
+
+Put a JSON array in `workflows.json` beside your hearth config (`~/.config/hearth/workflows.json` by default). Each entry has a `name`, a `description`, a `template` and optional `arguments` with `name`, `description`, `required` and `default`. The template refers to tools in backticks and to arguments as `{name}`. A workflow with the name of a built-in one replaces it.
+
+A workflow that names a tool hearth does not have is skipped, and `hearth workflows` says why. `hearth workflows NAME --arg k=v` prints one, filled in, for use outside MCP.
+
+```json
+[{ "name": "morning-check", "description": "Daily look at the box.",
+   "template": "Call `doctor`, then `diff` with kind \"doctor\" and from \"{since}\", then `status`.",
+   "arguments": [{ "name": "since", "description": "How far back.", "default": "@1d" }] }]
+```
+
 ## Rules hearth keeps, and agents should too
 
 - `ports` marks each listener with `owned_by`: the hearthd server name, or null. Act only on owned ones.
