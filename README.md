@@ -55,6 +55,7 @@ cargo build --release -p hearth
 ./target/release/hearth incidents           # macOS: panics (watchdog / GPU driver), jetsam, stalls; Linux: OOM kills, hung tasks
 ./target/release/hearth fit model.gguf --ctx 32768 --cache-type q8_0   # fits the device? fits now? max context?
 ./target/release/hearth models --cache-type q8_0   # every model on disk (HF cache, LM Studio, Ollama), weights and the largest context that fits
+./target/release/hearth models --ctx 32768 --serving   # only those that fit at 32k tokens; which ones a running server serves
 ./target/release/hearth fit qwen3:8b --ctx 32768 --cache-type q8_0     # an Ollama model, read from its store
 ./target/release/hearth fit org/repo-GGUF:Q6_K --ctx 32768 --cache-type q8_0   # from the Hugging Face cache or LM Studio
 ./target/release/hearth fit ~/models/Qwen3-8B-MLX-4bit --ctx 32768 --cache-type f16   # an MLX / safetensors directory
@@ -62,7 +63,8 @@ cargo build --release -p hearth
 ./target/release/hearth fit --port 8080                                # ...or does it fit as it runs (ctx, slots, -ctk/-ctv read from it)?
 ./target/release/hearth ports --runtimes    # which model runtime answers on which port, with memory
 ./target/release/hearth log                 # snapshots ports recorded, newest first (--kind doctor)
-./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory
+./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory,
+#                                             and meanwhile: the notes and run events recorded between the two
 ./target/release/hearth diff --kind doctor --from ~5   # per-process file, thread, CLOSE_WAIT movement
 ./target/release/hearth follow ollama       # one process/port through every snapshot: appeared, changed, restarted, gone
 ./target/release/hearth follow llama --kind doctor     # its open files, threads, CLOSE_WAIT over time: a leak at a glance
@@ -81,7 +83,8 @@ cargo build --release -p hearth
     -- llama-server -m qwen3.gguf -c 32768 -ctk q8_0 -ctv q8_0 --port 8081   # --model/--ctx/--cache-type: refuse what cannot fit
 #   keeps the server alive: restarts on exit, wedge, or a poisoned backend in its log (the latched
 #   Metal "recreate the backend" state that still answers /health), SIGTERM then SIGKILL, gives up on a crash loop,
-#   refuses a port someone else serves, and the server dies with hearth even on SIGKILL
+#   refuses a port someone else serves, and the server dies with hearth even on SIGKILL; an exit says why from the
+#   server's own log (model missing, out of memory, bad argument...), and one a restart cannot fix is not retried
 ./target/release/hearth log --kind run      # every start, exit, wedge, poisoning and give-up hearth run saw
 ./target/release/hearth watch               # doctor + ports on intervals, all recorded; reports pressure, limits
 #                                             reached within the horizon, runtimes that vanish or go silent
@@ -109,7 +112,9 @@ For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `d
 
 ```sh
 claude mcp add hearth -- /path/to/hearth mcp
-``` On the development machine, the first `hearth incidents` run found a kernel panic inside the GPU memory driver (`IOGPUMemory.cpp:550`), which is neither a watchdog reboot nor an OOM.
+```
+
+On the development machine, the first `hearth incidents` run found a kernel panic inside the GPU memory driver (`IOGPUMemory.cpp:550`), which is neither a watchdog reboot nor an OOM.
 
 ## hearth-probe
 
