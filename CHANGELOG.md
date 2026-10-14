@@ -4,6 +4,14 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:43 hearth show and follow
+
+- `hearth show [--kind K] [REF]`: one recorded snapshot in full.
+- `hearth follow PATTERN [--kind ports|doctor|run] [--all]`: one process, port or server through every snapshot, listing when it appeared, changed and went away. A leak shows as steady growth.
+- MCP tools `show` and `follow`, and the workflow prompt `find-a-leak`.
+- MCP tool calls are translated from each tool's definition; unknown arguments are refused.
+- `hearth` exits quietly when the reader of its output goes away (`| head`) instead of panicking.
+
 ### 2026-10-15 01:35 fit --port
 
 - `hearth fit --port P --ctx N` (MCP `fit` with `port`) fits the model a running server serves: llama.cpp's file, or Ollama's loaded model. It answers whether that server could take a different context, without touching it.
