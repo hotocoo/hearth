@@ -44,8 +44,11 @@ struct Port {
     fingerprint: Fingerprint,
     memory: Option<ProcessFootprint>,
     /// Accelerator memory the process holds apart from `memory`: a discrete
-    /// GPU's (NVIDIA). Absent where the GPU shares host memory (Apple
-    /// silicon), since the footprint already counts it.
+    /// GPU's (NVIDIA, or AMD and Intel through DRM). Per process, the same
+    /// on each of its ports, and an upper bound (shared buffers count in
+    /// every holder): never summed across ports or processes. Absent where
+    /// the GPU shares host memory (Apple silicon), since the footprint
+    /// already counts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     accelerator_bytes: Option<u64>,
     deadline: Deadline,
@@ -339,19 +342,32 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
         .collect();
     let results = probe_all(jobs, deadline(None, discovery), max_bytes)?;
 
-    // Asked once, for the processes where a runtime answered.
-    let runtime_pids: Vec<i32> = results
+    // Asked once, for the processes where a runtime answered (a process on
+    // several ports once).
+    let mut runtime_pids: Vec<i32> = results
         .iter()
         .filter(|(_, (f, _, _))| is_runtime(&f.identity))
         .map(|((pid, _), _)| *pid)
         .collect();
+    runtime_pids.sort_unstable();
+    runtime_pids.dedup();
     let on_accelerator = if runtime_pids.is_empty() {
         Vec::new()
     } else {
-        crate::pressure::accelerator_process_bytes(&runtime_pids).unwrap_or_else(|e| {
-            state_errors.push(format!("accelerator memory per process: {e}"));
-            Vec::new()
-        })
+        match crate::pressure::accelerator_process_bytes(&runtime_pids) {
+            Ok((found, errors)) => {
+                state_errors.extend(
+                    errors
+                        .into_iter()
+                        .map(|e| format!("accelerator memory per process: {e}")),
+                );
+                found
+            }
+            Err(e) => {
+                state_errors.push(format!("accelerator memory per process: {e}"));
+                Vec::new()
+            }
+        }
     };
     let ports: Vec<Port> = listeners
         .into_iter()

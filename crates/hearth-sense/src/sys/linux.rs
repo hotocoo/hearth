@@ -290,49 +290,83 @@ fn nvidia_gpus(timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
     .unwrap_or_default())
 }
 
+/// Bytes in a kibibyte, mebibyte and gibibyte: the units drivers report in.
+const KIB: u64 = 1 << 10;
+const MIB: u64 = 1 << 20;
+const GIB: u64 = 1 << 30;
+
 /// Accelerator memory each of `pids` holds: NVIDIA's compute processes, as
-/// `nvidia-smi` reports them, plus the VRAM other drivers (amdgpu, i915,
-/// xe) report in each process's DRM fdinfo. Processes holding none are
-/// left out.
+/// `nvidia-smi` reports them, plus the device memory other drivers (amdgpu,
+/// i915, xe) report in each process's DRM fdinfo. Processes holding none
+/// are left out. Each source that could not be read is reported, and the
+/// others still count.
+///
+/// A buffer two processes share is counted in both, so these are upper
+/// bounds per process and must not be summed across processes. pids are
+/// those of hearth's own pid namespace.
+#[must_use]
 pub fn accelerator_process_bytes(
     pids: &[i32],
     timeout: std::time::Duration,
-) -> Result<Vec<(i32, u64)>> {
-    let nvidia = nvidia_smi(
+) -> (Vec<(i32, u64)>, Vec<String>) {
+    let mut errors = Vec::new();
+    let nvidia = match nvidia_smi(
         &[
             "--query-compute-apps=pid,used_memory",
             "--format=csv,noheader,nounits",
         ],
         timeout,
-    )?
-    .map(|text| parse_compute_apps(&text))
-    .unwrap_or_default();
-    Ok(pids
-        .iter()
-        .filter_map(|&pid| {
-            let from_nvidia = nvidia
-                .iter()
-                .find(|(p, _)| *p == pid)
-                .map_or(0, |(_, b)| *b);
-            let total = from_nvidia.saturating_add(drm_vram(pid));
-            (total > 0).then_some((pid, total))
-        })
-        .collect())
+    ) {
+        Ok(text) => text.map(|t| parse_compute_apps(&t)).unwrap_or_default(),
+        Err(e) => {
+            errors.push(e.to_string());
+            Vec::new()
+        }
+    };
+    let mut out = Vec::new();
+    for &pid in pids {
+        let from_nvidia = nvidia
+            .iter()
+            .find(|(p, _)| *p == pid)
+            .map_or(0, |(_, b)| *b);
+        let from_drm = drm_vram(pid).unwrap_or_else(|e| {
+            errors.push(e);
+            0
+        });
+        let total = from_nvidia.saturating_add(from_drm);
+        if total > 0 {
+            out.push((pid, total));
+        }
+    }
+    (out, errors)
 }
 
-/// VRAM a process holds through DRM devices, from `/proc/PID/fdinfo`: each
-/// DRM client once (several descriptors can share one), summing its
-/// `drm-memory-vram` (kernel 5.19 and later). A process whose fdinfo cannot
-/// be read (another user's) holds none as far as can be seen.
-fn drm_vram(pid: i32) -> u64 {
-    let dir = format!("/proc/{pid}/fdinfo");
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return 0;
+/// Device memory a process holds through DRM devices, from the fdinfo of
+/// its descriptors open on `/dev/dri`: each DRM client once (descriptors
+/// can share one). An error when its descriptors cannot be listed.
+fn drm_vram(pid: i32) -> std::result::Result<u64, String> {
+    let fds = format!("/proc/{pid}/fd");
+    let entries = match fs::read_dir(&fds) {
+        Ok(e) => e,
+        // Gone since it was listed: it holds nothing now.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(format!("{fds}: {e}")),
     };
     let mut clients: Vec<(u64, u64)> = Vec::new();
     for entry in entries.flatten() {
-        let Ok(text) = fs::read_to_string(entry.path()) else {
+        // A cheap readlink first: most descriptors are sockets and files,
+        // whose fdinfo is not read.
+        let on_dri =
+            fs::read_link(entry.path()).is_ok_and(|target| target.starts_with("/dev/dri/"));
+        if !on_dri {
             continue;
+        }
+        let info = format!("/proc/{pid}/fdinfo/{}", entry.file_name().to_string_lossy());
+        let text = match fs::read_to_string(&info) {
+            Ok(t) => t,
+            // Closed between listing and reading.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("{info}: {e}")),
         };
         if let Some((client, bytes)) = parse_drm_fdinfo(&text)
             && !clients.iter().any(|(c, _)| *c == client)
@@ -340,39 +374,49 @@ fn drm_vram(pid: i32) -> u64 {
             clients.push((client, bytes));
         }
     }
-    clients.iter().fold(0, |sum, (_, b)| sum.saturating_add(*b))
+    Ok(clients.iter().fold(0, |sum, (_, b)| sum.saturating_add(*b)))
 }
 
-/// `(drm-client-id, VRAM bytes)` of one DRM fdinfo, if it is one.
+/// `(drm-client-id, device memory bytes)` of one DRM fdinfo, if it is one.
+/// Resident device memory (`drm-resident-vram0`, `drm-resident-local0`)
+/// when the kernel reports it; else the older per-region totals
+/// (`drm-memory-vram`), which also count buffers not resident there.
 fn parse_drm_fdinfo(text: &str) -> Option<(u64, u64)> {
+    let device = |region: &str| region.starts_with("vram") || region.starts_with("local");
     let mut client = None;
-    let mut bytes = 0u64;
+    let (mut resident, mut older) = (None::<u64>, None::<u64>);
     for line in text.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        let mut words = value.split_whitespace();
-        match key.trim() {
-            "drm-client-id" => client = words.next().and_then(|w| w.parse().ok()),
-            // "drm-memory-vram:\t1234 KiB"; xe names its regions
-            // (drm-memory-local0), all of them device memory.
-            k if k == "drm-memory-vram" || k.starts_with("drm-memory-local") => {
-                let Some(n) = words.next().and_then(|w| w.parse::<u64>().ok()) else {
-                    continue;
-                };
-                // The units the DRM fdinfo format defines.
-                let unit: u64 = match words.next() {
-                    Some("KiB") => 1 << 10,
-                    Some("MiB") => 1 << 20,
-                    Some("GiB") => 1 << 30,
-                    _ => 1,
-                };
-                bytes = bytes.saturating_add(n.saturating_mul(unit));
-            }
-            _ => {}
+        let key = key.trim();
+        if key == "drm-client-id" {
+            client = value.trim().parse().ok();
+            continue;
         }
+        let slot = match (
+            key.strip_prefix("drm-resident-"),
+            key.strip_prefix("drm-memory-"),
+        ) {
+            (Some(region), _) if device(region) => &mut resident,
+            (_, Some(region)) if device(region) => &mut older,
+            _ => continue,
+        };
+        let mut words = value.split_whitespace();
+        let Some(n) = words.next().and_then(|w| w.parse::<u64>().ok()) else {
+            continue;
+        };
+        let unit = match words.next() {
+            None => 1,
+            Some("KiB") => KIB,
+            Some("MiB") => MIB,
+            Some("GiB") => GIB,
+            // A unit this does not know is not guessed at.
+            Some(_) => continue,
+        };
+        *slot = Some(slot.unwrap_or(0).saturating_add(n.saturating_mul(unit)));
     }
-    Some((client?, bytes))
+    Some((client?, resident.or(older).unwrap_or(0)))
 }
 
 /// `pid, used_memory` lines in MiB; a process on several GPUs is summed.
@@ -386,7 +430,7 @@ fn parse_compute_apps(text: &str) -> Vec<(i32, u64)> {
         let (Ok(pid), Ok(mib)) = (pid.trim().parse::<i32>(), mib.trim().parse::<u64>()) else {
             continue;
         };
-        let bytes = mib.saturating_mul(1024 * 1024);
+        let bytes = mib.saturating_mul(MIB);
         match out.iter_mut().find(|(p, _)| *p == pid) {
             Some((_, b)) => *b = b.saturating_add(bytes),
             None => out.push((pid, bytes)),
@@ -685,6 +729,11 @@ mod tests {
         let amd = "pos:\t0\nflags:\t02100002\ndrm-driver:\tamdgpu\ndrm-client-id:\t17\ndrm-memory-vram:\t8388608 KiB\ndrm-memory-gtt:\t2048 KiB\n";
         assert_eq!(parse_drm_fdinfo(amd), Some((17, 8_589_934_592)));
         assert_eq!(parse_drm_fdinfo("pos:\t0\nflags:\t0100002\n"), None);
+        // Newer kernels: resident device memory wins over the totals.
+        let xe = "drm-client-id:\t4\ndrm-total-vram0:\t4 GiB\ndrm-resident-vram0:\t3 GiB\ndrm-resident-system:\t1 GiB\ndrm-memory-vram0:\t4 GiB\n";
+        assert_eq!(parse_drm_fdinfo(xe), Some((4, 3 << 30)));
+        let odd = "drm-client-id:\t5\ndrm-memory-vram:\t7 TiB\n";
+        assert_eq!(parse_drm_fdinfo(odd), Some((5, 0)));
     }
 
     #[test]

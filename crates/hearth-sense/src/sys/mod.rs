@@ -41,8 +41,11 @@ mod unsupported {
     pub fn accelerator_process_bytes(
         _pids: &[i32],
         _query_timeout: std::time::Duration,
-    ) -> Result<Vec<(i32, u64)>> {
-        Err(SenseError::Unsupported("accelerator memory per process"))
+    ) -> (Vec<(i32, u64)>, Vec<String>) {
+        (
+            Vec::new(),
+            vec!["accelerator memory per process is not read on this platform".into()],
+        )
     }
     pub fn system_limits() -> Result<SystemLimits> {
         Err(SenseError::Unsupported("system limits"))

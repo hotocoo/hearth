@@ -59,9 +59,13 @@ pub fn accelerators() -> Result<Vec<hearth_sense::Accelerator>, String> {
 }
 
 /// `hearth_sense::accelerator_process_bytes`, bounded the same way.
-pub fn accelerator_process_bytes(pids: &[i32]) -> Result<Vec<(i32, u64)>, String> {
+/// `(pid, bytes)` upper bounds, and what could not be read.
+pub type ByProcess = (Vec<(i32, u64)>, Vec<String>);
+
+/// Upper bounds per process, with what could not be read.
+pub fn accelerator_process_bytes(pids: &[i32]) -> Result<ByProcess, String> {
     let timeout = std::time::Duration::from_millis(config()?.accelerators.query_timeout_ms);
-    hearth_sense::accelerator_process_bytes(pids, timeout).map_err(|e| e.to_string())
+    Ok(hearth_sense::accelerator_process_bytes(pids, timeout))
 }
 
 #[cfg(test)]

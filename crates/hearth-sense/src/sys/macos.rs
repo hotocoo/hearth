@@ -258,11 +258,12 @@ fn pid_path(pid: i32) -> Option<String> {
 /// Accelerator memory each process holds apart from its footprint. On
 /// Apple silicon the GPU shares the process's memory, and its footprint
 /// already counts what Metal allocated for it, so there is nothing apart.
+#[must_use]
 pub fn accelerator_process_bytes(
     _pids: &[i32],
     _query_timeout: std::time::Duration,
-) -> Result<Vec<(i32, u64)>> {
-    Ok(Vec::new())
+) -> (Vec<(i32, u64)>, Vec<String>) {
+    (Vec::new(), Vec::new())
 }
 
 /// `_query_timeout` bounds driver queries on platforms that run a tool;
