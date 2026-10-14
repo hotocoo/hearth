@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:24 MLX and safetensors models in fit
+
+- `hearth fit DIR` fits an MLX or Transformers model directory (`config.json` plus `.safetensors`), with geometry read from the config.
+- An `org/repo` name in the Hugging Face cache without a GGUF resolves to such a directory.
+
 ### 2026-10-15 05:20 partial offload in Ollama
 
 - `hearth ports` warns when an Ollama model sits only partly on the accelerator (`size_vram` below `size`). `watch` reports it once.
