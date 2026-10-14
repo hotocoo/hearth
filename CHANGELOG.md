@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:23 Prometheus metrics
+
+- With `[metrics] listen = "127.0.0.1:9469"` (new, off by default), hearthd serves `GET /metrics`. It reports each server's state and restarts, and the machine's memory, swap, pressure, open files and threads.
+
 ### 2026-10-15 02:19 shell completions
 
 - `hearth completions SHELL` prints a completion script for bash, elvish, fish, powershell or zsh, generated from the command definitions.
