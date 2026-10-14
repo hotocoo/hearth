@@ -158,6 +158,8 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
 #[derive(Serialize)]
 struct Report {
     health: BoxHealth,
+    /// GPUs and their memory, as the drivers report it.
+    accelerators: Vec<hearth_sense::Accelerator>,
     /// Fewest processes that together hold at least half of all open files.
     file_majority: Vec<Holder>,
     /// Fewest processes that together hold at least half of all threads.
@@ -656,6 +658,8 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
     }
     Report {
         health,
+        // A machine without a GPU the drivers report has none: not an error.
+        accelerators: hearth_sense::accelerators().unwrap_or_default(),
         file_majority,
         thread_majority,
         close_wait,
@@ -691,6 +695,21 @@ fn holders(list: &[Holder]) -> String {
         .join(", ")
 }
 
+/// One line per discrete GPU: its memory, used and total.
+fn gpu_lines(accelerators: &[hearth_sense::Accelerator]) -> String {
+    let mut out = String::new();
+    for a in accelerators.iter().filter(|a| !a.unified_memory) {
+        let _ = writeln!(
+            out,
+            "gpu      {} · {} used of {}",
+            a.name,
+            a.used_bytes.map_or("?".into(), bytes),
+            a.total_bytes.map_or("?".into(), bytes),
+        );
+    }
+    out
+}
+
 fn render(r: &Report) -> String {
     let m = &r.health.memory;
     let l = &r.health.limits;
@@ -708,6 +727,7 @@ fn render(r: &Report) -> String {
         bytes(m.swap_used_bytes),
         bytes(m.swap_total_bytes),
     );
+    out.push_str(&gpu_lines(&r.accelerators));
     if let (Some(open), Some(max)) = (l.files_open, l.files_max) {
         let _ = writeln!(
             out,

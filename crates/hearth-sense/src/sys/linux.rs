@@ -196,8 +196,91 @@ pub fn list_processes() -> Result<Vec<ProcessEntry>> {
         .collect())
 }
 
+/// GPUs and their memory, as their drivers report it to an unprivileged
+/// user: AMD through amdgpu's sysfs files, NVIDIA through `nvidia-smi`
+/// (the NVML library behind it is NVIDIA's; hearth runs the tool rather
+/// than linking it). A machine with neither reports none.
 pub fn accelerators() -> Result<Vec<Accelerator>> {
-    Ok(Vec::new())
+    let mut out = amd_gpus(std::path::Path::new("/sys/class/drm"));
+    out.extend(nvidia_gpus());
+    Ok(out)
+}
+
+fn amd_gpus(drm: &std::path::Path) -> Vec<Accelerator> {
+    let mut cards: Vec<std::path::PathBuf> = fs::read_dir(drm)
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        // card0, card1: not their connectors (card0-DP-1).
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix("card"))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .collect();
+    cards.sort();
+    cards
+        .into_iter()
+        .filter_map(|card| {
+            let dev = card.join("device");
+            let num = |f: &str| {
+                fs::read_to_string(dev.join(f))
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+            };
+            let total = num("mem_info_vram_total")?;
+            let name = fs::read_to_string(dev.join("product_name"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| format!("AMD GPU {}", card.display()));
+            Some(Accelerator {
+                name,
+                unified_memory: false,
+                total_bytes: Some(total),
+                recommended_working_set_bytes: None,
+                wired_limit_bytes: None,
+                used_bytes: num("mem_info_vram_used"),
+            })
+        })
+        .collect()
+}
+
+fn nvidia_gpus() -> Vec<Accelerator> {
+    let Ok(out) = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,memory.used",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `name, total MiB, used MiB` per line, as nvidia-smi prints them.
+fn parse_nvidia_smi(text: &str) -> Vec<Accelerator> {
+    let mib = |s: &str| s.trim().parse::<u64>().ok().map(|n| n * 1024 * 1024);
+    text.lines()
+        .filter_map(|line| {
+            let mut f = line.split(',');
+            let (name, total, used) = (f.next()?, f.next()?, f.next()?);
+            Some(Accelerator {
+                name: name.trim().to_string(),
+                unified_memory: false,
+                total_bytes: Some(mib(total)?),
+                recommended_working_set_bytes: None,
+                wired_limit_bytes: None,
+                used_bytes: mib(used),
+            })
+        })
+        .collect()
 }
 
 fn read_u64(path: &str) -> Option<u64> {
@@ -379,6 +462,26 @@ pub fn process_group(pid: i32) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_gpu_memory_from_amdgpu_sysfs_and_nvidia_smi() {
+        let drm = std::env::temp_dir().join(format!("hearth-drm-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&drm);
+        let dev = drm.join("card1/device");
+        fs::create_dir_all(&dev).unwrap();
+        fs::create_dir_all(drm.join("card1-DP-1")).unwrap();
+        fs::write(dev.join("mem_info_vram_total"), "25753026560\n").unwrap();
+        fs::write(dev.join("mem_info_vram_used"), "1073741824\n").unwrap();
+        fs::write(dev.join("product_name"), "Radeon RX 7900 XTX\n").unwrap();
+        let amd = amd_gpus(&drm);
+        assert_eq!(amd.len(), 1);
+        assert_eq!(amd[0].name, "Radeon RX 7900 XTX");
+        assert_eq!(amd[0].used_bytes, Some(1_073_741_824));
+        fs::remove_dir_all(drm).unwrap();
+        let nv = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564, 1234\nbroken line\n");
+        assert_eq!(nv.len(), 1);
+        assert_eq!(nv[0].total_bytes, Some(24564 * 1024 * 1024));
+    }
+
     #[test]
     fn the_tightest_cgroup_limit_over_the_process_binds() {
         let root = std::env::temp_dir().join(format!("hearth-cg-{}", std::process::id()));

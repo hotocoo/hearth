@@ -149,6 +149,9 @@ pub struct Accelerator {
     /// `iogpu.wired_limit_mb` when an override is set; `None` means the kernel
     /// default applies.
     pub wired_limit_bytes: Option<u64>,
+    /// Device memory in use now, where the driver reports it (Linux
+    /// amdgpu sysfs, NVIDIA through nvidia-smi).
+    pub used_bytes: Option<u64>,
 }
 
 /// Kernel-wide limits and usage for the resources that, when exhausted, take

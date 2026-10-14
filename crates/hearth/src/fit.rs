@@ -292,6 +292,15 @@ fn device_ceiling() -> Result<Option<Ceiling>, String> {
                     bytes: b,
                     source: "iogpu.wired_limit_mb".into(),
                 }),
+                // A discrete GPU holds the model in its own memory. With
+                // several, the smallest is the one a model must fit to be
+                // placed on any single device.
+                a.total_bytes
+                    .filter(|_| !a.unified_memory)
+                    .map(|b| Ceiling {
+                        bytes: b,
+                        source: format!("{} memory", a.name),
+                    }),
             ]
         })
         .flatten()

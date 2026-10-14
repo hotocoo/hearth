@@ -275,6 +275,7 @@ pub fn accelerators() -> Result<Vec<Accelerator>> {
         wired_limit_bytes: wired_limit_mb
             .filter(|&mb| mb > 0)
             .map(|mb| mb * 1024 * 1024),
+        used_bytes: None,
     }])
 }
 

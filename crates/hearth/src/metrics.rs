@@ -130,6 +130,33 @@ fn machine(out: &mut String) {
             let _ = writeln!(out, "hearth_memory_pressure {level}");
         }
     }
+    let gpus: Vec<hearth_sense::Accelerator> = hearth_sense::accelerators()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| !a.unified_memory)
+        .collect();
+    for (name, help, pick) in [
+        (
+            "hearth_gpu_memory_total_bytes",
+            "Memory of each discrete GPU.",
+            (|a: &hearth_sense::Accelerator| a.total_bytes)
+                as fn(&hearth_sense::Accelerator) -> Option<u64>,
+        ),
+        (
+            "hearth_gpu_memory_used_bytes",
+            "Memory in use on each discrete GPU, as its driver reports it.",
+            |a: &hearth_sense::Accelerator| a.used_bytes,
+        ),
+    ] {
+        if gpus.iter().any(|a| pick(a).is_some()) {
+            family(out, name, "gauge", help);
+            for a in &gpus {
+                if let Some(v) = pick(a) {
+                    let _ = writeln!(out, "{name}{{gpu=\"{}\"}} {v}", label(&a.name));
+                }
+            }
+        }
+    }
     if let Ok(l) = hearth_sense::system_limits() {
         for (name, help, value) in [
             (

@@ -141,3 +141,16 @@ For comparison, systemd-oomd starts killing at 60. `doctor --explain` shows the 
 
 A level the kernel declares (macOS) is always used as is. `doctor`, `watch`, `fit` and the metrics all use the same level. Findings no longer say "the kernel reports" for a level hearth derived.
 
+## Addendum (2026-10-15): discrete GPUs on Linux
+
+On Linux, `hearth-sense::accelerators` reports GPUs the way their drivers tell an unprivileged user:
+- **AMD:** amdgpu's `mem_info_vram_total` and `mem_info_vram_used` under `/sys/class/drm/cardN/device`, named by `product_name`.
+- **NVIDIA:** `nvidia-smi --query-gpu=name,memory.total,memory.used`. hearth runs NVIDIA's own tool rather than linking NVML, which keeps FFI out.
+
+How they are used:
+- `doctor` prints a line per discrete GPU.
+- The metrics export `hearth_gpu_memory_total_bytes` and `hearth_gpu_memory_used_bytes`.
+- `fit` takes a discrete GPU's memory as the device ceiling. With several GPUs it uses the smallest, the one a model must fit to go on any single device; splitting a model across devices is not modelled.
+
+Tests read a fixture sysfs tree and recorded `nvidia-smi` output. CI has no GPU.
+
