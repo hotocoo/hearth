@@ -48,8 +48,8 @@ enum Command {
     Doctor(doctor::Args),
     /// Kernel panics, jetsam kills and resource-limit reports the OS recorded.
     Incidents(incidents::Args),
-    /// Whether a GGUF model at a given context fits on this machine, now and
-    /// at all.
+    /// Whether a model (GGUF, MLX or safetensors) at a given context fits on
+    /// this machine, now and at all.
     Fit(fit::Args),
     /// Every listening port, the process behind it, and which model runtime
     /// answers there (Ollama, llama.cpp, ComfyUI, LM Studio, OpenAI-compatible).
