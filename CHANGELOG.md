@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:14 snapshots as MCP resources
+
+- `hearth mcp` serves recorded snapshots as resources at `hearth://KIND/REFERENCE`, for example `hearth://doctor/@1h` or `hearth://ports/healthy`, with a list and a URI template.
+- Argument parsing keeps empty arguments: all of them on Linux, and every one but a first-position one on macOS.
+
 ### 2026-10-15 05:07 cache types and oversized-check fixes
 
 - **Cache types from the command line.** The last `-ctk`/`-ctv` wins. An absent flag means the type is unknown, not f16, because the server may take it from its environment.
