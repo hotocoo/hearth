@@ -40,6 +40,9 @@ class H(BaseHTTPRequestHandler):
         b = json.dumps({"data": [{"id": ident}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def log_message(self, *a): pass
+# What llama.cpp logs while it loads, before it answers.
+print("llama_context:      Metal compute buffer size =   300.75 MiB", file=sys.stderr, flush=True)
+print("llama_context:        CPU compute buffer size =    16.01 MiB", file=sys.stderr, flush=True)
 HTTPServer(("127.0.0.1", port), H).serve_forever()
 "#;
 
@@ -448,6 +451,12 @@ fn a_server_whose_log_says_it_is_poisoned_is_restarted() {
                 >= 2
         },
     );
+    // Each start reports what it logged, not the sum of all starts.
+    for e in &seen {
+        if let Event::Ready { compute_bytes, .. } = e {
+            assert_eq!(*compute_bytes, Some(315_359_232 + 16_787_702), "{seen:?}");
+        }
+    }
     let poisoned = seen
         .iter()
         .position(|e| matches!(e, Event::Poisoned { .. }))

@@ -201,3 +201,5 @@ A fit used to leave out the runtime's compute buffers, because no file states th
 
 `fit` looks in the run journal for the latest ready event of the same model file at the same total context (`n_ctx` × slots). When it finds one, it adds those compute bytes to the total, the device check, the largest context and the cache-type alternatives, and names the event in a note. A start at another context is reported in a note but not counted, because compute buffers depend on the batch and context settings. A measured value replaces the estimate, so `excludes` disappears from the report.
 
+Only the compute lines are read, and only a start that logged a non-zero amount counts as measured. Lines still unread when the port first answers are not counted; llama.cpp logs them before it serves, so this is rare and errs low. The value is that start's: compute buffers also depend on the batch sizes and flash attention, and without flash attention they grow with the context, which the note says.
+

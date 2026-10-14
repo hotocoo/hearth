@@ -581,8 +581,8 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                     } else {
                         format!(", or keep the context with -ctk/-ctv {}", kinds.join(" / "))
                     },
-                    // All of them: the largest has the least headroom, and
-                    // compute buffers are not counted.
+                    // All of them: the largest has the least headroom, which
+                    // compute buffers may take when they were not measured.
                     if values.is_empty() {
                         String::new()
                     } else {

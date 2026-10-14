@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::fingerprint::{Identity, fingerprint};
-use crate::llama_log::Buffers;
+use crate::llama_log::compute_bytes;
 use crate::signals::{Signal, classify};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,10 +282,11 @@ pub enum Event {
         pid: u32,
         after_ms: u64,
         identity: Identity,
-        /// What the server logged allocating while it loaded (llama.cpp),
-        /// for `hearth fit` to learn compute buffers from.
+        /// The compute buffers llama.cpp logged while it loaded, summed
+        /// over its backends, for `hearth fit` to learn from. Lines still
+        /// unread when the port answered are not counted.
         #[serde(skip_serializing_if = "Option::is_none")]
-        buffers: Option<Buffers>,
+        compute_bytes: Option<u64>,
     },
     Exited {
         code: Option<i32>,
@@ -385,11 +386,11 @@ pub struct Supervised {
     signals: Option<Receiver<(Signal, String)>>,
     /// The last lines the server (and the servers before it) printed.
     output: Output,
-    /// What the running server logged allocating since it started.
-    buffers: SharedBuffers,
+    /// The compute buffers the running server logged since it started.
+    compute: Compute,
 }
 
-type SharedBuffers = std::sync::Arc<std::sync::Mutex<Buffers>>;
+type Compute = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
 /// The most recent lines of output, shared with the threads reading it.
 pub type Output = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>;
@@ -413,7 +414,7 @@ impl Supervised {
             state: State::Waiting { until: now },
             signals: None,
             output: Output::default(),
-            buffers: SharedBuffers::default(),
+            compute: Compute::default(),
         }
     }
 
@@ -485,15 +486,12 @@ impl Supervised {
                         since: now,
                         misses: 0,
                     };
-                    let buffers = *self
-                        .buffers
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let compute = self.compute.load(std::sync::atomic::Ordering::Relaxed);
                     return Some(Event::Ready {
                         pid,
                         after_ms: ms(now.duration_since(since)),
                         identity,
-                        buffers: (!buffers.is_empty()).then_some(buffers),
+                        compute_bytes: (compute > 0).then_some(compute),
                     });
                 }
                 let waited = now.duration_since(since);
@@ -562,12 +560,12 @@ impl Supervised {
                 let pid = child.id();
                 let (tx, rx) = channel();
                 // Each start counts its own allocations.
-                self.buffers = SharedBuffers::default();
+                self.compute = Compute::default();
                 let keep = (
                     self.output.clone(),
                     self.settings.output_lines,
                     self.settings.output_line_bytes,
-                    self.buffers.clone(),
+                    self.compute.clone(),
                 );
                 if let Some(out) = child.stdout.take() {
                     watch(out, tx.clone(), keep.clone());
@@ -707,7 +705,7 @@ impl Supervised {
 fn watch<R: Read + Send + 'static>(
     stream: R,
     signals: Sender<(Signal, String)>,
-    (output, keep, line_bytes, buffers): (Output, usize, usize, SharedBuffers),
+    (output, keep, line_bytes, compute): (Output, usize, usize, Compute),
 ) {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
@@ -735,10 +733,9 @@ fn watch<R: Read + Send + 'static>(
                     kept.pop_front();
                 }
             }
-            buffers
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .add_line(&text);
+            if let Some(bytes) = compute_bytes(&text) {
+                compute.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+            }
             if let Some(signal) = classify(&text) {
                 // Fails only once the supervisor has moved on to another
                 // server; this one's output is still passed on until it closes.
