@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:00 notes
+
+- **`hearth note [--by WHO] MESSAGE`.** Records what someone did or saw, such as "lowered -c to 131072 after the pressure", in the journal beside hearth's snapshots. `log --kind note` lists notes, and `--grep` searches them.
+- **Readers.** The `what-changed` workflow reads notes. `bundle` includes the latest. MCP serves `note` and asks agents to write one after every change they make or advise.
+- **Config.** The number of recent run events and notes in `bundle` is now `bundle.recent_events`, no longer a number in code.
+
 ### 2026-10-15 05:54 review fixes for grep, workflows and fit
 
 - **log --grep.** Matches what a snapshot says, not its escaped JSON. Text matches as a substring with case ignored; a number matches only when equal, so pid 123 no longer matches 1234. Reading stops once `--limit` matches are found.
