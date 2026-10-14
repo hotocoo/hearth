@@ -368,36 +368,6 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
     )
 }
 
-/// The process listening on `port`, found among this user's processes.
-/// The process listening on `port` that belongs to `tether`'s process
-/// group: the server, under its tether and any wrapper script, and never a
-/// process someone else runs on the same port. The lowest such pid, so a
-/// pre-forking server is named by its first process.
-fn listener_of(port: u16, tether: u32) -> Option<i32> {
-    let group = i32::try_from(tether).ok()?;
-    let processes = match hearth_sense::list_processes() {
-        Ok(p) => p,
-        Err(e) => {
-            log(&format!(
-                "cannot list processes to find the server's pid: {e}"
-            ));
-            return None;
-        }
-    };
-    processes
-        .into_iter()
-        .filter(|p| hearth_sense::process_group(p.pid).is_ok_and(|g| g == group))
-        .filter(|p| {
-            hearth_sense::tcp_sockets(p.pid).is_ok_and(|sockets| {
-                sockets
-                    .iter()
-                    .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
-            })
-        })
-        .map(|p| p.pid)
-        .min()
-}
-
 fn address(server: &Server) -> SocketAddr {
     SocketAddr::new(
         server.host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -455,20 +425,30 @@ fn supervise(
             // The server's pid is learned when it is ready and forgotten as
             // soon as it is gone, so nothing measures a pid since reused.
             let listening = match &event {
-                E::Ready { pid, .. } => Some(listener_of(address(server).port(), *pid)),
+                E::Ready { pid, .. } => Some(
+                    crate::run::listener_of(address(server).port(), *pid).unwrap_or_else(|e| {
+                        log(&format!(
+                            "cannot list processes to find the server's pid: {e}"
+                        ));
+                        None
+                    }),
+                ),
                 E::Started { .. } | E::Noticed { .. } => None,
                 _ => Some(None),
             };
             if let Some(server_pid) = listening {
                 update(board, name, |s| s.server_pid = server_pid);
             }
-            let record = json!({
+            let mut record = json!({
                 "server": name,
                 "addr": address(server),
                 "expect": server.expect,
                 "command": server.command.first(),
                 "event": event,
             });
+            if let Some(Some(pid)) = listening {
+                crate::run::footprint_at_ready(&mut record, pid);
+            }
             log(&format!("[{name}] {}", crate::run::describe(&event)));
             crate::run::keep(
                 journal.as_ref(),

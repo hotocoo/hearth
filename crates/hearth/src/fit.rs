@@ -392,7 +392,8 @@ fn measured_compute_in(
             .as_u64()
             .map(|n| n.saturating_mul(identity["slots"].as_u64().unwrap_or(1).max(1)));
         if at == Some(ctx) {
-            found = Some((compute, s.id));
+            let footprint = s.body["footprint_at_ready"]["footprint_bytes"].as_u64();
+            found = Some((compute, footprint, s.id));
             break;
         }
         elsewhere.get_or_insert((compute, at, s.id));
@@ -402,11 +403,19 @@ fn measured_compute_in(
     } else {
         format!("; {unreadable} run events could not be read")
     };
-    if let Some((compute, id)) = found {
+    if let Some((compute, footprint, id)) = found {
+        // Measured, not used in the verdict: whether a footprint counts the
+        // memory-mapped weights is what the P0 gate (ADR-000) settles.
+        let held = footprint.map_or_else(String::new, |f| {
+            format!(
+                "; once serving, that server's footprint was {} (not used in the verdict until ADR-000's gate says how mapped weights count)",
+                bytes(f)
+            )
+        });
         return (
             Some(compute),
             Some(format!(
-                "compute buffers {} as llama.cpp logged them when hearth started this model at this context ({id}), with that start's batch and flash-attention settings; without flash attention they grow with the context, so a larger context needs more{skipped}",
+                "compute buffers {} as llama.cpp logged them when hearth started this model at this context ({id}), with that start's batch and flash-attention settings; without flash attention they grow with the context, so a larger context needs more{held}{skipped}",
                 bytes(compute)
             )),
         );
@@ -1074,7 +1083,8 @@ mod port_tests {
         let journal = hearth_core::state::Journal::at(dir.clone(), 10).unwrap();
         let ready = |n_ctx: u64, compute: u64| {
             serde_json::json!({"event": {"event": "ready", "compute_bytes": compute,
-                "identity": {"kind": "llama_cpp", "model": "/m/q.gguf", "n_ctx": n_ctx, "slots": 2}}})
+                "identity": {"kind": "llama_cpp", "model": "/m/q.gguf", "n_ctx": n_ctx, "slots": 2}},
+                "footprint_at_ready": {"footprint_bytes": 1_073_741_824_u64}})
         };
         let model = Path::new("/m/q.gguf");
         assert_eq!(measured_compute_in(&journal, model, 8192), (None, None));
@@ -1083,7 +1093,9 @@ mod port_tests {
         journal.record(crate::run::KIND, &ready(4096, 0)).unwrap();
         journal.record(crate::run::KIND, &ready(1024, 100)).unwrap();
         // 4096 per slot × 2 slots.
-        assert_eq!(measured_compute_in(&journal, model, 8192).0, Some(300));
+        let (compute, note) = measured_compute_in(&journal, model, 8192);
+        assert_eq!(compute, Some(300));
+        assert!(note.unwrap().contains("footprint was 1.00 GiB"));
         let (learned, note) = measured_compute_in(&journal, model, 4096);
         assert_eq!(learned, None);
         assert!(note.unwrap().contains("2048 tokens"));

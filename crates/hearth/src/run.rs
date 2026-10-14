@@ -172,6 +172,64 @@ pub(crate) fn find_program(program: &std::ffi::OsStr) -> Result<std::path::PathB
         .ok_or_else(|| format!("{} was not found in PATH", path.display()))
 }
 
+/// The pid listening on `port` among the processes of `tether`'s process
+/// group: the server, under its tether and any wrapper script, and never a
+/// process someone else runs on the same port. The lowest such pid, so a
+/// pre-forking server is named by its first process. An error when the
+/// processes cannot be listed.
+pub(crate) fn listener_of(port: u16, tether: u32) -> Result<Option<i32>, String> {
+    let Ok(group) = i32::try_from(tether) else {
+        return Ok(None);
+    };
+    let processes = hearth_sense::list_processes().map_err(|e| e.to_string())?;
+    Ok(processes
+        .into_iter()
+        .filter(|p| hearth_sense::process_group(p.pid).is_ok_and(|g| g == group))
+        .filter(|p| {
+            hearth_sense::tcp_sockets(p.pid).is_ok_and(|sockets| {
+                sockets
+                    .iter()
+                    .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
+            })
+        })
+        .map(|p| p.pid)
+        .min())
+}
+
+/// Adds to a ready event's record what the server holds in memory once it
+/// serves (`footprint_at_ready`), so a later fit of the same model can say
+/// what a start of it measured. A footprint that cannot be read is
+/// recorded as the reason instead.
+pub(crate) fn footprint_at_ready(record: &mut serde_json::Value, server_pid: i32) {
+    record["footprint_at_ready"] = match hearth_sense::process_footprint(server_pid) {
+        Ok(f) => serde_json::to_value(f).unwrap_or_default(),
+        Err(e) => serde_json::json!({ "error": e.to_string() }),
+    };
+}
+
+/// What `hearth run` records of one event.
+fn journal_record(
+    addr: std::net::SocketAddr,
+    expect: Option<&str>,
+    program: &str,
+    t_ms: u64,
+    event: &Event,
+) -> serde_json::Value {
+    let mut record = serde_json::json!({
+        "addr": addr,
+        "expect": expect,
+        "command": program,
+        "t_ms": t_ms,
+        "event": event,
+    });
+    if let Event::Ready { pid, .. } = event
+        && let Ok(Some(server)) = listener_of(addr.port(), *pid)
+    {
+        footprint_at_ready(&mut record, server);
+    }
+    record
+}
+
 /// What the supervisor does next, in words.
 fn next(d: &Decision) -> String {
     match d {
@@ -366,13 +424,13 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             if let Some(event) = supervised.poll() {
                 last = Some(describe(&event));
                 let t_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                let record = serde_json::json!({
-                    "addr": probe.addr,
-                    "expect": args.expect,
-                    "command": program_name,
-                    "t_ms": t_ms,
-                    "event": event,
-                });
+                let record = journal_record(
+                    probe.addr,
+                    args.expect.as_deref(),
+                    &program_name,
+                    t_ms,
+                    &event,
+                );
                 keep(
                     journal.as_ref().ok(),
                     &config.notify,

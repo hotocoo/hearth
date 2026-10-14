@@ -207,3 +207,7 @@ Only the compute lines are read, and only a start that logged a non-zero amount 
 
 `hearth models` lists every model the stores that `fit` reads hold: Hugging Face cache repos (each GGUF weights file, or the repo when it is a safetensors model), LM Studio's directories, and Ollama's manifests. Each line gives a name `fit` accepts, the store, the architecture, the weights, the trained context, and the largest context the device holds it at. That context is computed by the same geometry and device ceiling as `fit`, with `--cache-type`, or the model's own dtype for MLX. A GGUF without a cache type is listed unsized, because llama.cpp's f16 default is a runtime's choice and not the model's. A store that is absent lists nothing; one that cannot be read is reported, never skipped silently. Only files are read.
 
+## Addendum (2026-10-15): footprint at ready
+
+Each `ready` event that `hearth run` and hearthd record now carries `footprint_at_ready`: the footprint, resident and peak memory of the server's listening process once it serves. On macOS this is `phys_footprint`, and on Linux it is `Pss`. `fit` reports it in the same note as the learned compute buffers, but does not use it in its verdict. Whether a memory-mapped model's weights count in that number is exactly what the P0 gate (ADR-000) measures, so until the gate runs this is recorded evidence, not an input.
+

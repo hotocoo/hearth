@@ -257,6 +257,26 @@ fn journal_has_the_run(dir: &Path) {
     let back = usize::try_from(found[0]["back"].as_u64().unwrap()).unwrap();
     assert!(found[0]["summary"].as_str().unwrap().contains("requested"));
     assert_eq!(log["snapshots"][back]["id"], found[0]["id"]);
+    // A ready event records what the server held once serving.
+    let ready = hearth(
+        dir,
+        &["log", "--kind", "run", "--grep", "ready", "--limit", "1"],
+    )
+    .unwrap();
+    let id = ready["snapshots"][0]["id"].as_str().unwrap();
+    let held = hearth(
+        dir,
+        &[
+            "show",
+            "--kind",
+            "run",
+            "--pointer",
+            "/body/footprint_at_ready/footprint_bytes",
+            id,
+        ],
+    )
+    .unwrap();
+    assert!(held.as_u64().is_some_and(|b| b > 0), "{held}");
 }
 
 #[test]
