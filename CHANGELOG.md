@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:48 hearth stop, start and logs
+
+- `hearth stop NAME` stops a hearthd server and keeps it down, freeing its memory, until `hearth start NAME`. `start` also revives a server hearthd gave up on.
+- `hearth logs NAME`: the server's last `supervise.output_lines` (new key) lines of output, across restarts.
+- MCP tools `stop`, `start` and `logs`. The workflows `server-died` and `can-i-load` use them.
+
 ### 2026-10-15 01:43 hearth show and follow
 
 - `hearth show [--kind K] [REF]`: one recorded snapshot in full.
