@@ -6,7 +6,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ### 2026-10-15 07:46 accelerator memory per process
 
-- **VRAM per runtime.** On Linux with NVIDIA, `ports` shows the VRAM each model runtime holds (`accelerator_bytes`) beside its host footprint.
+- **VRAM per runtime.** On Linux, `ports` shows the VRAM each model runtime holds (`accelerator_bytes`) beside its host footprint: NVIDIA from `nvidia-smi`, AMD and Intel from DRM fdinfo.
 - **Apple silicon.** Nothing is added there, because the footprint already counts Metal allocations.
 
 ### 2026-10-15 07:38 footprint at ready
