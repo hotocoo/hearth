@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:19 exit cause and meanwhile fixes
+
+- **Exit causes.** An exit's cause must come from the server's last lines: an old allocation warning no longer explains a later, unrelated exit. A failed allocation is reported as out of memory even when it made the load fail.
+- **`diff --limit`.** It also bounds `meanwhile`.
+- **`models --ctx`.** It keeps unreadable models in the list, with their error.
+
 ### 2026-10-15 07:11 exit causes
 
 - **Exit causes.** When a server hearth supervises exits, the event says why, from llama.cpp's own log: `model_missing`, `load_failed`, `out_of_memory`, `port_in_use` or `bad_argument`, with the line that said it. `hearth run` prints it.
