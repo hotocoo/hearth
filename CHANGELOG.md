@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:20 partial offload in Ollama
+
+- `hearth ports` warns when an Ollama model sits only partly on the accelerator (`size_vram` below `size`). `watch` reports it once.
+
 ### 2026-10-15 05:17 steadier ports warnings in watch
 
 - `watch` and hearthd apply `watch.confirm_rounds` to `ports` warnings too, so a transient probe failure no longer makes them flap.
