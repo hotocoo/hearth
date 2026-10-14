@@ -137,6 +137,12 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     );
     wait_until("ready", || state(&dir).is_some_and(|(s, _)| s == "ready"));
     let (_, first) = state(&dir).unwrap();
+    // The listening process is found and measured, not just the tether.
+    let status = hearth(&dir, &["status"]).unwrap();
+    let s = &status["servers"][0];
+    assert!(s["server_pid"].as_u64().is_some(), "{status}");
+    assert_ne!(s["server_pid"], s["pid"], "the server is not its tether");
+    assert!(s["footprint_bytes"].as_u64().is_some_and(|b| b > 0), "{status}");
 
     hearth(&dir, &["restart", "e2e"]).unwrap();
     wait_until("a new pid", || {

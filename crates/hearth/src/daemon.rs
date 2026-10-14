@@ -36,7 +36,13 @@ struct Status {
     expect: Option<String>,
     program: String,
     state: String,
+    /// The tether hearthd started; it stops the server when it goes.
     pid: Option<u32>,
+    /// The process actually listening on the server's port: the server
+    /// itself, under its tether and any wrapper script.
+    server_pid: Option<i32>,
+    /// That process's memory footprint, measured when status is asked.
+    footprint_bytes: Option<u64>,
     restarts: u64,
     last_event: Option<Value>,
     last_event_at_ms: Option<u64>,
@@ -150,6 +156,21 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
     )
 }
 
+/// The process listening on `port`, found among this user's processes.
+fn listener_of(port: u16) -> Option<i32> {
+    hearth_sense::list_processes()
+        .ok()?
+        .into_iter()
+        .find(|p| {
+            hearth_sense::tcp_sockets(p.pid).is_ok_and(|sockets| {
+                sockets
+                    .iter()
+                    .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
+            })
+        })
+        .map(|p| p.pid)
+}
+
 fn address(server: &Server) -> SocketAddr {
     SocketAddr::new(
         server.host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
@@ -205,6 +226,16 @@ fn supervise(
             s.restarts = restarts;
         });
         for event in events {
+            let listening = match &event {
+                hearth_runtime::supervise::Event::Ready { .. } => {
+                    Some(listener_of(address(server).port()))
+                }
+                hearth_runtime::supervise::Event::Started { .. } => None,
+                _ => Some(None),
+            };
+            if let Some(server_pid) = listening {
+                update(board, name, |s| s.server_pid = server_pid);
+            }
             let record = json!({
                 "server": name,
                 "addr": address(server),
@@ -234,7 +265,13 @@ fn answer(request: &str, board: &Board, desk: &Desk) -> Value {
     };
     match request["op"].as_str() {
         Some("status") => {
-            let servers: Vec<Status> = lock(board).values().cloned().collect();
+            let mut servers: Vec<Status> = lock(board).values().cloned().collect();
+            for s in &mut servers {
+                s.footprint_bytes = s
+                    .server_pid
+                    .and_then(|p| hearth_sense::process_footprint(p).ok())
+                    .map(|f| f.footprint_bytes);
+            }
             json!({ "servers": servers })
         }
         Some(op @ ("restart" | "stop" | "start")) => {
@@ -442,6 +479,8 @@ pub fn run() -> Result<(), String> {
                 program: server.command.first().cloned().unwrap_or_default(),
                 state: "waiting".into(),
                 pid: None,
+                server_pid: None,
+                footprint_bytes: None,
                 restarts: 0,
                 last_event: None,
                 last_event_at_ms: None,

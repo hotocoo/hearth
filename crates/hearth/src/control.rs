@@ -180,11 +180,17 @@ pub fn status(_: &StatusArgs, json: bool) -> Result<String, String> {
     for s in servers {
         let _ = writeln!(
             out,
-            "{:<16} {:<22} {:<9} pid {:<7} restarts {:<3} last: {}",
+            "{:<16} {:<22} {:<9} pid {:<7} {:>11} restarts {:<3} last: {}",
             printable(&s["name"]),
             printable(&s["addr"]),
             printable(&s["state"]),
-            s["pid"].as_u64().map_or("-".into(), |p| p.to_string()),
+            s["server_pid"]
+                .as_u64()
+                .or_else(|| s["pid"].as_u64())
+                .map_or("-".into(), |p| p.to_string()),
+            s["footprint_bytes"]
+                .as_u64()
+                .map_or(String::new(), crate::units::bytes),
             s["restarts"].as_u64().unwrap_or_default(),
             printable(&s["last_event"]["event"]),
         );

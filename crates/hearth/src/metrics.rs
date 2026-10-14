@@ -73,6 +73,26 @@ pub fn render(servers: &[Value]) -> String {
             s["restarts"].as_u64().unwrap_or_default()
         );
     }
+    family(
+        &mut out,
+        "hearth_server_footprint_bytes",
+        "gauge",
+        "Memory footprint of each server's process, as the kernel charges it.",
+    );
+    for s in servers {
+        let footprint = s["server_pid"]
+            .as_i64()
+            .and_then(|p| i32::try_from(p).ok())
+            .and_then(|p| hearth_sense::process_footprint(p).ok());
+        if let Some(f) = footprint {
+            let _ = writeln!(
+                out,
+                "hearth_server_footprint_bytes{{server=\"{}\"}} {}",
+                name_of(s),
+                f.footprint_bytes
+            );
+        }
+    }
     machine(&mut out);
     out
 }
