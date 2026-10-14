@@ -47,6 +47,10 @@ struct Port {
     /// Missed its learned deadline, then answered within the first-contact
     /// one: busy, swapping, or on its way to wedging.
     slow: bool,
+    /// The hearthd server this is, when hearthd started it: the only ports
+    /// whose process `restart`, `stop` and `start` may touch. `None` means
+    /// someone else runs it, and hearth only observes it.
+    owned_by: Option<String>,
 }
 
 /// How long the probe waited for this port, and where that number came from.
@@ -279,8 +283,27 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
 
 /// Probes every listening port, and records the report unless it was
 /// filtered to runtimes.
+/// Server pids hearthd keeps, by pid, with each server's name; empty when
+/// hearthd is not running.
+fn owned_pids() -> BTreeMap<i32, String> {
+    #[cfg(unix)]
+    if let Ok(answer) = crate::control::call(&serde_json::json!({ "op": "status" })) {
+        return answer["servers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| {
+                let pid = i32::try_from(s["server_pid"].as_i64()?).ok()?;
+                Some((pid, s["name"].as_str()?.to_string()))
+            })
+            .collect();
+    }
+    BTreeMap::new()
+}
+
 fn observe(runtimes_only: bool) -> Result<Report, String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
+    let owned = owned_pids();
     let discovery = &config.discovery;
     let max_bytes = discovery.max_probe_response_bytes;
     let mut state_errors = Vec::new();
@@ -313,6 +336,7 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
                 return None;
             }
             Some(Port {
+                owned_by: owned.get(&key.0).cloned(),
                 pid: key.0,
                 memory: is_runtime
                     .then(|| hearth_sense::process_footprint(key.0).ok())
@@ -742,10 +766,13 @@ fn render(r: &Report) -> String {
         });
         let _ = writeln!(
             out,
-            "{:<22} {} ({}) · {}{memory}",
+            "{:<22} {} ({}){} · {}{memory}",
             p.fingerprint.addr,
             p.process,
             p.pid,
+            p.owned_by
+                .as_ref()
+                .map_or(String::new(), |n| format!(" [hearthd: {n}]")),
             describe(&p.fingerprint.identity)
         );
     }

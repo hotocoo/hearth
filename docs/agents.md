@@ -39,6 +39,7 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 
 ## Rules hearth keeps, and agents should too
 
+- `ports` marks each listener with `owned_by`: the hearthd server name, or null. Act only on owned ones.
 - hearth never touches a process it did not start. `restart`, `stop` and `start` reach only servers configured under `[servers]` in hearthd. A server someone else runs is reported, never signalled.
 - Nothing loads a model. `fit` reads file headers; `ports` sends read-only status GETs.
 - Every number hearth uses is in its configuration, with its meaning (`config`). A finding states the measurement it came from.

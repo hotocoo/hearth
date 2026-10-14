@@ -89,7 +89,7 @@
   },
   {
     "name": "ports",
-    "description": "Every listening TCP port with its process, and which model runtime answers there: Ollama (models, loaded models with sizes), llama.cpp (model path, n_ctx, slots, health), ComfyUI, LM Studio, OpenAI-compatible. Ports that accept connections but never answer are flagged (a wedged server looks like that). Probes are read-only GETs.",
+    "description": "Every listening TCP port with its process, and which model runtime answers there: Ollama (models, loaded models with sizes), llama.cpp (model path, n_ctx, slots, health), ComfyUI, LM Studio, OpenAI-compatible. Ports that accept connections but never answer are flagged (a wedged server looks like that). Probes are read-only GETs. Each port says owned_by: the hearthd server name when hearthd started it (only those may be restarted, stopped or started), or null when someone else runs it and hearth only observes.",
     "inputSchema": {
       "type": "object",
       "properties": {
