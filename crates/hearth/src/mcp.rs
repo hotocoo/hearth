@@ -62,7 +62,8 @@ fn handle(msg: &Value) -> Option<Value> {
                     "instructions": "hearth inspects a machine that runs local models. \
                         Use doctor before loading a model or when the machine is slow, \
                         incidents after a crash or reboot, fit before starting a model \
-                        server, process_memory to see what a server really uses."
+                        server, ports to find which runtimes run where and whether one is wedged, \
+                        process_memory to see what a server really uses."
                 }),
             )
         }
@@ -134,6 +135,16 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "ports",
+            "description": "Every listening TCP port with its process, and which model runtime answers there: Ollama (models, loaded models with sizes), llama.cpp (model path, n_ctx, slots, health), ComfyUI, LM Studio, OpenAI-compatible. Ports that accept connections but never answer are flagged (a wedged server looks like that). Probes are read-only GETs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "runtimes_only": { "type": "boolean", "description": "Only ports where a model runtime answers." }
+                }
+            }
+        },
+        {
             "name": "process_memory",
             "description": "Memory the kernel charges to processes whose name or path contains a pattern, or to one pid: footprint (includes GPU allocations on Apple Silicon), resident, lifetime peak.",
             "inputSchema": {
@@ -186,11 +197,21 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 }
             }
         }
+        "ports" => {
+            argv_push_ports(&mut command_line, args);
+        }
         "process_memory" => return process_memory(args),
         other => return Err(format!("unknown tool {other}")),
     }
     let text = crate::dispatch(&command_line)?;
     serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+fn argv_push_ports(command_line: &mut Vec<String>, args: &Value) {
+    command_line.push("ports".into());
+    if args["runtimes_only"].as_bool() == Some(true) {
+        command_line.push("--runtimes".into());
+    }
 }
 
 fn process_memory(args: &Value) -> Result<Value, String> {

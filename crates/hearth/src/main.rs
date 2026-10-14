@@ -8,6 +8,7 @@ mod doctor;
 mod fit;
 mod incidents;
 mod mcp;
+mod ports;
 mod units;
 
 use clap::{Parser, Subcommand};
@@ -32,6 +33,9 @@ enum Command {
     /// Whether a GGUF model at a given context fits on this machine, now and
     /// at all.
     Fit(fit::Args),
+    /// Every listening port, the process behind it, and which model runtime
+    /// answers there (Ollama, llama.cpp, ComfyUI, LM Studio, OpenAI-compatible).
+    Ports(ports::Args),
     /// Serve these commands as tools to AI agents over the Model Context
     /// Protocol on stdin/stdout.
     Mcp,
@@ -42,6 +46,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Doctor(args) => doctor::run(args, cli.json),
         Command::Incidents(args) => incidents::run(args, cli.json),
         Command::Fit(args) => fit::run(args, cli.json),
+        Command::Ports(args) => ports::run(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }

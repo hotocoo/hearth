@@ -1,0 +1,18 @@
+# hearth configuration.
+#
+# hearth measures what it can and learns what it observes. This file holds
+# only what can be neither measured nor learned yet. The hearth binaries embed
+# this file as their base layer. To override a value, put the same key in
+# your own file: $HEARTH_CONFIG, or $XDG_CONFIG_HOME/hearth/hearth.toml
+# (default ~/.config/hearth/hearth.toml).
+
+[discovery]
+# How long to wait for an HTTP answer from a listening port that hearth has
+# never probed before. A server that accepts the connection and never answers
+# (a wedged scheduler, for example) is reported as unresponsive after this.
+# Once a runtime has answered, its measured latency replaces this value.
+first_contact_timeout_ms = 2500
+
+# Most bytes read from one probe response. Probes ask runtimes for small JSON
+# documents; anything larger is not a runtime answering a probe.
+max_probe_response_bytes = 8388608

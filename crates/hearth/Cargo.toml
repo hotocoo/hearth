@@ -10,6 +10,8 @@ authors.workspace = true
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
+hearth-core = { path = "../hearth-core", version = "0.0.1" }
+hearth-runtime = { path = "../hearth-runtime", version = "0.0.1" }
 hearth-sense = { path = "../hearth-sense", version = "0.0.1" }
 serde.workspace = true
 serde_json.workspace = true
