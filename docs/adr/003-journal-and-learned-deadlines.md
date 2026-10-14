@@ -149,5 +149,7 @@ Kinds not listed, such as `run` events, are only capped, because every event mat
 
 `hearth tag NAME --at REF` names one snapshot, like `git tag NAME COMMIT`. It is how a moment found by grep is kept past retention. A snapshot pruned before the tag protected it is an error, and the tag is removed.
 
-`hearth note` records a fourth kind, `note`: a message and an optional author, the journal's commit messages. Notes are capped like run events, not thinned. Snapshots record what the machine was; notes record what someone did to it and why. `what-changed` reads them, and the MCP instructions ask agents to write one after any change they make or advise. `hearth bundle` includes the latest `bundle.recent_events` notes and run events.
+`hearth note` records a fourth kind, `note`: a message and an optional author, the journal's commit messages. Notes are capped like run events, not thinned. Snapshots record what the machine was; notes record what someone did to it and why. `what-changed` reads them, and the MCP instructions ask agents to write one after any change they make or advise. Notes are capped at `state.max_note_bytes`. `state.thinned_kinds` takes only the state kinds, because thinning an event kind would lose events. `hearth bundle` includes the latest `bundle.recent_events` run events, and when notes were written but not their text: notes are free text, and an agent's note may quote a command line with a key.
+
+`hearth log --all` lists every kind in one timeline. Ids begin with their zero-padded time, so sorting them sorts by time across kinds.
 
