@@ -539,6 +539,11 @@ pub fn show(args: &ShowArgs, _json: bool) -> Result<String, String> {
     let Some(pointer) = &args.pointer else {
         return crate::to_json(&snapshot);
     };
+    if !pointer.is_empty() && !pointer.starts_with('/') {
+        return Err(format!(
+            "{pointer:?} is not a JSON pointer: it starts with /, as in /body/health"
+        ));
+    }
     let whole = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
     let part = whole.pointer(pointer).ok_or_else(|| {
         format!(
@@ -562,7 +567,8 @@ fn nearest(value: &Value, pointer: &str) -> String {
     }
     let here = match value.pointer(at) {
         Some(Value::Object(o)) => o.keys().cloned().collect::<Vec<_>>().join(", "),
-        Some(Value::Array(a)) => format!("{} items, /0 to /{}", a.len(), a.len().saturating_sub(1)),
+        Some(Value::Array(a)) if a.is_empty() => "an empty list".to_string(),
+        Some(Value::Array(a)) => format!("{} items, /0 to /{}", a.len(), a.len() - 1),
         Some(other) => format!("the value {other}"),
         None => String::new(),
     };
@@ -762,6 +768,8 @@ mod tests {
             "/body/ports has: 2 items, /0 to /1"
         );
         assert_eq!(nearest(&v, "nope"), "the top has: body");
+        let empty = serde_json::json!({"a": []});
+        assert_eq!(nearest(&empty, "/a/0"), "/a has: an empty list");
         assert_eq!(
             nearest(&v, "/body/health/memory/x"),
             "/body/health/memory has: the value 1"

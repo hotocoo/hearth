@@ -4,7 +4,6 @@
 //! read; nothing is downloaded or loaded.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use hearth_sense::kv::CacheType;
 use serde::Serialize;
@@ -53,36 +52,52 @@ struct Report {
     errors: Vec<String>,
 }
 
-/// Every name `fit` resolves, with the store it is in.
-fn names(errors: &mut Vec<String>) -> Vec<(&'static str, String)> {
-    let mut out = Vec::new();
-    match hearth_runtime::model_stores::list() {
-        Ok(repos) => {
-            for (store, repo) in repos {
-                match hearth_runtime::model_stores::weights_of(&repo, store) {
-                    Ok(files) => out.extend(files.into_iter().map(|f| (store.name(), f))),
-                    Err(e) => errors.push(e),
-                }
-            }
+/// Where a listed model lives, so it is read from that store and no other.
+#[derive(Clone, Copy)]
+enum Source {
+    Download(hearth_runtime::model_stores::Store),
+    Ollama,
+}
+
+impl Source {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Download(s) => s.name(),
+            Self::Ollama => "ollama",
         }
-        Err(e) => errors.push(e),
     }
-    match hearth_runtime::ollama_store::list() {
-        Ok(models) => out.extend(models.into_iter().map(|m| ("ollama", m))),
-        Err(e) => errors.push(e),
+
+    /// The model's weights, looked up in this store only.
+    fn locate(self, name: &str) -> Result<std::path::PathBuf, String> {
+        match self {
+            Self::Download(store) => hearth_runtime::model_stores::find_in(name, store)
+                .unwrap_or_else(|| Err(format!("{name}: gone from the {}", store.name()))),
+            Self::Ollama => hearth_runtime::ollama_store::weights(name),
+        }
     }
+}
+
+/// Every name `fit` resolves, with the store it is in.
+fn names(errors: &mut Vec<String>) -> Vec<(Source, String)> {
+    let mut out = Vec::new();
+    let (repos, problems) = hearth_runtime::model_stores::list();
+    errors.extend(problems);
+    for (store, repo) in repos {
+        match hearth_runtime::model_stores::weights_of(&repo, store) {
+            Ok(files) => out.extend(files.into_iter().map(|f| (Source::Download(store), f))),
+            Err(e) => errors.push(e),
+        }
+    }
+    let (models, problems) = hearth_runtime::ollama_store::list();
+    errors.extend(problems);
+    out.extend(models.into_iter().map(|m| (Source::Ollama, m)));
     out
 }
 
-fn survey(
-    store: &'static str,
-    name: String,
-    cache: Option<CacheType>,
-    ceiling: Option<u64>,
-) -> Model {
+fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Option<u64>) -> Model {
     let mut model = Model {
         name,
-        store,
+        store: source.name(),
         arch: None,
         weights_bytes: None,
         trained_context: None,
@@ -91,7 +106,8 @@ fn survey(
         fits_device: None,
         error: None,
     };
-    let found = crate::fit::from_name(Path::new(&model.name))
+    let found = source
+        .locate(&model.name)
         .and_then(|path| crate::fit::weights_and_geometry(&path).map(|(_, w, g)| (path, w, g)));
     let (path, weights, geometry) = match found {
         Ok(f) => f,
@@ -159,6 +175,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             (Some(e), _) => format!("unreadable: {e}"),
             (None, Some(w)) => {
                 let ctx = match (m.fits_device, m.max_ctx_device, m.cache_type) {
+                    (None, _, _) => "no accelerator limit known to size it against".to_string(),
                     (Some(false), _, _) => "weights alone exceed the device".to_string(),
                     (_, Some(n), Some(t)) => format!("max context {n} at {t}"),
                     (_, None, Some(t)) => format!("no context fits at {t}"),

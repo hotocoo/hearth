@@ -105,43 +105,74 @@ pub fn weights_in(store: &Path, name: &str) -> Result<PathBuf, String> {
 
 /// Every model name the stores have manifests for, in the short form
 /// Ollama shows (`qwen3:8b`, `user/model:tag`, `host/ns/model:tag`),
-/// sorted. An absent store lists nothing; one that cannot be read is an
-/// error.
-pub fn list() -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
+/// sorted, and what could not be read or named. An absent store lists
+/// nothing.
+#[must_use]
+pub fn list() -> (Vec<String>, Vec<String>) {
+    let (mut out, mut errors) = (Vec::new(), Vec::new());
     for store in stores() {
-        out.extend(list_in(&store)?);
+        let (names, problems) = list_in(&store);
+        out.extend(names);
+        errors.extend(problems);
     }
     out.sort();
     out.dedup();
+    (out, errors)
+}
+
+/// The names of the directories in `d`, sorted; none when `d` is absent.
+/// Files beside them (`.DS_Store`) are not directories and are left out.
+pub fn subdirs(d: &Path) -> Result<Vec<String>, String> {
+    let entries = match std::fs::read_dir(d) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        r => r.map_err(|e| format!("{}: {e}", d.display()))?,
+    };
+    let mut out = Vec::new();
+    for e in entries {
+        let e = e.map_err(|e| format!("{}: {e}", d.display()))?;
+        if e.path().is_dir() {
+            out.push(e.file_name().to_string_lossy().into_owned());
+        }
+    }
+    out.sort();
     Ok(out)
 }
 
 /// [`list`] for one store.
-pub fn list_in(store: &Path) -> Result<Vec<String>, String> {
-    let dirs = |d: &Path| -> Result<Vec<String>, String> {
-        match std::fs::read_dir(d) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(format!("{}: {e}", d.display())),
-            Ok(entries) => entries
-                .map(|e| {
-                    e.map(|e| e.file_name().to_string_lossy().into_owned())
-                        .map_err(|e| format!("{}: {e}", d.display()))
-                })
-                .collect(),
+#[must_use]
+pub fn list_in(store: &Path) -> (Vec<String>, Vec<String>) {
+    let mut errors = Vec::new();
+    let dirs = |d: &Path, errors: &mut Vec<String>| match subdirs(d) {
+        Ok(names) => names,
+        Err(e) => {
+            errors.push(e);
+            Vec::new()
         }
     };
     let manifests = store.join("manifests");
     let mut out = Vec::new();
-    for registry in dirs(&manifests)? {
-        for namespace in dirs(&manifests.join(&registry))? {
+    for registry in dirs(&manifests, &mut errors) {
+        for namespace in dirs(&manifests.join(&registry), &mut errors) {
             let models = manifests.join(&registry).join(&namespace);
-            for model in dirs(&models)? {
+            for model in dirs(&models, &mut errors) {
                 let tags = models.join(&model);
-                for tag in dirs(&tags)? {
-                    if !tags.join(&tag).is_file() {
+                let listed = match std::fs::read_dir(&tags) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        errors.push(format!("{}: {e}", tags.display()));
                         continue;
                     }
+                };
+                for entry in listed {
+                    let entry = match entry {
+                        Ok(e) if e.path().is_file() => e,
+                        Ok(_) => continue,
+                        Err(e) => {
+                            errors.push(format!("{}: {e}", tags.display()));
+                            continue;
+                        }
+                    };
+                    let tag = entry.file_name().to_string_lossy().into_owned();
                     let name = match (registry.as_str(), namespace.as_str()) {
                         (DEFAULT_REGISTRY, DEFAULT_NAMESPACE) => format!("{model}:{tag}"),
                         (DEFAULT_REGISTRY, ns) => format!("{ns}/{model}:{tag}"),
@@ -149,13 +180,18 @@ pub fn list_in(store: &Path) -> Result<Vec<String>, String> {
                     };
                     if parse_name(&name).is_some() {
                         out.push(name);
+                    } else {
+                        errors.push(format!(
+                            "{}: {name} has characters hearth cannot look up by name",
+                            entry.path().display()
+                        ));
                     }
                 }
             }
         }
     }
     out.sort();
-    Ok(out)
+    (out, errors)
 }
 
 /// The weights file of model `name`, from the first store that has it.
@@ -221,8 +257,15 @@ mod tests {
         let other = store.join("manifests/registry.ollama.ai/user/m");
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("q4"), "{}").unwrap();
-        assert_eq!(list_in(&store).unwrap(), ["qwen3:8b", "user/m:q4"]);
-        assert!(list_in(&store.join("absent")).unwrap().is_empty());
+        std::fs::write(store.join("manifests/.DS_Store"), "").unwrap();
+        assert_eq!(
+            list_in(&store),
+            (
+                vec!["qwen3:8b".to_string(), "user/m:q4".to_string()],
+                vec![]
+            )
+        );
+        assert_eq!(list_in(&store.join("absent")), (vec![], vec![]));
         std::fs::remove_dir_all(store).unwrap();
     }
 }

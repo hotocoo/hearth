@@ -73,29 +73,25 @@ fn repo_dirs(org: &str, repo: &str) -> Vec<(Store, PathBuf)> {
 }
 
 /// Every `org/repo` each store has, sorted, for listing what is on this
-/// machine. A store that is absent lists nothing; one that cannot be read
-/// is an error.
-pub fn list() -> Result<Vec<(Store, String)>, String> {
-    let dirs = |d: &Path| -> Result<Vec<String>, String> {
-        match std::fs::read_dir(d) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(format!("{}: {e}", d.display())),
-            Ok(entries) => entries
-                .map(|e| {
-                    let e = e.map_err(|e| format!("{}: {e}", d.display()))?;
-                    Ok(e.path()
-                        .is_dir()
-                        .then(|| e.file_name().to_string_lossy().into_owned()))
-                })
-                .filter_map(Result::transpose)
-                .collect(),
+/// machine, and the directories that could not be read. A store that is
+/// absent lists nothing.
+#[must_use]
+pub fn list() -> (Vec<(Store, String)>, Vec<String>) {
+    let mut errors = Vec::new();
+    let mut dirs = |d: &Path| -> Vec<String> {
+        match crate::ollama_store::subdirs(d) {
+            Ok(names) => names,
+            Err(e) => {
+                errors.push(e);
+                Vec::new()
+            }
         }
     };
     let mut out = Vec::new();
     for (store, base) in bases() {
         match store {
             Store::HuggingFace => {
-                for name in dirs(&base)? {
+                for name in dirs(&base) {
                     if let Some((org, repo)) = name
                         .strip_prefix("models--")
                         .and_then(|r| r.split_once("--"))
@@ -105,8 +101,8 @@ pub fn list() -> Result<Vec<(Store, String)>, String> {
                 }
             }
             Store::LmStudio => {
-                for org in dirs(&base)? {
-                    for repo in dirs(&base.join(&org))? {
+                for org in dirs(&base) {
+                    for repo in dirs(&base.join(&org)) {
                         out.push((store, format!("{org}/{repo}")));
                     }
                 }
@@ -115,7 +111,7 @@ pub fn list() -> Result<Vec<(Store, String)>, String> {
     }
     out.sort_by(|a, b| a.1.cmp(&b.1));
     out.dedup_by(|a, b| a == b);
-    Ok(out)
+    (out, errors)
 }
 
 /// The weight files of repo `org/repo` in `store`, each as a name
@@ -123,7 +119,9 @@ pub fn list() -> Result<Vec<(Store, String)>, String> {
 /// safetensors model. Empty when the store has none.
 pub fn weights_of(name: &str, store: Store) -> Result<Vec<String>, String> {
     let Some((org, repo, None, None)) = parse(name) else {
-        return Err(format!("{name:?} is not org/repo"));
+        return Err(format!(
+            "{name}: has characters hearth cannot look up by name (only letters, digits, '-', '_', '.')"
+        ));
     };
     let Some((_, dir)) = repo_dirs(&org, &repo)
         .into_iter()
@@ -167,8 +165,12 @@ fn files_dir(store: Store, dir: &Path) -> Result<Option<PathBuf>, String> {
             return Ok(Some(snapshots.join(rev)));
         }
     }
-    let mut all: Vec<PathBuf> = std::fs::read_dir(&snapshots)
-        .map_err(|e| format!("{}: {e}", snapshots.display()))?
+    let entries = match std::fs::read_dir(&snapshots) {
+        // A download that never finished has no snapshot yet.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        r => r.map_err(|e| format!("{}: {e}", snapshots.display()))?,
+    };
+    let mut all: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir())
