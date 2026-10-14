@@ -12,6 +12,8 @@ mod sys;
 
 use serde::Serialize;
 
+#[cfg(unix)]
+pub use sys::effective_uid;
 pub use sys::{
     accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
     tcp_sockets,

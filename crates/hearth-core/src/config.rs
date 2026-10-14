@@ -21,6 +21,14 @@ pub struct Config {
     pub notify: Notify,
     pub watch: Watch,
     pub servers: std::collections::BTreeMap<String, Server>,
+    pub control: Control,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Control {
+    pub max_message_bytes: u64,
+    pub timeout_ms: u64,
 }
 
 /// A model server hearthd owns.

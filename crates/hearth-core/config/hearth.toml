@@ -107,6 +107,17 @@ limit_horizon_ms = 3600000
 # once.
 confirm_rounds = 2
 
+[control]
+# hearthd's control socket (hearth status, hearth restart, MCP). Requests and
+# answers are a few hundred bytes of JSON; anything past this many bytes is
+# refused, so a client cannot make hearthd hold arbitrary amounts of memory.
+max_message_bytes = 65536
+
+# How long one exchange on the socket may take, from connecting to the last
+# byte of the answer. hearthd serves one client at a time from memory, so a
+# client that stalls holds the others up for at most this long.
+timeout_ms = 2000
+
 # Servers hearthd starts and keeps alive, one table each, named
 # [servers.NAME] in your own file: port (where it listens), command (the
 # program and its arguments, as a list), and optionally host (the address to

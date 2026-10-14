@@ -37,20 +37,32 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
 
 ### Control socket
 
-`hearthd.sock` lives in hearth's state directory, which hearthd makes owner-only (0700) before binding. Who may talk to hearthd is decided by file permissions: there is no TCP port to expose and no key to leak. The protocol is one JSON request and one JSON answer per line.
+`hearthd.sock` lives in hearth's state directory. Who may talk to hearthd is decided by ownership and permissions, checked on both ends. There is no TCP port to expose and no key to leak.
+
+- **Ownership.** The directory must be a real directory (not a symlink), owned by the effective user, with no group or other access. hearthd creates it 0700 when missing, but never changes an existing one: `HEARTH_STATE=$HOME` is refused with the fix, not silently chmodded. The client checks the same, and that the socket itself is owner-only, before trusting an answer. A spoofed socket in a shared directory such as `/tmp` is refused.
+- **Lock.** One hearthd per state directory. It holds an exclusive lock on `hearthd.lock` (`File::try_lock`, the reason MSRV is 1.89) for as long as it runs, and the kernel drops the lock however hearthd ends. A socket found without the lock held is therefore stale, and it is replaced. Only a socket is ever removed from that path; anything else there is an error.
+- **Socket.** The socket is created 0600.
+- **Bounds.** One JSON request and one JSON answer per line, each at most `control.max_message_bytes`, the exchange within `control.timeout_ms`. Clients are answered one at a time, inline, from memory, so there is no thread per connection to exhaust. A client that stalls holds the next one up for at most the timeout. A malformed or oversized request gets an error answer. Text printed by `hearth status` is stripped of control characters.
 
 - `status`: each server's name, address, expected model, program, state (`starting`, `ready`, `waiting`, `gave_up`), pid, restart count and last event.
-- `restart NAME`: stop and start again at once, without charging the restart budget, because a person asking is not a crash. It also revives a server hearthd gave up on. Unknown names are refused.
+- `restart NAME`: stop and start again at once, without charging the restart budget, because a person asking is not a crash. It also revives a server hearthd gave up on. Unknown names are refused. At most one order is pending per server, so repeated requests cannot hold a server down.
 
 `hearth status`, `hearth restart NAME` and the MCP tools `status` and `restart` are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
 
 A socket path longer than the platform allows (about a hundred bytes) is reported with its length and the fix (`HEARTH_STATE`), not the kernel's bare `SUN_LEN`.
 
+### Robustness
+
+- hearthd writes its log without panicking when stdout is closed.
+- A supervising thread that panics marks its server `unsupervised` on the board.
+- A poisoned board lock is recovered: the board holds plain values.
+- Accept errors (out of descriptors) are logged and paced, not spun on.
+
 ### Lifetime
 
 hearthd has no shutdown handler, and needs none. However hearthd ends, SIGKILL included, the kernel closes each tether's pipe and the servers stop (ADR-004).
-- **Stale socket.** A socket left behind does not answer, so the next hearthd replaces it.
-- **Second instance.** A socket that answers means hearthd already runs, and a second instance refuses to start.
+- **Stale socket.** A socket left behind is replaced, because the lock says nobody owns it.
+- **Second instance.** It finds the lock held and refuses to start.
 
 ### Running at login
 
@@ -69,7 +81,11 @@ The rules:
   - starts the built `hearthd`, with a real server;
   - waits for `hearth status` to report it ready;
   - restarts it through `hearth restart` and sees a new pid;
+  - checks that a second hearthd refuses to start;
+  - checks that an oversized request gets an error, and that a stalled client does not block the next one;
   - SIGKILLs hearthd, sees the server's port close, and finds the requested restart in `hearth log --kind run`.
+
+  Separate tests check that a regular file at the socket path is left untouched, and that a state directory open to other users is refused.
 - Live on the development machine, a steady and a crash-looping server ran side by side. `status` showed one ready and one `gave_up` after its budget, and MCP `status` returned the same.
 - An agent can now restart a wedged server it was asked to look after, through MCP, without being able to touch anything else on the machine.
 - The `hearth` crate is now a library with two binaries, `hearth` and `hearthd`, so both share one implementation of every command.

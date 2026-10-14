@@ -33,6 +33,42 @@ fn home(test: &str) -> PathBuf {
     dir
 }
 
+/// `python3` runs the fake servers; without it the test cannot run here.
+fn python() -> bool {
+    Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+fn hearthd(dir: &Path) -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_hearthd"));
+    c.env("HEARTH_STATE", dir.join("state"))
+        .env("HEARTH_CONFIG", dir.join("hearth.toml"));
+    c
+}
+
+fn config(dir: &Path, port: u16) {
+    let script = dir.join("server.py");
+    std::fs::write(&script, SERVER).unwrap();
+    std::fs::write(
+        dir.join("hearth.toml"),
+        format!(
+            "[control]\ntimeout_ms = 1000\nmax_message_bytes = 1024\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\n",
+            script.display()
+        ),
+    )
+    .unwrap();
+}
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
 fn hearth(dir: &Path, args: &[&str]) -> Result<Value, String> {
     let out = Command::new(env!("CARGO_BIN_EXE_hearth"))
         .arg("--json")
@@ -79,22 +115,13 @@ impl Drop for Killed {
 
 #[test]
 fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
+    if !python() {
+        eprintln!("skipped: python3 is needed for the fake server");
+        return;
+    }
     let dir = home("e2e");
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let script = dir.join("server.py");
-    std::fs::write(&script, SERVER).unwrap();
-    std::fs::write(
-        dir.join("hearth.toml"),
-        format!(
-            "[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\n",
-            script.display()
-        ),
-    )
-    .unwrap();
+    let port = free_port();
+    config(&dir, port);
     assert!(
         hearth(&dir, &["status"])
             .unwrap_err()
@@ -102,9 +129,7 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         "no daemon yet"
     );
     let mut daemon = Killed(
-        Command::new(env!("CARGO_BIN_EXE_hearthd"))
-            .env("HEARTH_STATE", dir.join("state"))
-            .env("HEARTH_CONFIG", dir.join("hearth.toml"))
+        hearthd(&dir)
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap(),
@@ -123,6 +148,26 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         "unknown names are refused"
     );
 
+    // One hearthd per state directory.
+    let second = hearthd(&dir).output().unwrap();
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("already runs"));
+
+    // A client that sends too much, or stalls, gets an error, and hearthd
+    // keeps answering everyone else.
+    let sock = dir.join("state").join("hearthd.sock");
+    let mut big = std::os::unix::net::UnixStream::connect(&sock).unwrap();
+    let _ = std::io::Write::write_all(&mut big, &[b'x'; 4096]);
+    let mut reply = String::new();
+    let _ = std::io::Read::read_to_string(&mut big, &mut reply);
+    assert!(reply.contains("longer than"), "{reply}");
+    let stalled = std::os::unix::net::UnixStream::connect(&sock).unwrap();
+    assert!(
+        hearth(&dir, &["status"]).is_ok(),
+        "served after a stalled client"
+    );
+    drop(stalled);
+
     // SIGKILL: no handler runs, and the server must go anyway.
     daemon.0.kill().unwrap();
     daemon.0.wait().unwrap();
@@ -136,4 +181,39 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         .filter_map(|s| s["summary"].as_str())
         .collect();
     assert!(events.iter().any(|s| s.contains("requested")), "{events:?}");
+}
+
+#[test]
+fn hearthd_never_removes_what_is_not_its_socket() {
+    let dir = home("notsock");
+    config(&dir, free_port());
+    std::fs::create_dir_all(dir.join("state")).unwrap();
+    std::fs::set_permissions(
+        dir.join("state"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    std::fs::write(dir.join("state").join("hearthd.sock"), "precious").unwrap();
+    let out = hearthd(&dir).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a socket"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("state").join("hearthd.sock")).unwrap(),
+        "precious"
+    );
+}
+
+#[test]
+fn hearthd_refuses_a_state_directory_others_can_enter() {
+    let dir = home("open");
+    config(&dir, free_port());
+    std::fs::create_dir_all(dir.join("state")).unwrap();
+    std::fs::set_permissions(
+        dir.join("state"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let out = hearthd(&dir).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("open to other users"));
 }

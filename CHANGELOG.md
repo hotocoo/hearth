@@ -153,7 +153,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ### 2026-10-14 22:12 P0 scaffold
 
-- Cargo workspace (edition 2024, MSRV 1.88), Apache-2.0 OR MIT.
+- Cargo workspace (edition 2024, MSRV 1.88, now 1.89), Apache-2.0 OR MIT.
 - `hearth-sense`: host memory, per-process footprint, process list and accelerator limits.
   - macOS: `host_statistics64`, `sysctlbyname`, `proc_pid_rusage` v4, `proc_listallpids`/`proc_name`/`proc_pidpath`, Metal `recommendedMaxWorkingSetSize`.
   - Linux: `/proc/meminfo`, PSI, cgroup v2, `smaps_rollup`, `/proc/*/comm` and `exe`.

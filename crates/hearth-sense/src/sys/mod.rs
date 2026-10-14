@@ -1,3 +1,8 @@
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub use unix::effective_uid;
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
