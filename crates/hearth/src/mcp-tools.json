@@ -124,6 +124,10 @@
           "type": "integer",
           "minimum": 1,
           "description": "Only the most recent N."
+        },
+        "since": {
+          "type": "string",
+          "description": "Only snapshots from this long ago until now: 90s, 30m, 2h, 1d."
         }
       }
     },
@@ -145,11 +149,11 @@
         },
         "from": {
           "type": "string",
-          "description": "Older snapshot: an id from log, ~N, or a tag name (default ~1)."
+          "description": "Older snapshot: an id from log, ~N, or a tag name (default ~1). Also @AGE for how things were that long ago: @30m, @2h, @1d."
         },
         "to": {
           "type": "string",
-          "description": "Newer snapshot (id, ~N or tag) (default ~0, the latest)."
+          "description": "Newer snapshot (id, ~N or tag) (default ~0, the latest). Also @AGE for how things were that long ago: @30m, @2h, @1d."
         },
         "limit": {
           "type": "integer",
@@ -177,7 +181,7 @@
         },
         "reference": {
           "type": "string",
-          "description": "An id from log, ~N, or a tag name for N before the latest (default ~0)."
+          "description": "An id from log, ~N, or a tag name for N before the latest (default ~0). Also @AGE for how things were that long ago: @30m, @2h, @1d."
         }
       }
     },

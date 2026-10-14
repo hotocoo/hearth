@@ -47,12 +47,12 @@
     "arguments": [
       {
         "name": "since",
-        "description": "How far back to compare: N snapshots back, or a tag name such as healthy (default 1).",
+        "description": "How far back to compare: ~N for N snapshots back, @AGE for a time ago (@2h, @1d), or a tag name such as healthy (default ~1).",
         "required": false,
         "default": "~1"
       }
     ],
-    "template": "Report what changed on this machine against {since} (a number N means N snapshots back, written ~N; a name is a tag). Call `tag` with no name to list tags.\n\n1. Call `diff` with kind \"ports\" and from \"{since}\": model servers that appeared, vanished, restarted (new pid) or stopped answering, and footprint movement.\n2. Call `diff` with kind \"doctor\" and from \"{since}\" and limit 10: memory pressure, available memory, swap, and the processes whose open files, threads or CLOSE_WAIT sockets moved most.\n3. Call `log` with kind \"run\" and limit 20 for supervision events in that time.\n\nIf `diff` says there are not enough snapshots, call `ports` and `doctor` once to record a fresh one and say that history starts now. Summarize the changes that matter first: restarts, silences, pressure, growth toward a limit."
+    "template": "Report what changed on this machine against {since} (~N is N snapshots back, @2h is two hours ago, a name is a tag). Call `tag` with no name to list tags.\n\n1. Call `diff` with kind \"ports\" and from \"{since}\": model servers that appeared, vanished, restarted (new pid) or stopped answering, and footprint movement.\n2. Call `diff` with kind \"doctor\" and from \"{since}\" and limit 10: memory pressure, available memory, swap, and the processes whose open files, threads or CLOSE_WAIT sockets moved most.\n3. Call `log` with kind \"run\" and limit 20 for supervision events in that time.\n\nIf `diff` says there are not enough snapshots, call `ports` and `doctor` once to record a fresh one and say that history starts now. Summarize the changes that matter first: restarts, silences, pressure, growth toward a limit."
   },
   {
     "name": "find-a-leak",

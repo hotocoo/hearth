@@ -10,7 +10,7 @@
 //! deliberately the simplest that is safe under concurrent writers.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,7 +42,7 @@ pub enum StateError {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error("not a snapshot id, ~N reference or tag: {0:?}")]
+    #[error("not a snapshot id, ~N reference, @AGE (90s, 30m, 2h, 1d) or tag: {0:?}")]
     BadRef(String),
     #[error("tag {tag:?} has no {kind} snapshot")]
     TagWithout { tag: String, kind: String },
@@ -123,6 +123,34 @@ fn valid_id(id: &str) -> bool {
     let digits =
         |s: Option<&str>| s.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
     digits(parts.next()) && digits(parts.next()) && parts.next().is_some_and(valid_kind)
+}
+
+/// `90s`, `30m`, `2h`, `1d`: a length of time back from now. Units are the
+/// clock's, not policy.
+#[must_use]
+pub fn parse_age(text: &str) -> Option<Duration> {
+    let split = text.find(|c: char| !c.is_ascii_digit())?;
+    let (n, unit) = text.split_at(split);
+    let n: u64 = n.parse().ok()?;
+    let unit = match unit {
+        "s" => Duration::from_secs(1),
+        "m" => Duration::from_secs(60),
+        "h" => Duration::from_secs(60 * 60),
+        "d" => Duration::from_secs(24 * 60 * 60),
+        _ => return None,
+    };
+    unit.checked_mul(u32::try_from(n).ok()?)
+}
+
+fn now_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// When snapshot `id` was taken, from its name.
+fn nanos_of(id: &str) -> Option<u64> {
+    id.split('-').next()?.parse().ok()
 }
 
 /// Tag names start with a letter, so they can never be mistaken for an id
@@ -250,6 +278,10 @@ impl Journal {
     /// Resolves a full id, or `~N` meaning N snapshots of `kind` before the
     /// latest (`~0` is the latest).
     pub fn resolve(&self, kind: &str, reference: &str) -> Result<Snapshot, StateError> {
+        if let Some(ago) = reference.strip_prefix('@') {
+            let age = parse_age(ago).ok_or_else(|| StateError::BadRef(reference.to_string()))?;
+            return self.as_of(kind, age, reference);
+        }
         if valid_tag(reference) {
             let ids = self.tag(reference)?;
             let id = ids.get(kind).ok_or_else(|| StateError::TagWithout {
@@ -281,6 +313,36 @@ impl Journal {
             .and_then(|n| ids.len().checked_sub(n))
             .ok_or_else(not_found)?;
         self.read(&ids[index])
+    }
+
+    /// The latest snapshot of `kind` taken at least `age` ago: how things
+    /// were then.
+    fn as_of(&self, kind: &str, age: Duration, reference: &str) -> Result<Snapshot, StateError> {
+        let cutoff = now_nanos().saturating_sub(u64::try_from(age.as_nanos()).unwrap_or(u64::MAX));
+        let ids = self.ids(kind)?;
+        ids.iter()
+            .rev()
+            .find(|id| nanos_of(id).is_some_and(|n| n <= cutoff))
+            .map_or_else(
+                || {
+                    Err(StateError::NotFound {
+                        kind: kind.to_string(),
+                        reference: reference.to_string(),
+                        available: ids.len(),
+                    })
+                },
+                |id| self.read(id),
+            )
+    }
+
+    /// Ids of `kind` recorded within `age` of now, oldest first.
+    pub fn ids_since(&self, kind: &str, age: Duration) -> Result<Vec<String>, StateError> {
+        let cutoff = now_nanos().saturating_sub(u64::try_from(age.as_nanos()).unwrap_or(u64::MAX));
+        Ok(self
+            .ids(kind)?
+            .into_iter()
+            .filter(|id| nanos_of(id).is_some_and(|n| n >= cutoff))
+            .collect())
     }
 
     /// The most recent `n` snapshots of `kind`, oldest first. Unreadable
@@ -558,6 +620,32 @@ mod tests {
             2,
             "pruned again once untagged"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn time_references_find_how_things_were() {
+        let (j, dir) = journal("asof", 10);
+        j.record("ports", &serde_json::json!({ "n": 0 })).unwrap();
+        assert_eq!(j.resolve("ports", "@0s").unwrap().body["n"], 0);
+        assert!(matches!(
+            j.resolve("ports", "@1h"),
+            Err(StateError::NotFound { .. })
+        ));
+        assert_eq!(
+            j.ids_since("ports", Duration::from_secs(3600))
+                .unwrap()
+                .len(),
+            1
+        );
+        for bad in ["@", "@5", "@5w", "@-1h", "@1.5h"] {
+            assert!(
+                matches!(j.resolve("ports", bad), Err(StateError::BadRef(_))),
+                "{bad}"
+            );
+        }
+        assert_eq!(parse_age("90s"), Some(Duration::from_secs(90)));
+        assert_eq!(parse_age("2d"), Some(Duration::from_secs(172_800)));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

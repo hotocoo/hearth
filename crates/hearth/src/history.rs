@@ -70,6 +70,14 @@ pub struct LogArgs {
     /// Only the most recent N snapshots.
     #[arg(long)]
     limit: Option<NonZeroUsize>,
+    /// Only snapshots from this long ago until now: 90s, 30m, 2h, 1d.
+    #[arg(long, value_parser = parse_age)]
+    since: Option<std::time::Duration>,
+}
+
+fn parse_age(text: &str) -> Result<std::time::Duration, String> {
+    hearth_core::state::parse_age(text)
+        .ok_or_else(|| format!("{text:?} is not a length of time like 90s, 30m, 2h or 1d"))
 }
 
 #[derive(clap::Args)]
@@ -77,7 +85,7 @@ pub struct DiffArgs {
     #[arg(long, value_enum, default_value_t = Kind::Ports)]
     kind: Kind,
     /// Older snapshot: an id from `hearth log`, ~N for N before the latest,
-    /// or a tag.
+    /// @AGE for how things were that long ago (@2h, @1d), or a tag.
     #[arg(long, default_value = "~1")]
     from: String,
     /// Newer snapshot, same forms; ~0 is the latest.
@@ -93,7 +101,8 @@ pub struct DiffArgs {
 pub struct ShowArgs {
     #[arg(long, value_enum, default_value_t = Kind::Ports)]
     kind: Kind,
-    /// An id from `hearth log`, ~N for N before the latest, or a tag.
+    /// An id from `hearth log`, ~N for N before the latest, @AGE (@2h), or
+    /// a tag.
     #[arg(default_value = "~0")]
     reference: String,
 }
@@ -236,12 +245,19 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
         snapshots: Vec::new(),
         unreadable: Vec::new(),
     };
-    let recent = journal
-        .recent(
-            kind.name(),
-            args.limit.map_or(usize::MAX, NonZeroUsize::get),
-        )
-        .map_err(|e| e.to_string())?;
+    let limit = args.limit.map_or(usize::MAX, NonZeroUsize::get);
+    let recent = match args.since {
+        Some(age) => {
+            let ids = journal
+                .ids_since(kind.name(), age)
+                .map_err(|e| e.to_string())?;
+            let start = ids.len().saturating_sub(limit);
+            ids[start..].iter().map(|id| journal.read(id)).collect()
+        }
+        None => journal
+            .recent(kind.name(), limit)
+            .map_err(|e| e.to_string())?,
+    };
     for snapshot in recent.into_iter().rev() {
         match snapshot {
             Ok(s) => report.snapshots.push(LogEntry {

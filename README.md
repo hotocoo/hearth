@@ -64,6 +64,8 @@ cargo build --release -p hearth
 ./target/release/hearth show --kind doctor ~3          # one snapshot in full
 ./target/release/hearth tag healthy         # name this moment; kept past retention
 ./target/release/hearth diff --from healthy # everything that differs from when it was fine
+./target/release/hearth diff --kind doctor --from @2h  # against how the machine was two hours ago
+./target/release/hearth log --since 30m     # only what was recorded in the last 30 minutes
 ./target/release/hearth run --port 8081 --expect qwen3 -- llama-server -m qwen3.gguf --port 8081
 #   keeps the server alive: restarts on exit, wedge, or a poisoned backend in its log (the latched
 #   Metal "recreate the backend" state that still answers /health), SIGTERM then SIGKILL, gives up on a crash loop,

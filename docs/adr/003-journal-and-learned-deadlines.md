@@ -122,3 +122,7 @@ On the development machine, `follow llama-server` showed the user's server footp
 
 The `what-changed` workflow accepts a tag.
 
+## Addendum (2026-10-15): time references
+
+A snapshot can also be named `@AGE`, as in `@90s`, `@30m`, `@2h` or `@1d`: the latest snapshot taken at least that long ago, which is how things were then. This is git's `HEAD@{2.hours.ago}`. `hearth log --since AGE` lists only what was recorded within that time. The time comes from snapshot ids, which begin with their nanosecond timestamp, so no file is read to find it.
+
