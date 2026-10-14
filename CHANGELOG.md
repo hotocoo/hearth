@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:22 learned compute buffers
+
+- **Logged at start.** `hearth run` and hearthd now record the model, KV and compute buffer sizes that llama.cpp logs while loading, on each `ready` event.
+- **Counted by fit.** `fit`, and so the `ports` oversized check, adds the compute buffers from the latest start of the same model at the same context. Its total is then measured rather than "excluding compute buffers". A start at a different context is only mentioned in a note.
+
 ### 2026-10-15 06:19 flash attention flag and headroom
 
 - `fit` and the `ports` oversized finding write `-fa on`, the form current llama.cpp takes. The finding lists every value cache type that fits, not only the largest, which may leave no room for compute buffers.
