@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:04 doctor --explain
+
+- `hearth doctor --explain` (MCP `doctor` with `explain`) lists, for every memory figure and limit, the counter, sysctl or file it comes from and the formula that combines them.
+
 ### 2026-10-15 02:59 server env and dir
 
 - `[servers.NAME]` takes `env = { VAR = "value" }` and `dir = "/abs/path"`. Both are validated, and `env` values are redacted from bundles.
