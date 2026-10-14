@@ -358,23 +358,33 @@ pub fn observe_recorded() -> Result<(Value, Option<String>, Vec<String>), String
     Ok((value, report.snapshot, report.state_errors))
 }
 
-/// Changes a person should hear about between two reports: a runtime that
-/// vanished, restarted, or stopped answering. Other listeners come and go
-/// all the time and are left out.
-pub fn alarms(before: &Value, after: &Value) -> Vec<Change> {
-    let runtime_keys = |body: &Value| -> std::collections::BTreeSet<Key> {
-        recorded(body)
-            .into_iter()
-            .filter(|(_, by_pid)| {
-                by_pid
-                    .values()
-                    .any(|p| Identity::deserialize(*p).is_ok_and(|i| is_runtime(&i)))
-            })
-            .map(|(k, _)| k)
-            .collect()
-    };
+/// `(program, port)` of every port in `body` where a model runtime answers.
+pub fn runtime_keys(body: &Value) -> std::collections::BTreeSet<(String, u16)> {
+    recorded(body)
+        .into_iter()
+        .filter(|(_, by_pid)| {
+            by_pid
+                .values()
+                .any(|p| Identity::deserialize(*p).is_ok_and(|i| is_runtime(&i)))
+        })
+        .map(|(k, _)| k)
+        .collect()
+}
+
+/// Changes a person should hear about between two reports, among ports
+/// where a runtime answered at any time `known` covers (a watcher passes
+/// every one it has seen, so a runtime that went silent and then vanished is
+/// still known): a runtime that vanished, restarted, stopped answering, or
+/// answered again. Other listeners come and go all the time and are left
+/// out.
+pub fn alarms(
+    before: &Value,
+    after: &Value,
+    known: &std::collections::BTreeSet<(String, u16)>,
+) -> Vec<Change> {
     let keys: std::collections::BTreeSet<Key> = runtime_keys(before)
         .union(&runtime_keys(after))
+        .chain(known)
         .cloned()
         .collect();
     let only = |body: &Value| {
@@ -401,7 +411,9 @@ pub fn alarms(before: &Value, after: &Value) -> Vec<Change> {
         .into_iter()
         .filter(|c| match c.kind {
             "vanished" | "restarted" => true,
-            "changed" => c.after.as_deref().is_some_and(|a| a.contains(NO_ANSWER)),
+            "changed" => [&c.before, &c.after]
+                .iter()
+                .any(|side| side.as_deref().is_some_and(|s| s.contains(NO_ANSWER))),
             _ => false,
         })
         .collect()
@@ -812,7 +824,7 @@ mod tests {
         let before =
             json!({"ports": [port(5, 11434, &ready, None), port(6, 8080, &ready, None), dev]});
         let after = json!({"ports": [port(5, 11434, &silent, None)]});
-        let alarms = alarms(&before, &after);
+        let alarms = alarms(&before, &after, &std::collections::BTreeSet::default());
         let kinds: Vec<&str> = alarms.iter().map(|c| c.kind).collect();
         assert_eq!(
             kinds,
@@ -820,6 +832,20 @@ mod tests {
             "a dev server that went away is not an alarm: {:?}",
             alarms.iter().map(|c| &c.subject).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn a_known_runtime_that_went_silent_then_vanished_is_still_reported() {
+        let ready = json!({"kind":"ollama","version":"0.30","models":[],"loaded":[]});
+        let silent = json!({"kind":"unresponsive","waited_ms":2500});
+        let first = json!({"ports": [port(5, 11434, &ready, None)]});
+        let second = json!({"ports": [port(5, 11434, &silent, None)]});
+        let third = json!({"ports": []});
+        let known = runtime_keys(&first);
+        assert_eq!(alarms(&second, &third, &known)[0].kind, "vanished");
+        assert!(alarms(&second, &third, &std::collections::BTreeSet::default()).is_empty());
+        // Answering again is reported too.
+        assert_eq!(alarms(&second, &first, &known)[0].kind, "changed");
     }
 
     #[test]

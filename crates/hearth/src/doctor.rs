@@ -89,6 +89,10 @@ struct Finding {
 pub struct Alarm {
     pub key: String,
     pub text: String,
+    /// Whether it has to hold for `watch.confirm_rounds` rounds before it is
+    /// reported: true for projections from one measured rate, which wobble;
+    /// false for what the kernel itself declares.
+    pub confirm: bool,
 }
 
 /// One doctor sample, kept so the next one can be compared with it.
@@ -111,9 +115,11 @@ impl Observation {
             .findings
             .iter()
             .filter(|f| f.code == "memory_pressure")
+            // Keyed by level, so warn rising to critical is reported anew.
             .map(|f| Alarm {
-                key: f.code.to_string(),
+                key: format!("{}:{}", f.code, f.severity),
                 text: format!("[{}] {}; {}", f.severity, f.message, f.remediation),
+                confirm: false,
             })
             .collect();
         let Some(t) = &r.trend else { return out };
@@ -129,6 +135,7 @@ impl Observation {
             if soon(secs) {
                 out.push(Alarm {
                     key: "files_growing".into(),
+                    confirm: true,
                     text: format!(
                         "open files on this machine growing {rate:.1}/s: the kernel limit ({max}) in {}; find the leaking process with hearth diff --kind doctor",
                         duration(secs)
@@ -140,6 +147,7 @@ impl Observation {
             if let Some(secs) = g.seconds_to_limit.filter(|&s| soon(s)) {
                 out.push(Alarm {
                     key: format!("{}:{}", g.resource, g.pid),
+                    confirm: true,
                     text: format!(
                         "{} (pid {}) {} growing {:.1}/s: its limit in {}; restart it or fix the leak before then",
                         g.name,

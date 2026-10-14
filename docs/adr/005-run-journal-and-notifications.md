@@ -15,7 +15,7 @@ Two needs follow:
 
 ### Events go to the journal
 
-- Every `hearth run` event is one snapshot of kind `run` in the journal from ADR-003. The body is the event, plus the address, the expected model, the command line and the time since the run started.
+- Every `hearth run` event is one snapshot of kind `run` in the journal from ADR-003. The body is the event, plus the address, the expected model, the program and the time since the run started. Only the program is kept, not its arguments, because arguments can carry API keys and events also go to webhooks.
 - `hearth log --kind run` (and the MCP `log` tool) lists them with a one-line summary: address, event, decision, command.
 - `hearth diff --kind run` is refused with the reason. Events are not states, so there is nothing to compare.
 - A journal that cannot be opened or written is reported on stderr; the server is still supervised.
@@ -24,7 +24,9 @@ Two needs follow:
 
 There are two channels, both configured in `[notify]` and both off by default:
 - **`desktop = true`.** A desktop notification: `osascript` on macOS, `notify-send` on Linux. The title and message are passed as arguments to a fixed AppleScript (`on run argv`), never spliced into it, so text from a server's log cannot be read as script.
-- **`webhook_url`.** The event body is POSTed as JSON with `curl`, bounded by `notify.timeout_ms`. With `curl` doing the transfer, `https://` services such as ntfy or chat webhooks work, and hearth ships no TLS stack. The URL must be `http://` or `https://`; anything else is a configuration error.
+- **`webhook_url`.** The event body is POSTed as JSON with `curl`. With `curl` doing the transfer, `https://` services such as ntfy or chat webhooks work, and hearth ships no TLS stack. The URL must be `http://` or `https://`; anything else is a configuration error.
+  - The URL often carries a token, so it and the body reach curl on stdin as a curl config (`-K -`). They are never on the command line, where `ps` shows them to every user.
+  - curl runs with `-q`, which ignores `~/.curlrc`, and `--globoff`, which makes braces and brackets in a URL literal.
 
 Notifications fire on:
 - a poisoned backend;
@@ -34,7 +36,9 @@ Notifications fire on:
 
 Starts, readiness and noticed out-of-memory lines do not notify.
 
-Each delivery runs on its own thread. A failure is reported on stderr; it never fails or delays supervision. Before `hearth run` exits, it waits for pending deliveries, because the give-up event is the last one and would otherwise be lost with the process.
+Each delivery runs on its own thread and is killed if it has not finished within `notify.timeout_ms`. A desktop notifier can block on a dead session bus. A failure is reported on stderr; it never fails or delays supervision.
+
+On every exit path, including a closed output pipe, `hearth run` waits for pending deliveries first. The give-up event is the last one and would otherwise be lost with the process.
 
 ## Consequences
 

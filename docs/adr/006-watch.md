@@ -21,13 +21,14 @@ By the time anyone looked, the evidence was gone, and the journal (ADR-003) held
 
 ### What is reported
 
-A problem is reported once when it appears and once when it clears, never on every round it lasts. It is printed (JSON lines with `--json`) and sent through `[notify]` (ADR-005).
+A problem is reported once when it appears and once when it clears, never on every round it lasts. Both the appearance and the clearing are printed (JSON lines with `--json`) and sent through `[notify]` (ADR-005).
 
-- **Memory pressure** the kernel declares, warn or critical. hearth invents no memory threshold.
-- **A resource reaching its limit.** A resource is reported if, at the growth rate measured since the last round, it would reach its limit within `watch.limit_horizon_ms`. The limit is the kernel-wide open-file limit, or a process's own open-file or thread limit. Growth alone is not reported: descriptor and thread counts move all the time, and a report on every uptick would be noise that trains people to ignore the channel.
-- **A model runtime that vanished, restarted (new pid), or stopped answering**, between two ports rounds. Other listeners come and go, such as dev servers and browsers, and are left out. These are events, so each is reported once.
+- **Memory pressure** the kernel declares, warn or critical, reported at once. hearth invents no memory threshold. Warn rising to critical is a new problem, and the warn clears.
+- **A resource reaching its limit.** A resource is reported if, at the growth rate measured since the last round, it would reach its limit within `watch.limit_horizon_ms`, for `watch.confirm_rounds` rounds in a row. It clears after missing as many rounds. One rate measured over one interval wobbles, and without the confirmation a count hovering near the horizon would open and clear on alternate rounds. The limit is the kernel-wide open-file limit, or a process's own open-file or thread limit. Growth alone is not reported: descriptor and thread counts move all the time, and a report on every uptick would be noise that trains people to ignore the channel.
+- **A model runtime that vanished, restarted (new pid), stopped answering, or answered again**, between two ports rounds. A port counts as a runtime's if a runtime answered there in any round of this watch, so one that went silent and then vanished is still reported. Other listeners come and go, such as dev servers and browsers, and are left out. These are events, so each is reported once.
+- **A round that failed.** For example, the journal could not be written, or the process table could not be read. This is a problem like the others, reported once. The watch goes on, and stops only when its output closes.
 
-Problems are keyed by what they are about: `memory_pressure`, `files_growing`, or `<resource>:<pid>`. A rate that changes is the same problem, not a new one.
+Problems are keyed by what they are about: `memory_pressure:<level>`, `files_growing`, or `<resource>:<pid>`. A rate that changes is the same problem, not a new one.
 
 ### Intervals and retention
 

@@ -28,6 +28,7 @@ pub struct Watch {
     pub doctor_interval_ms: u64,
     pub ports_interval_ms: u64,
     pub limit_horizon_ms: u64,
+    pub confirm_rounds: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -148,6 +149,11 @@ impl Config {
             ),
             ("watch.ports_interval_ms", w.ports_interval_ms, AT_LEAST_ONE),
             ("watch.limit_horizon_ms", w.limit_horizon_ms, AT_LEAST_ONE),
+            (
+                "watch.confirm_rounds",
+                u64::from(w.confirm_rounds),
+                AT_LEAST_ONE,
+            ),
             (
                 "supervise.restart_window_ms",
                 v.restart_window_ms,

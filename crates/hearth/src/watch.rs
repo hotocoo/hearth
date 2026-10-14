@@ -3,9 +3,11 @@
 //!
 //! Each round of `doctor` and `ports` is the same as running the command:
 //! measured, recorded in the journal (so `log` and `diff` cover the time
-//! watched), and compared with the round before. A problem is reported once
+//! watched), and compared with the rounds before. A problem is reported once
 //! when it appears and once when it clears, on stdout and through
-//! `[notify]`, never again on every round it lasts.
+//! `[notify]`, never again on every round it lasts. A round that fails is a
+//! problem like any other: the watch goes on, and stops only when nobody can
+//! read its output any more.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -21,8 +23,70 @@ pub struct Args {
     for_seconds: Option<u64>,
 }
 
-/// An open problem, keyed by what it is about.
-type Open = BTreeMap<String, String>;
+struct Entry {
+    text: String,
+    /// Rounds in a row it must be seen to open, and missed to clear.
+    confirm: u32,
+    seen: u32,
+    missed: u32,
+    reported: bool,
+}
+
+/// Problems seen so far, with how many rounds in a row each has been seen
+/// or missed.
+#[derive(Default)]
+struct Tracker {
+    entries: BTreeMap<String, Entry>,
+}
+
+/// `(key, text)` pairs.
+type Problems = Vec<(String, String)>;
+/// One round's problems as `(key, text, confirm rounds)`.
+type Seen = Vec<(String, String, u32)>;
+
+impl Tracker {
+    /// Feeds one round's problems as `(key, text, confirm)`, and returns what
+    /// is now to be reported opened and cleared. A problem opens once it has
+    /// been seen `confirm` rounds in a row, and clears once it has been
+    /// missed as many.
+    fn round(&mut self, now: Seen) -> (Problems, Problems) {
+        let mut opened = Vec::new();
+        let mut present = std::collections::BTreeSet::new();
+        for (key, text, confirm) in now {
+            let e = self.entries.entry(key.clone()).or_insert(Entry {
+                text: String::new(),
+                confirm,
+                seen: 0,
+                missed: 0,
+                reported: false,
+            });
+            e.text = text;
+            e.confirm = confirm;
+            e.seen += 1;
+            e.missed = 0;
+            if !e.reported && e.seen >= confirm {
+                e.reported = true;
+                opened.push((key.clone(), e.text.clone()));
+            }
+            present.insert(key);
+        }
+        let mut cleared = Vec::new();
+        self.entries.retain(|key, e| {
+            if present.contains(key) {
+                return true;
+            }
+            e.seen = 0;
+            e.missed += 1;
+            if e.reported && e.missed >= e.confirm {
+                cleared.push((key.clone(), e.text.clone()));
+                return false;
+            }
+            // Unreported problems that went away were never news.
+            e.reported
+        });
+        (opened, cleared)
+    }
+}
 
 struct Out<'a> {
     stdout: std::io::StdoutLock<'a>,
@@ -43,76 +107,64 @@ impl Out<'_> {
             .map_err(|e| format!("output closed: {e}"))
     }
 
-    /// Reports what opened and what cleared between `was` and `now`.
-    fn compare(&mut self, source: &str, was: &Open, now: &Open) -> Result<(), String> {
-        let (opened, cleared) = transitions(was, now);
+    fn notify(&mut self, title: &str, text: &str, event: &Value) {
+        self.sending.retain(|h| !h.is_finished());
+        self.sending
+            .extend(crate::notify::send(&self.notify, title, text, event));
+    }
+
+    /// Prints and notifies what opened and what cleared.
+    fn report(
+        &mut self,
+        source: &str,
+        (opened, cleared): (Problems, Problems),
+    ) -> Result<(), String> {
         for (key, text) in opened {
-            {
-                let event =
-                    json!({ "event": "problem", "source": source, "key": key, "message": text });
-                self.say(&event, &format!("[{source}] {text}"))?;
-                self.sending.extend(crate::notify::send(
-                    &self.notify,
-                    &format!("hearth: {source}"),
-                    text,
-                    &event,
-                ));
-            }
+            let event =
+                json!({ "event": "problem", "source": source, "key": key, "message": text });
+            self.say(&event, &format!("[{source}] {text}"))?;
+            self.notify(&format!("hearth: {source}"), &text, &event);
         }
         for (key, text) in cleared {
-            {
-                let event =
-                    json!({ "event": "cleared", "source": source, "key": key, "message": text });
-                self.say(&event, &format!("[{source}] cleared: {text}"))?;
-            }
+            let event =
+                json!({ "event": "cleared", "source": source, "key": key, "message": text });
+            self.say(&event, &format!("[{source}] cleared: {text}"))?;
+            self.notify(&format!("hearth: {source} cleared"), &text, &event);
         }
         Ok(())
     }
-
-    fn errors(&mut self, source: &str, errors: &[String]) -> Result<(), String> {
-        for e in errors {
-            self.say(
-                &json!({ "event": "history_error", "source": source, "message": e }),
-                &format!("[{source}] history: {e}"),
-            )?;
-        }
-        Ok(())
-    }
-}
-
-type Entries<'a> = Vec<(&'a String, &'a String)>;
-
-/// Problems in `now` that were not in `was`, and problems in `was` that are
-/// no longer in `now`.
-fn transitions<'a>(was: &'a Open, now: &'a Open) -> (Entries<'a>, Entries<'a>) {
-    let opened = now.iter().filter(|(k, _)| !was.contains_key(*k)).collect();
-    let cleared = was.iter().filter(|(k, _)| !now.contains_key(*k)).collect();
-    (opened, cleared)
 }
 
 fn doctor_round(
-    out: &mut Out,
     previous: Option<&crate::doctor::Observation>,
-    open: &Open,
     horizon: Duration,
-) -> Result<(crate::doctor::Observation, Open), String> {
+    confirm: u32,
+) -> Result<(crate::doctor::Observation, Seen), String> {
     let observation = crate::doctor::observe(previous)?;
-    let now: Open = observation
+    let mut problems: Seen = observation
         .alarms(horizon)
         .into_iter()
-        .map(|a| (a.key, a.text))
+        .map(|a| (a.key, a.text, if a.confirm { confirm } else { 1 }))
         .collect();
-    out.errors("doctor", observation.state_errors())?;
-    out.compare("doctor", open, &now)?;
-    Ok((observation, now))
+    problems.extend(
+        observation
+            .state_errors()
+            .iter()
+            .map(|e| (format!("history:{e}"), format!("history: {e}"), 1)),
+    );
+    Ok((observation, problems))
 }
 
-fn ports_round(out: &mut Out, previous: Option<&Value>) -> Result<Value, String> {
+/// A runtime change is an event, not a state: each is reported once.
+fn ports_round(
+    out: &mut Out,
+    previous: Option<&Value>,
+    known: &mut std::collections::BTreeSet<(String, u16)>,
+) -> Result<(Value, Seen), String> {
     let (report, _, errors) = crate::ports::observe_recorded()?;
-    out.errors("ports", &errors)?;
-    // A change is an event, not a state: it is reported once, when seen.
+    known.extend(crate::ports::runtime_keys(&report));
     if let Some(before) = previous {
-        for c in crate::ports::alarms(before, &report) {
+        for c in crate::ports::alarms(before, &report, known) {
             let text = format!(
                 "{} {}: {} → {}",
                 c.subject,
@@ -123,15 +175,14 @@ fn ports_round(out: &mut Out, previous: Option<&Value>) -> Result<Value, String>
             let event =
                 json!({ "event": "problem", "source": "ports", "change": c, "message": text });
             out.say(&event, &format!("[ports] {text}"))?;
-            out.sending.extend(crate::notify::send(
-                &out.notify,
-                "hearth: runtime",
-                &text,
-                &event,
-            ));
+            out.notify("hearth: runtime", &text, &event);
         }
     }
-    Ok(report)
+    let problems = errors
+        .iter()
+        .map(|e| (format!("history:{e}"), format!("history: {e}"), 1))
+        .collect();
+    Ok((report, problems))
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
@@ -140,51 +191,21 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let doctor_every = Duration::from_millis(w.doctor_interval_ms);
     let ports_every = Duration::from_millis(w.ports_interval_ms);
     let horizon = Duration::from_millis(w.limit_horizon_ms);
-    let until = args
-        .for_seconds
-        .map(|s| Instant::now() + Duration::from_secs(s));
+    let until = match args.for_seconds {
+        Some(s) => Some(
+            Instant::now()
+                .checked_add(Duration::from_secs(s))
+                .ok_or("--for-seconds is too large for this platform's clock")?,
+        ),
+        None => None,
+    };
     let mut out = Out {
         stdout: std::io::stdout().lock(),
         json,
         notify: config.notify.clone(),
         sending: Vec::new(),
     };
-    out.say(
-        &json!({ "event": "watching", "doctor_interval_ms": w.doctor_interval_ms, "ports_interval_ms": w.ports_interval_ms, "limit_horizon_ms": w.limit_horizon_ms }),
-        &format!(
-            "watching: doctor every {doctor_every:?}, ports every {ports_every:?}; resources reaching a limit within {horizon:?} are reported"
-        ),
-    )?;
-    let mut doctor: Option<crate::doctor::Observation> = None;
-    let mut open = Open::new();
-    let mut ports: Option<Value> = None;
-    let (mut next_doctor, mut next_ports) = (Instant::now(), Instant::now());
-    let result = loop {
-        let now = Instant::now();
-        if until.is_some_and(|u| now >= u) {
-            break Ok(String::new());
-        }
-        if now >= next_doctor {
-            next_doctor = now + doctor_every;
-            match doctor_round(&mut out, doctor.as_ref(), &open, horizon) {
-                Ok((observation, now_open)) => {
-                    doctor = Some(observation);
-                    open = now_open;
-                }
-                Err(e) => break Err(e),
-            }
-        }
-        if now >= next_ports {
-            next_ports = now + ports_every;
-            match ports_round(&mut out, ports.as_ref()) {
-                Ok(report) => ports = Some(report),
-                Err(e) => break Err(e),
-            }
-        }
-        let wake = next_doctor.min(next_ports);
-        let wake = until.map_or(wake, |u| wake.min(u));
-        std::thread::sleep(wake.saturating_duration_since(Instant::now()));
-    };
+    let result = watch(&mut out, w, until, (doctor_every, ports_every, horizon));
     for s in out.sending.drain(..) {
         // A delivery thread that panicked has already said so on stderr.
         let _ = s.join();
@@ -192,33 +213,105 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     result
 }
 
+fn watch(
+    out: &mut Out,
+    w: &hearth_core::config::Watch,
+    until: Option<Instant>,
+    (doctor_every, ports_every, horizon): (Duration, Duration, Duration),
+) -> Result<String, String> {
+    out.say(
+        &json!({ "event": "watching", "doctor_interval_ms": w.doctor_interval_ms, "ports_interval_ms": w.ports_interval_ms, "limit_horizon_ms": w.limit_horizon_ms, "confirm_rounds": w.confirm_rounds }),
+        &format!(
+            "watching: doctor every {doctor_every:?}, ports every {ports_every:?}; resources reaching a limit within {horizon:?} are reported"
+        ),
+    )?;
+    let (mut doctor_tracker, mut ports_tracker) = (Tracker::default(), Tracker::default());
+    let mut doctor: Option<crate::doctor::Observation> = None;
+    let mut ports: Option<Value> = None;
+    let mut known_runtimes = std::collections::BTreeSet::new();
+    let (mut next_doctor, mut next_ports) = (Instant::now(), Instant::now());
+    loop {
+        let now = Instant::now();
+        if until.is_some_and(|u| now >= u) {
+            return Ok(String::new());
+        }
+        if now >= next_doctor {
+            next_doctor = now + doctor_every;
+            let problems = match doctor_round(doctor.as_ref(), horizon, w.confirm_rounds) {
+                Ok((observation, problems)) => {
+                    doctor = Some(observation);
+                    problems
+                }
+                Err(e) => vec![("failed".into(), format!("doctor failed: {e}"), 1)],
+            };
+            out.report("doctor", doctor_tracker.round(problems))?;
+        }
+        if now >= next_ports {
+            next_ports = now + ports_every;
+            let problems = match ports_round(out, ports.as_ref(), &mut known_runtimes) {
+                Ok((report, problems)) => {
+                    ports = Some(report);
+                    problems
+                }
+                Err(e) if e.starts_with("output closed") => return Err(e),
+                Err(e) => vec![("failed".into(), format!("ports failed: {e}"), 1)],
+            };
+            out.report("ports", ports_tracker.round(problems))?;
+        }
+        let wake = next_doctor.min(next_ports);
+        let wake = until.map_or(wake, |u| wake.min(u));
+        std::thread::sleep(wake.saturating_duration_since(Instant::now()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn open(items: &[(&str, &str)]) -> Open {
-        items
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect()
-    }
-
-    fn keys<'a>(v: &[(&'a String, &'a String)]) -> Vec<&'a str> {
-        v.iter().map(|(k, _)| k.as_str()).collect()
+    fn feed(t: &mut Tracker, items: &[(&str, u32)]) -> (Vec<String>, Vec<String>) {
+        let (opened, cleared) = t.round(
+            items
+                .iter()
+                .map(|(k, c)| ((*k).to_string(), format!("{k} text"), *c))
+                .collect(),
+        );
+        let keys = |v: Problems| v.into_iter().map(|(k, _)| k).collect();
+        (keys(opened), keys(cleared))
     }
 
     #[test]
-    fn a_problem_is_reported_when_it_opens_and_when_it_clears_only() {
-        let was = open(&[("memory_pressure", "warn"), ("threads:7", "growing")]);
-        // Same key, new wording (the rate moved): still the same problem.
-        let now = open(&[
-            ("memory_pressure", "warn, worse"),
-            ("open_files:9", "growing"),
-        ]);
-        let (opened, cleared) = transitions(&was, &now);
-        assert_eq!(keys(&opened), ["open_files:9"]);
-        assert_eq!(keys(&cleared), ["threads:7"]);
-        let (none, gone) = transitions(&now, &now);
-        assert!(none.is_empty() && gone.is_empty());
+    fn a_problem_opens_once_and_clears_once() {
+        let mut t = Tracker::default();
+        assert_eq!(
+            feed(&mut t, &[("memory_pressure:warn", 1)]).0,
+            ["memory_pressure:warn"]
+        );
+        assert_eq!(
+            feed(&mut t, &[("memory_pressure:warn", 1)]),
+            (vec![], vec![])
+        );
+        // Warn rising to critical is a new problem; warn clears.
+        assert_eq!(
+            feed(&mut t, &[("memory_pressure:critical", 1)]),
+            (
+                vec!["memory_pressure:critical".into()],
+                vec!["memory_pressure:warn".into()]
+            )
+        );
+    }
+
+    #[test]
+    fn a_wobbling_projection_needs_its_confirm_rounds_both_ways() {
+        let mut t = Tracker::default();
+        // Seen once, gone, seen once: never confirmed, never reported.
+        assert_eq!(feed(&mut t, &[("threads:7", 2)]), (vec![], vec![]));
+        assert_eq!(feed(&mut t, &[]), (vec![], vec![]));
+        assert_eq!(feed(&mut t, &[("threads:7", 2)]), (vec![], vec![]));
+        assert_eq!(feed(&mut t, &[("threads:7", 2)]).0, ["threads:7"]);
+        // One round missing does not clear it; two do.
+        assert_eq!(feed(&mut t, &[]), (vec![], vec![]));
+        assert_eq!(feed(&mut t, &[("threads:7", 2)]), (vec![], vec![]));
+        assert_eq!(feed(&mut t, &[]), (vec![], vec![]));
+        assert_eq!(feed(&mut t, &[]).1, ["threads:7"]);
     }
 }

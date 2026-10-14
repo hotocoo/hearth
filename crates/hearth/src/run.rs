@@ -228,12 +228,9 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     }
     let (program, rest) = args.command.split_first().ok_or("no command given")?;
     find_program(program)?;
-    let command_line = args
-        .command
-        .iter()
-        .map(|a| a.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Only the program is kept: arguments can carry keys, and events go to
+    // the journal and to webhooks.
+    let program_name = program.to_string_lossy().into_owned();
     let (program, rest) = (program.clone(), rest.to_vec());
     let journal = Journal::open(config.state.max_snapshots_per_kind);
     if let Err(e) = &journal {
@@ -256,50 +253,54 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     // Written, not printed: a reader that goes away (`| head`) must end the
     // run with an error, which stops the server, rather than a panic.
     let mut out = std::io::stdout().lock();
-    while !supervised.gave_up() {
-        let polled = Instant::now();
-        if let Some(event) = supervised.poll() {
-            let t_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let record = serde_json::json!({
-                "addr": probe.addr,
-                "expect": args.expect,
-                "command": command_line,
-                "t_ms": t_ms,
-                "event": event,
-            });
-            if let Ok(journal) = &journal
-                && let Err(e) = journal.record(KIND, &record)
-            {
-                eprintln!("hearth: event not recorded: {e}");
+    let result = (|| -> Result<(), String> {
+        while !supervised.gave_up() {
+            let polled = Instant::now();
+            if let Some(event) = supervised.poll() {
+                let t_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let record = serde_json::json!({
+                    "addr": probe.addr,
+                    "expect": args.expect,
+                    "command": program_name,
+                    "t_ms": t_ms,
+                    "event": event,
+                });
+                if let Ok(journal) = &journal
+                    && let Err(e) = journal.record(KIND, &record)
+                {
+                    eprintln!("hearth: event not recorded: {e}");
+                }
+                if alarming(&event) {
+                    let title = format!("hearth: {}", probe.addr);
+                    sending.extend(crate::notify::send(
+                        &config.notify,
+                        &title,
+                        &describe(&event),
+                        &record,
+                    ));
+                }
+                let line = if json {
+                    let mut v = serde_json::to_value(&event).map_err(|e| e.to_string())?;
+                    v["t_ms"] = t_ms.into();
+                    v.to_string()
+                } else {
+                    let mut s = String::new();
+                    let _ = write!(s, "[{}] {}", probe.addr, describe(&event));
+                    s
+                };
+                writeln!(out, "{line}")
+                    .and_then(|()| out.flush())
+                    .map_err(|e| format!("output closed ({e}); stopping the server"))?;
             }
-            if alarming(&event) {
-                let title = format!("hearth: {}", probe.addr);
-                sending.extend(crate::notify::send(
-                    &config.notify,
-                    &title,
-                    &describe(&event),
-                    &record,
-                ));
-            }
-            let line = if json {
-                let mut v = serde_json::to_value(&event).map_err(|e| e.to_string())?;
-                v["t_ms"] = t_ms.into();
-                v.to_string()
-            } else {
-                let mut s = String::new();
-                let _ = write!(s, "[{}] {}", probe.addr, describe(&event));
-                s
-            };
-            writeln!(out, "{line}")
-                .and_then(|()| out.flush())
-                .map_err(|e| format!("output closed ({e}); stopping the server"))?;
+            std::thread::sleep(interval.saturating_sub(polled.elapsed()));
         }
-        std::thread::sleep(interval.saturating_sub(polled.elapsed()));
-    }
+        Ok(())
+    })();
     for s in sending {
         // A delivery thread that panicked has already said so on stderr.
         let _ = s.join();
     }
+    result?;
     Err(format!(
         "gave up on the server at {} after {} restarts",
         probe.addr,
