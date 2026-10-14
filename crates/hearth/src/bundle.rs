@@ -92,6 +92,7 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
         "arch": std::env::consts::ARCH,
         "doctor": part(&["doctor"], c),
         "ports": part(&["ports"], c),
+        "models": part(&["models"], c),
         "incidents": part(&incidents, c),
         "hearthd": part(&["status"], c),
         "run_events": part(&["log", "--kind", "run", "--limit", &recent], c),

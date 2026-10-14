@@ -114,7 +114,7 @@ enum Command {
     #[cfg(unix)]
     Service(service::Args),
     /// Everything hearth can say about this machine in one JSON document:
-    /// doctor, ports, incidents, hearthd, recent run events and notes, tags and
+    /// doctor, ports, models on disk, incidents, hearthd, recent run events and notes, tags and
     /// settings, with secrets redacted. For bug reports and agents.
     Bundle(bundle::Args),
     /// Workflows: which tools to call, in which order, for a recurring

@@ -441,7 +441,7 @@
   },
   {
     "name": "bundle",
-    "description": "Everything hearth can say about this machine in one document: doctor, ports, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port). Like ports and doctor, it records fresh snapshots of both.",
+    "description": "Everything hearth can say about this machine in one document: doctor, ports, models on disk, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port). Like ports and doctor, it records fresh snapshots of both.",
     "inputSchema": {
       "type": "object",
       "properties": {
