@@ -4,6 +4,15 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:56 hearth service
+
+- `hearth service install|uninstall|show`: runs hearthd at login as the user.
+  - macOS: a LaunchAgent with KeepAlive.
+  - Linux: a systemd user unit with `KillMode=process`; servers stop through their tethers.
+- The unit carries `HEARTH_CONFIG` and `HEARTH_STATE` from the installing shell.
+- `install` refuses with no servers configured.
+- Not an MCP tool.
+
 ### 2026-10-15 00:53 hearthd, hearth status and restart (ADR-007)
 
 - `hearthd` keeps every `[servers.NAME]` from the user's configuration alive, each exactly as `hearth run` would. A server is given by `port`, `command`, and optionally `host` and `expect`. Names, commands and port clashes are validated.
