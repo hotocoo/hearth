@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:10 right-size-a-server workflow
+
+- **New workflow.** The seventh built-in workflow, `right-size-a-server PORT`, turns `fit --port` into the flags to change: a smaller `-c`, or a smaller `-ctk`/`-ctv` that keeps the context. It then records that advice with `note`.
+- **`can-i-load`.** It takes every model form `fit` takes, and leaves an MLX model's cache type to its dtype.
+
 ### 2026-10-15 06:05 log --all, and fixes for notes
 
 - **`log --all`.** One timeline of every kind, newest first, like `git log --all`: snapshots, run events and notes, each with its kind and `~N`.
