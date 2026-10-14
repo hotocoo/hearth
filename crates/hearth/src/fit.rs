@@ -64,6 +64,9 @@ struct Report {
     files: Vec<PathBuf>,
     weights_bytes: u64,
     ctx: u64,
+    /// The KV cache types costed, as runtimes name them.
+    cache_type_k: &'static str,
+    cache_type_v: &'static str,
     kv_bytes: u64,
     total_bytes: u64,
     excludes: &'static str,
@@ -83,6 +86,11 @@ struct Report {
     /// total. Empty when it fits, or when no cache type makes it fit.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     fits_device_with: Vec<(String, u64)>,
+    /// Like `fits_device_with`, but keys kept at their requested type and
+    /// only the values smaller (llama.cpp -ctv alone): keys carry more of
+    /// the attention's precision. Each value type with its total.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fits_device_with_values: Vec<(String, u64)>,
     max_ctx_now: Option<u64>,
     notes: Vec<String>,
 }
@@ -507,6 +515,8 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         files,
         weights_bytes,
         ctx,
+        cache_type_k: k.name(),
+        cache_type_v: v.name(),
         kv_bytes,
         total_bytes,
         excludes: "runtime compute buffers (known after the model's first load)",
@@ -515,6 +525,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         fits_device_with: alternatives(ceiling.as_ref(), total_bytes, weights_bytes, |t| {
             geometry.kv_bytes(ctx, t, t, swa)
         }),
+        fits_device_with_values: alternatives(ceiling.as_ref(), total_bytes, weights_bytes, |t| {
+            geometry.kv_bytes(ctx, k, t, swa)
+        })
+        .into_iter()
+        .filter(|(t, _)| t != k.name())
+        .collect(),
         max_ctx_now: if under_pressure {
             None
         } else {
@@ -581,10 +597,12 @@ fn render(r: &Report) -> String {
     );
     let _ = writeln!(
         out,
-        "weights {} + KV {} at {} tokens = {} (excludes {})",
+        "weights {} + KV {} at {} tokens ({}/{}) = {} (excludes {})",
         bytes(r.weights_bytes),
         bytes(r.kv_bytes),
         r.ctx,
+        r.cache_type_k,
+        r.cache_type_v,
         bytes(r.total_bytes),
         r.excludes
     );
@@ -612,6 +630,19 @@ fn render(r: &Report) -> String {
         let _ = writeln!(
             out,
             "would fit with KV cache type: {} (llama.cpp -ctk/-ctv, Ollama OLLAMA_KV_CACHE_TYPE)",
+            options.join(", ")
+        );
+    }
+    if !r.fits_device_with_values.is_empty() {
+        let options: Vec<String> = r
+            .fits_device_with_values
+            .iter()
+            .map(|(t, total)| format!("{t} ({})", bytes(*total)))
+            .collect();
+        let _ = writeln!(
+            out,
+            "or keep keys at {}, values at: {} (llama.cpp -ctv; a quantized V cache needs flash attention, -fa)",
+            r.cache_type_k,
             options.join(", ")
         );
     }

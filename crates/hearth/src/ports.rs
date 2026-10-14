@@ -547,12 +547,15 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
             if r["fits_device"] != false {
                 return None;
             }
-            let kinds: Vec<&str> = r["fits_device_with"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|o| o[0].as_str())
-                .collect();
+            let types = |key: &str| -> Vec<String> {
+                r[key]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|o| o[0].as_str().map(str::to_string))
+                    .collect()
+            };
+            let (kinds, values) = (types("fits_device_with"), types("fits_device_with_values"));
             Some(Finding {
                 code: "oversized",
                 pid: p.pid,
@@ -568,7 +571,7 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                     r["ceiling"]["source"].as_str().unwrap_or("device")
                 ),
                 remediation: format!(
-                    "it will run out of accelerator memory as its context fills; {}{}",
+                    "it will run out of accelerator memory as its context fills; {}{}{}",
                     r["max_ctx_device"].as_u64().map_or_else(
                         || "the weights alone do not fit: use a smaller model or quantization".to_string(),
                         |n| format!("restart it with -c at most {n}"),
@@ -577,7 +580,12 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                         String::new()
                     } else {
                         format!(", or keep the context with -ctk/-ctv {}", kinds.join(" / "))
-                    }
+                    },
+                    // The largest values-only type keeps the most precision.
+                    values.first().map_or_else(String::new, |v| format!(
+                        ", or keep -ctk {} and set only -ctv {v} (with -fa)",
+                        r["cache_type_k"].as_str().unwrap_or("as is")
+                    ))
                 ),
             })
         })
