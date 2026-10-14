@@ -49,6 +49,60 @@ const SIGNATURES: &[(&str, Signal)] = &[
     ("erroroutofdevicememory", Signal::OutOfMemory),
 ];
 
+/// Why a server that exited did, as its own log said it. Read from the
+/// lines it printed since it started; the first that says wins, because
+/// later lines are usually the consequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cause {
+    /// The model file is missing or could not be opened: a restart cannot
+    /// help until the path is fixed.
+    ModelMissing,
+    /// The file opened but did not load (corrupt, unsupported, wrong arch).
+    LoadFailed,
+    /// An allocation on the accelerator or host failed: the model, its
+    /// context or its cache does not fit beside what else is loaded.
+    OutOfMemory,
+    /// Its port was taken.
+    PortInUse,
+    /// It refused its command line.
+    BadArgument,
+}
+
+/// `(substring, cause)`, lowercase, from llama.cpp's own messages.
+const CAUSES: &[(&str, Cause)] = &[
+    // gguf.cpp: "%s: failed to open GGUF file '%s'"
+    ("failed to open gguf file", Cause::ModelMissing),
+    // llama.cpp: "llama_model_load: error loading model: %s", then
+    // server.cpp: "failed to load model, '%s'"
+    ("error loading model", Cause::LoadFailed),
+    ("failed to load model", Cause::LoadFailed),
+    // ggml backends: "failed to allocate buffer of size", "%s: failed to
+    // allocate %s buffer", CUDA's "cudaMalloc failed: out of memory".
+    ("failed to allocate", Cause::OutOfMemory),
+    ("out of memory", Cause::OutOfMemory),
+    (
+        "kiogpucommandbuffercallbackerroroutofmemory",
+        Cause::OutOfMemory,
+    ),
+    // server.cpp: "couldn't bind HTTP server socket, hostname: %s, port: %d"
+    ("couldn't bind http server socket", Cause::PortInUse),
+    ("address already in use", Cause::PortInUse),
+    // common/arg.cpp: "error: invalid argument: %s", "error: unknown argument: %s"
+    ("error: invalid argument", Cause::BadArgument),
+    ("error: unknown argument", Cause::BadArgument),
+];
+
+/// What `line` says about why the server would stop, if anything.
+#[must_use]
+pub fn cause(line: &str) -> Option<Cause> {
+    let line = line.to_ascii_lowercase();
+    CAUSES
+        .iter()
+        .find(|(needle, _)| line.contains(needle))
+        .map(|(_, c)| *c)
+}
+
 /// The most serious signal in `line`, if any.
 #[must_use]
 pub fn classify(line: &str) -> Option<Signal> {
@@ -86,6 +140,35 @@ mod tests {
         // The capture path's line does not latch the backend.
         assert_eq!(
             classify("ggml_metal_graph_compute: command buffer 0 failed with status 5"),
+            None
+        );
+    }
+
+    #[test]
+    fn exit_causes_from_llama_cpp_messages() {
+        for (line, want) in [
+            (
+                "gguf_init_from_file_impl: failed to open GGUF file '/m/x.gguf' (No such file or directory)",
+                Cause::ModelMissing,
+            ),
+            (
+                "llama_model_load: error loading model: unknown model architecture: 'foo'",
+                Cause::LoadFailed,
+            ),
+            (
+                "ggml_backend_metal_buffer_type_alloc_buffer: error: failed to allocate buffer, size = 35000.00 MiB",
+                Cause::OutOfMemory,
+            ),
+            (
+                "srv    init: couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 8080",
+                Cause::PortInUse,
+            ),
+            ("error: invalid argument: --ctx-sizee", Cause::BadArgument),
+        ] {
+            assert_eq!(cause(line), Some(want), "{line}");
+        }
+        assert_eq!(
+            cause("main: server is listening on http://127.0.0.1:8080"),
             None
         );
     }

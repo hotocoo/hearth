@@ -82,3 +82,8 @@ A ready server is fingerprinted in full on every probe: a few status GETs, such 
 - `hearth run` refuses to be an MCP tool, because it runs until it gives up. Agents can still see its server through `ports`, and see its restarts through `diff`.
 - The port must be given. Detecting it from the child's sockets would need the process tree, which waits for the daemon.
 - On non-Unix platforms there is no tether: stopping kills the direct child only.
+
+## Addendum (2026-10-15): why it exited
+
+An `exited` event now says why, when the server's log said so: `cause` is `model_missing`, `load_failed`, `out_of_memory`, `port_in_use` or `bad_argument`, and `cause_line` is the line that said it. The signatures are llama.cpp's own messages (gguf.cpp, llama.cpp, the ggml backends, server.cpp, common/arg.cpp). The first line that matches wins, because what follows is usually its consequence. Lines are read per start, and on exit the supervisor waits for both output streams to reach their end, for at most `supervise.stop_grace_ms`, so the last words before the exit are counted. This is the start of the recovery classifier: a missing model or a bad argument will not be cured by a restart, and the `server-died` workflow reads the cause first.
+

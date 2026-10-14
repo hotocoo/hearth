@@ -105,6 +105,18 @@ pub fn summary(body: &serde_json::Value) -> String {
     )
 }
 
+/// How a cause reads in a sentence.
+fn cause_name(c: hearth_runtime::signals::Cause) -> &'static str {
+    use hearth_runtime::signals::Cause;
+    match c {
+        Cause::ModelMissing => "model file missing",
+        Cause::LoadFailed => "model did not load",
+        Cause::OutOfMemory => "out of memory",
+        Cause::PortInUse => "port in use",
+        Cause::BadArgument => "bad argument",
+    }
+}
+
 /// Events a person should hear about without watching the terminal.
 pub(crate) fn alarming(event: &Event) -> bool {
     let gave_up = |d: &Decision| matches!(d, Decision::GiveUp { .. });
@@ -186,13 +198,19 @@ pub(crate) fn describe(event: &Event) -> String {
         Event::Exited {
             code,
             signal,
+            cause,
+            cause_line,
             decision,
         } => format!(
-            "exited with {}; {}",
+            "exited with {}{}; {}",
             match (code, signal) {
                 (_, Some(s)) => format!("signal {s}"),
                 (Some(c), None) => format!("code {c}"),
                 (None, None) => "no status".into(),
+            },
+            match (cause, cause_line) {
+                (Some(c), Some(line)) => format!(" ({}: {line})", cause_name(*c)),
+                _ => String::new(),
             },
             next(decision)
         ),
@@ -396,6 +414,8 @@ mod tests {
         let exited = |decision| Event::Exited {
             code: Some(1),
             signal: None,
+            cause: None,
+            cause_line: None,
             decision,
         };
         assert!(!alarming(&exited(restart)));

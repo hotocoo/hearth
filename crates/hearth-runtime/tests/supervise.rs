@@ -12,6 +12,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use hearth_runtime::fingerprint::Identity;
+use hearth_runtime::signals::Cause;
 use hearth_runtime::supervise::{
     Decision, Event, Preflight, Probe, RestartPolicy, Settings, Supervised, preflight, tethered,
 };
@@ -32,6 +33,8 @@ class H(BaseHTTPRequestHandler):
         if os.path.exists(trigger):
             if mode == "exit":
                 os.remove(trigger)
+                # What llama.cpp logs when an allocation fails, then exits.
+                print("ggml_backend_metal_buffer_type_alloc_buffer: error: failed to allocate buffer, size = 35000.00 MiB", file=sys.stderr, flush=True)
                 os._exit(3)
             if mode == "poison":
                 print("ggml_metal_graph_compute: backend is in error state from a previous command buffer failure - recreate the backend to recover", file=sys.stderr, flush=True)
@@ -229,6 +232,20 @@ fn a_server_that_exits_is_restarted_and_a_crash_loop_is_given_up() {
         "{seen:?}"
     );
     assert_eq!(s.restarts(), 2);
+    // Each exit says why, from the server's own last words.
+    for e in &seen {
+        if let Event::Exited {
+            cause, cause_line, ..
+        } = e
+        {
+            assert_eq!(*cause, Some(Cause::OutOfMemory), "{seen:?}");
+            assert!(
+                cause_line
+                    .as_deref()
+                    .is_some_and(|l| l.contains("failed to allocate"))
+            );
+        }
+    }
 }
 
 #[test]

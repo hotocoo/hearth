@@ -43,7 +43,7 @@ use serde::Serialize;
 
 use crate::fingerprint::{Identity, fingerprint};
 use crate::llama_log::compute_bytes;
-use crate::signals::{Signal, classify};
+use crate::signals::{Cause, Signal, cause, classify};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartPolicy {
@@ -291,6 +291,11 @@ pub enum Event {
     Exited {
         code: Option<i32>,
         signal: Option<i32>,
+        /// Why, as the server's own log said, with the line that said it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cause: Option<Cause>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cause_line: Option<String>,
         #[serde(flatten)]
         decision: Decision,
     },
@@ -386,11 +391,28 @@ pub struct Supervised {
     signals: Option<Receiver<(Signal, String)>>,
     /// The last lines the server (and the servers before it) printed.
     output: Output,
-    /// The compute buffers the running server logged since it started.
-    compute: Compute,
+    /// What the running server's log said since it started.
+    log: StartLog,
 }
 
-type Compute = std::sync::Arc<std::sync::atomic::AtomicU64>;
+/// What one start's output said, shared with the threads reading it.
+#[derive(Default)]
+struct Said {
+    /// Compute buffers llama.cpp logged, summed over its backends.
+    compute_bytes: u64,
+    /// The first line that says why it would stop.
+    cause: Option<(Cause, String)>,
+    /// Output streams not yet read to their end.
+    open: usize,
+}
+
+type StartLog = std::sync::Arc<(std::sync::Mutex<Said>, std::sync::Condvar)>;
+
+fn said(log: &StartLog) -> std::sync::MutexGuard<'_, Said> {
+    log.0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// The most recent lines of output, shared with the threads reading it.
 pub type Output = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>;
@@ -414,7 +436,7 @@ impl Supervised {
             state: State::Waiting { until: now },
             signals: None,
             output: Output::default(),
-            compute: Compute::default(),
+            log: StartLog::default(),
         }
     }
 
@@ -486,7 +508,7 @@ impl Supervised {
                         since: now,
                         misses: 0,
                     };
-                    let compute = self.compute.load(std::sync::atomic::Ordering::Relaxed);
+                    let compute = said(&self.log).compute_bytes;
                     return Some(Event::Ready {
                         pid,
                         after_ms: ms(now.duration_since(since)),
@@ -559,13 +581,17 @@ impl Supervised {
             Ok(mut child) => {
                 let pid = child.id();
                 let (tx, rx) = channel();
-                // Each start counts its own allocations.
-                self.compute = Compute::default();
+                // Each start's log is read on its own.
+                self.log = StartLog::default();
+                said(&self.log).open = [child.stdout.is_some(), child.stderr.is_some()]
+                    .iter()
+                    .filter(|&&open| open)
+                    .count();
                 let keep = (
                     self.output.clone(),
                     self.settings.output_lines,
                     self.settings.output_line_bytes,
-                    self.compute.clone(),
+                    self.log.clone(),
                 );
                 if let Some(out) = child.stdout.take() {
                     watch(out, tx.clone(), keep.clone());
@@ -616,9 +642,22 @@ impl Supervised {
         }
         let (code, signal) = ended(status);
         let decision = self.after_exit(ready_since);
+        // Its last lines may still be in the pipe: wait for the readers to
+        // reach its end, as long as a stop would wait for the server.
+        let (cause, cause_line) = {
+            let guard = said(&self.log);
+            let (guard, _) = self
+                .log
+                .1
+                .wait_timeout_while(guard, self.settings.stop_grace, |s| s.open > 0)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.cause.clone().unzip()
+        };
         Event::Exited {
             code,
             signal,
+            cause,
+            cause_line,
             decision,
         }
     }
@@ -705,7 +744,7 @@ impl Supervised {
 fn watch<R: Read + Send + 'static>(
     stream: R,
     signals: Sender<(Signal, String)>,
-    (output, keep, line_bytes, compute): (Output, usize, usize, Compute),
+    (output, keep, line_bytes, log): (Output, usize, usize, StartLog),
 ) {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
@@ -718,7 +757,11 @@ fn watch<R: Read + Send + 'static>(
                 .take(cap(line_bytes))
                 .read_until(b'\n', &mut line)
             {
-                Ok(0) | Err(_) => return,
+                Ok(0) | Err(_) => {
+                    said(&log).open -= 1;
+                    log.1.notify_all();
+                    return;
+                }
                 Ok(_) => {}
             }
             // A closed stderr leaves the log unseen, never the server unwatched.
@@ -733,8 +776,16 @@ fn watch<R: Read + Send + 'static>(
                     kept.pop_front();
                 }
             }
-            if let Some(bytes) = compute_bytes(&text) {
-                compute.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+            {
+                let mut s = said(&log);
+                if let Some(bytes) = compute_bytes(&text) {
+                    s.compute_bytes = s.compute_bytes.saturating_add(bytes);
+                }
+                if s.cause.is_none()
+                    && let Some(c) = cause(&text)
+                {
+                    s.cause = Some((c, cut(text.trim_end(), line_bytes)));
+                }
             }
             if let Some(signal) = classify(&text) {
                 // Fails only once the supervisor has moved on to another
