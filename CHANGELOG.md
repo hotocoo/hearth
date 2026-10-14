@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:40 safetensors weights from the index
+
+- `fit DIR` sums only the shards `model.safetensors.index.json` names, so a `consolidated.safetensors` copy is not counted twice. Without an index, `adapters.safetensors` is left out.
+
 ### 2026-10-15 05:38 MLX fit and offload review fixes
 
 - **Latent attention.** `fit` on a DeepSeek or Kimi `config.json` costs the larger of the latent cache and MLX's expanded keys and values. Before, it costed far less than MLX holds.
