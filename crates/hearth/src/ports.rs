@@ -339,15 +339,19 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
         .collect();
     let results = probe_all(jobs, deadline(None, discovery), max_bytes)?;
 
-    // Asked once for every process, and only when a runtime answered.
-    let any_runtime = results.values().any(|(f, _, _)| is_runtime(&f.identity));
-    let on_accelerator = if any_runtime {
-        crate::pressure::accelerator_process_bytes().unwrap_or_else(|e| {
+    // Asked once, for the processes where a runtime answered.
+    let runtime_pids: Vec<i32> = results
+        .iter()
+        .filter(|(_, (f, _, _))| is_runtime(&f.identity))
+        .map(|((pid, _), _)| *pid)
+        .collect();
+    let on_accelerator = if runtime_pids.is_empty() {
+        Vec::new()
+    } else {
+        crate::pressure::accelerator_process_bytes(&runtime_pids).unwrap_or_else(|e| {
             state_errors.push(format!("accelerator memory per process: {e}"));
             Vec::new()
         })
-    } else {
-        Vec::new()
     };
     let ports: Vec<Port> = listeners
         .into_iter()

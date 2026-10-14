@@ -39,6 +39,7 @@ mod unsupported {
         Err(SenseError::Unsupported("accelerators"))
     }
     pub fn accelerator_process_bytes(
+        _pids: &[i32],
         _query_timeout: std::time::Duration,
     ) -> Result<Vec<(i32, u64)>> {
         Err(SenseError::Unsupported("accelerator memory per process"))

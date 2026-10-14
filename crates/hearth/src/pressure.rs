@@ -59,9 +59,9 @@ pub fn accelerators() -> Result<Vec<hearth_sense::Accelerator>, String> {
 }
 
 /// `hearth_sense::accelerator_process_bytes`, bounded the same way.
-pub fn accelerator_process_bytes() -> Result<Vec<(i32, u64)>, String> {
+pub fn accelerator_process_bytes(pids: &[i32]) -> Result<Vec<(i32, u64)>, String> {
     let timeout = std::time::Duration::from_millis(config()?.accelerators.query_timeout_ms);
-    hearth_sense::accelerator_process_bytes(timeout).map_err(|e| e.to_string())
+    hearth_sense::accelerator_process_bytes(pids, timeout).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
