@@ -90,7 +90,7 @@ cargo build --release -p hearth
 #   [metrics] listen = "127.0.0.1:9469" in your config: hearthd serves Prometheus metrics at /metrics
 ```
 
-Every command takes `--json`. Every finding carries a `remediation`.
+Every command takes `--json`. Every finding carries a `remediation`. Every setting, with its default and meaning, is in [docs/configuration.md](docs/configuration.md).
 
 Set `[notify] desktop = true` or `webhook_url` in your config to be told when `hearth run` finds a poisoned backend or a wedge, or gives up on a crash loop, and when `hearth watch` finds a problem.
 

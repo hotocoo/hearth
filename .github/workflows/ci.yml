@@ -33,6 +33,11 @@ jobs:
         run: |
           cargo build -p hearth --bin hearth
           ./target/debug/hearth --json doctor | python3 -c "import json,sys; p=json.load(sys.stdin)['health']['memory']['pressure']; print('pressure', p); assert p in ('normal','warn','critical')"
+      - name: docs/configuration.md matches the shipped configuration
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p hearth --bin hearth
+          ./target/debug/hearth config --markdown | diff -u docs/configuration.md -
       - name: completion scripts parse
         if: runner.os == 'Linux'
         run: |

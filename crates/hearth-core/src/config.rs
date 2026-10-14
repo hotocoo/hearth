@@ -596,6 +596,40 @@ fn flatten(prefix: &str, table: &toml::Table, out: &mut Vec<(String, toml::Value
     }
 }
 
+/// Every built-in setting with its default and meaning, as shipped.
+pub fn explain_builtin() -> Result<Vec<Setting>, ConfigError> {
+    let mut base = Vec::new();
+    let table = BASE
+        .parse::<toml::Table>()
+        .map_err(|source| ConfigError::Parse {
+            origin: "built-in config/hearth.toml".into(),
+            source,
+        })?;
+    flatten("", &table, &mut base);
+    let docs = docs();
+    let mut out: Vec<Setting> = base
+        .into_iter()
+        .map(|(key, value)| Setting {
+            doc: docs.get(&key).cloned().unwrap_or_default(),
+            key,
+            value: Some(value),
+            source: "built-in".into(),
+        })
+        .collect();
+    for (key, doc) in &docs {
+        if !out.iter().any(|s| &s.key == key) {
+            out.push(Setting {
+                key: key.clone(),
+                value: None,
+                source: "unset".into(),
+                doc: doc.clone(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(out)
+}
+
 /// Every setting in effect, after the user's file has been merged and the
 /// result validated, sorted by key.
 pub fn explain() -> Result<Vec<Setting>, ConfigError> {
