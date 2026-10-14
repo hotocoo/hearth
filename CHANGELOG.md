@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:53 exit cause metric
+
+- hearthd's metrics add `hearth_server_exit_cause{server,cause}`: 1 for why each server last exited, when its log said.
+
 ### 2026-10-15 07:46 accelerator memory per process
 
 - **VRAM per runtime.** On Linux, `ports` shows the VRAM each model runtime holds (`accelerator_bytes`) beside its host footprint: NVIDIA from `nvidia-smi`, AMD and Intel from DRM fdinfo.
