@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:08 models --ctx
+
+- `hearth models --ctx N` lists only the models the device holds at N tokens of context, answering "what can I run here with 32k context".
+
 ### 2026-10-15 07:07 diff meanwhile
 
 - `hearth diff` lists, under `meanwhile`, the notes and run events recorded between its two snapshots. Each diff then carries what was done next to what changed. `what-changed` reads it.
