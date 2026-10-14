@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:08 discrete GPUs on Linux
+
+- On Linux, AMD GPUs are read from amdgpu sysfs and NVIDIA GPUs from `nvidia-smi`.
+- `doctor` shows each GPU's memory, the metrics export `hearth_gpu_memory_total_bytes` and `hearth_gpu_memory_used_bytes`, and `fit` checks against the GPU's memory.
+
 ### 2026-10-15 04:03 cgroup-aware memory on Linux
 
 - Inside a memory-limited cgroup, such as a container or a systemd slice, total and available memory are the smaller of the host's and the tightest limit over the process: its own cgroup or any ancestor's. Available memory counts the cgroup's reclaimable page cache. `doctor --explain` says which limit applied.
