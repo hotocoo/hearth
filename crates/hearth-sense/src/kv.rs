@@ -59,6 +59,17 @@ fn missing(key: &str) -> SenseError {
     }
 }
 
+/// A layer count read from a file is not trusted to be allocatable: one
+/// that is not fails here instead of aborting the process later.
+fn room_for_layers(n: usize) -> Result<()> {
+    Vec::<Layer>::new()
+        .try_reserve_exact(n)
+        .map_err(|e| SenseError::Parse {
+            what: "model geometry",
+            detail: format!("{n} layers: {e}"),
+        })
+}
+
 /// Expands a scalar or a per-layer array to one value per layer.
 fn per_layer(value: Option<&Value>, layers: usize) -> Option<Vec<u64>> {
     let list = value?.as_u64_list()?;
@@ -80,6 +91,7 @@ impl Geometry {
         let num = |suffix: &str| key(suffix).and_then(Value::as_u64);
         let block_count = num("block_count").ok_or_else(|| missing("block_count"))?;
         let n = usize::try_from(block_count).map_err(|_| missing("block_count"))?;
+        room_for_layers(n)?;
         let mut notes = Vec::new();
         let mut confidence = Confidence::High;
 
@@ -190,10 +202,11 @@ impl Geometry {
             what: "config.json geometry",
             detail: "num_hidden_layers too large".into(),
         })?;
+        room_for_layers(n)?;
         let mut notes = Vec::new();
         let mut confidence = Confidence::High;
         let heads = need("num_attention_heads")?;
-        if let Some(rank) = num("kv_lora_rank") {
+        if let Some(rank) = num("kv_lora_rank").filter(|&r| r > 0) {
             let layers = latent_layers(rank, heads, &num, &mut notes)?;
             return Ok(Self {
                 arch: arch.to_string(),
@@ -232,9 +245,10 @@ impl Geometry {
                     window,
                 };
                 match (kind, window) {
-                    _ if kv_heads == 0 => Layer::Recurrent,
+                    (None, _) if kv_heads == 0 => Layer::Recurrent,
                     (Some("sliding_attention"), Some(w)) => sliding(w),
-                    (Some("full_attention" | "attention"), _) => full,
+                    // A sliding layer without its window is noted below.
+                    (Some("sliding_attention" | "full_attention" | "attention"), _) => full,
                     (Some(k), _) if k.contains("linear") || k.contains("mamba") => Layer::Recurrent,
                     (Some(k), _) => {
                         if !unknown.contains(&k) {
@@ -265,6 +279,12 @@ impl Geometry {
             confidence = confidence.min(Confidence::Medium);
             notes.push(
                 "sliding_attention layers without a sliding_window: costed as full attention, which errs high".into(),
+            );
+        }
+        if window.is_none() && kinds.is_none() && period.is_some() {
+            confidence = confidence.min(Confidence::Medium);
+            notes.push(
+                "sliding_window_pattern is set but sliding_window is not: every layer is costed as full attention, which errs high".into(),
             );
         }
         if window.is_some() && kinds.is_none() && period.is_none() {
@@ -365,10 +385,13 @@ impl Geometry {
 /// facts, as GGUF's key defaults are.
 fn hf_default(model_type: &str, key: &str) -> Option<u64> {
     match (model_type, key) {
-        ("gemma" | "gemma2" | "gemma3_text", "head_dim") => Some(256),
-        ("gemma2" | "gemma3_text", "num_attention_heads") => Some(8),
-        ("gemma2" | "gemma3_text", "num_key_value_heads") => Some(4),
-        ("gemma3_text", "sliding_window_pattern") => Some(6),
+        ("gemma" | "gemma2" | "gemma3" | "gemma3_text", "head_dim") => Some(256),
+        ("gemma2" | "gemma3" | "gemma3_text", "num_attention_heads") => Some(8),
+        ("gemma2" | "gemma3" | "gemma3_text", "num_key_value_heads") => Some(4),
+        ("gemma2" | "gemma3" | "gemma3_text", "sliding_window") => Some(4096),
+        // Gemma 2 alternates sliding and full layers.
+        ("gemma2", "sliding_window_pattern") => Some(2),
+        ("gemma3" | "gemma3_text", "sliding_window_pattern") => Some(6),
         _ => None,
     }
 }
@@ -394,21 +417,21 @@ fn latent_layers(
     let nope = need("qk_nope_head_dim")?;
     let v = need("v_head_dim")?;
     let latent = Layer::Latent {
-        k_len: rank + rope,
+        k_len: rank.saturating_add(rope),
         v_len: rank,
     };
     let expanded = Layer::Full {
         kv_heads: heads,
-        k_len: nope + rope,
+        k_len: nope.saturating_add(rope),
         v_len: v,
     };
     let per_token = |l: Layer| match l {
-        Layer::Latent { k_len, v_len } => k_len + v_len,
+        Layer::Latent { k_len, v_len } => k_len.saturating_add(v_len),
         Layer::Full {
             kv_heads,
             k_len,
             v_len,
-        } => kv_heads.saturating_mul(k_len + v_len),
+        } => kv_heads.saturating_mul(k_len.saturating_add(v_len)),
         _ => 0,
     };
     notes.push(format!(
@@ -640,6 +663,19 @@ mod tests {
         });
         let g = Geometry::from_hf_config(&conv).unwrap();
         assert!(g.notes.iter().any(|n| n.contains("conv")));
+        // Gemma 2 alternates sliding and full layers, by default 4096 wide.
+        let g2 = serde_json::json!({"model_type": "gemma2", "num_hidden_layers": 4, "hidden_size": 2304});
+        let g = Geometry::from_hf_config(&g2).unwrap();
+        assert!(matches!(g.layers[0], Layer::Sliding { window: 4096, .. }));
+        assert!(matches!(g.layers[1], Layer::Full { .. }));
+        // A zero rank is no latent attention.
+        let dense = serde_json::json!({"num_hidden_layers": 1, "num_attention_heads": 2, "head_dim": 8, "kv_lora_rank": 0});
+        assert!(matches!(
+            Geometry::from_hf_config(&dense).unwrap().layers[0],
+            Layer::Full { .. }
+        ));
+        let huge = serde_json::json!({"num_hidden_layers": u64::MAX >> 4, "num_attention_heads": 2, "head_dim": 8});
+        assert!(Geometry::from_hf_config(&huge).is_err());
     }
 
     use super::*;

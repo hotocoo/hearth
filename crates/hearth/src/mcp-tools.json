@@ -136,7 +136,7 @@
         },
         "grep": {
           "type": "string",
-          "description": "Only snapshots whose recorded JSON contains this text, case ignored: a pid, model name, port, error text or finding code. Finds when something first or last appeared; limit then counts matches."
+          "description": "Only snapshots that mention this: a key or text value containing it (case ignored), or a number equal to it, such as a pid, model name, port, error text or finding code. Finds when something first or last appeared; limit then counts matches."
         }
       }
     },

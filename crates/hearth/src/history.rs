@@ -77,9 +77,10 @@ pub struct LogArgs {
     /// time span, bytes), i.e. how far back references can reach.
     #[arg(long, conflicts_with_all = ["limit", "since", "grep"])]
     stats: bool,
-    /// Only snapshots whose recorded JSON contains this text, case ignored,
-    /// like `git log -S`: a pid, model name, port, error or code. `--limit`
-    /// then counts matches.
+    /// Only snapshots that mention this, like `git log -S`: a key or text
+    /// value containing it (case ignored), or a number equal to it, such as
+    /// a pid, model name, port, error or finding code. `--limit` then
+    /// counts matches.
     #[arg(long)]
     grep: Option<String>,
 }
@@ -297,6 +298,21 @@ fn stats(journal: &Journal, json: bool) -> Result<String, String> {
     Ok(out)
 }
 
+/// Whether a recorded value mentions `needle`, as a person would read it:
+/// text (keys and strings, unescaped) containing it with case ignored, or a
+/// number equal to it, so pid 123 does not match 1234 or a byte count.
+fn mentions(value: &Value, needle: &str) -> bool {
+    let text = |t: &str| t.to_lowercase().contains(&needle.to_lowercase());
+    match value {
+        Value::String(t) => text(t),
+        Value::Number(n) => n.to_string() == needle,
+        Value::Bool(b) => b.to_string() == needle,
+        Value::Array(items) => items.iter().any(|v| mentions(v, needle)),
+        Value::Object(map) => map.iter().any(|(k, v)| text(k) || mentions(v, needle)),
+        Value::Null => false,
+    }
+}
+
 pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
     if args.stats {
@@ -310,43 +326,30 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
         unreadable: Vec::new(),
     };
     let limit = args.limit.map_or(usize::MAX, NonZeroUsize::get);
-    // With --grep the limit counts matches, so every snapshot is read.
-    let read = if args.grep.is_some() {
-        usize::MAX
-    } else {
-        limit
-    };
-    let needle = args.grep.as_deref().map(str::to_lowercase);
-    let recent = match args.since {
-        Some(age) => {
-            let ids = journal
-                .ids_since(kind.name(), age)
-                .map_err(|e| e.to_string())?;
-            let start = ids.len().saturating_sub(read);
-            // A snapshot thinned away between listing and reading is not an
-            // error: it is just gone.
-            ids[start..]
-                .iter()
-                .map(|id| journal.read(id))
-                .filter(|r| {
-                    !matches!(r, Err(hearth_core::state::StateError::Io { source, .. })
-                        if source.kind() == std::io::ErrorKind::NotFound)
-                })
-                .collect()
-        }
-        None => journal
-            .recent(kind.name(), read)
-            .map_err(|e| e.to_string())?,
-    };
-    for (back, snapshot) in recent.into_iter().rev().enumerate() {
+    let ids = match args.since {
+        Some(age) => journal.ids_since(kind.name(), age),
+        None => journal.ids(kind.name()),
+    }
+    .map_err(|e| e.to_string())?;
+    // Newest first and read lazily: with --grep, --limit counts matches
+    // and reading stops at the last one needed.
+    let mut back = 0;
+    for id in ids.iter().rev() {
         if report.snapshots.len() == limit {
             break;
         }
+        let snapshot = journal.read(id);
+        // A snapshot thinned away between listing and reading is not an
+        // error, and not a ~N any more: it is just gone.
+        if matches!(&snapshot, Err(hearth_core::state::StateError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound)
+        {
+            continue;
+        }
+        back += 1;
+        let back = back - 1;
         match snapshot {
-            Ok(s)
-                if needle
-                    .as_ref()
-                    .is_some_and(|n| !s.body.to_string().to_lowercase().contains(n)) => {}
+            Ok(s) if args.grep.as_deref().is_some_and(|n| !mentions(&s.body, n)) => {}
             Ok(s) => report.snapshots.push(LogEntry {
                 back,
                 summary: kind.summary(&s.body),
@@ -676,6 +679,20 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grep_reads_values_not_escaped_json() {
+        let body = serde_json::json!({
+            "pid": 1234, "error": "no \"model\" at C:\\models", "findings": [{"code": "oversized"}]
+        });
+        assert!(mentions(&body, "1234"));
+        assert!(!mentions(&body, "123"));
+        assert!(mentions(&body, "NO \"MODEL\""));
+        assert!(mentions(&body, "c:\\models"));
+        assert!(mentions(&body, "OVERSIZED"));
+        assert!(mentions(&body, "findings"));
+        assert!(!mentions(&body, "partial_offload"));
+    }
+
     use super::*;
 
     fn snap(n: u64, ports: &[(&str, &str)]) -> Snapshot {

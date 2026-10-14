@@ -359,7 +359,9 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
         .collect();
     let mut findings = findings(&ports);
     findings.extend(oversized(&ports));
-    findings.extend(partially_offloaded(&ports));
+    findings.extend(partially_offloaded(&ports, || {
+        crate::pressure::accelerators().is_ok_and(|a| !a.is_empty())
+    }));
     let mut report = Report {
         ports,
         uninspectable_processes: uninspectable,
@@ -460,8 +462,10 @@ fn is_runtime(identity: &Identity) -> bool {
 /// loaded model's `size` and how much of it sits in GPU memory
 /// (`size_vram`). Less than all of it means the rest runs on the CPU, many
 /// times slower, because the accelerator had no room for it.
-fn partially_offloaded(ports: &[Port]) -> Vec<Finding> {
+fn partially_offloaded(ports: &[Port], has_accelerator: impl FnOnce() -> bool) -> Vec<Finding> {
     let mut out = Vec::new();
+    // Asked only when a model sits wholly on the CPU.
+    let has_accelerator = std::cell::LazyCell::new(has_accelerator);
     for p in ports {
         let Identity::Ollama { loaded, .. } = &p.fingerprint.identity else {
             continue;
@@ -470,9 +474,9 @@ fn partially_offloaded(ports: &[Port]) -> Vec<Finding> {
             let (Some(size), Some(vram)) = (m.size_bytes, m.size_vram_bytes) else {
                 continue;
             };
-            // Nothing on the accelerator is a host without one, or a
-            // deliberate num_gpu 0; only a split is a lack of room.
-            if vram >= size || vram == 0 {
+            // Wholly on the CPU is no room at all, unless the host has no
+            // accelerator. (A deliberate num_gpu 0 looks the same.)
+            if vram >= size || (vram == 0 && !*has_accelerator) {
                 continue;
             }
             out.push(Finding {
@@ -1078,9 +1082,10 @@ mod tests {
             slow: false,
             owned_by: None,
         };
-        assert_eq!(partially_offloaded(&[mk(60)]).len(), 1);
-        assert!(partially_offloaded(&[mk(100)]).is_empty());
-        assert!(partially_offloaded(&[mk(0)]).is_empty());
+        assert_eq!(partially_offloaded(&[mk(60)], || true).len(), 1);
+        assert!(partially_offloaded(&[mk(100)], || true).is_empty());
+        assert_eq!(partially_offloaded(&[mk(0)], || true).len(), 1);
+        assert!(partially_offloaded(&[mk(0)], || false).is_empty());
     }
 
     #[test]

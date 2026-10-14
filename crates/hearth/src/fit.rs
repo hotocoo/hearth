@@ -136,9 +136,11 @@ fn listener_args(port: u16) -> Option<Vec<String>> {
 /// `mlx_lm.server` and vLLM take the model they serve.
 fn model_arg(args: &[String]) -> Option<String> {
     args.iter().enumerate().find_map(|(i, a)| {
-        a.strip_prefix("--model=")
-            .map(str::to_string)
-            .or_else(|| (a == "--model").then(|| args.get(i + 1).cloned()).flatten())
+        a.strip_prefix("--model=").map(str::to_string).or_else(|| {
+            (a == "--model")
+                .then(|| args.get(i + 1).filter(|v| !v.starts_with('-')).cloned())
+                .flatten()
+        })
     })
 }
 
@@ -871,6 +873,7 @@ mod port_tests {
             Some("/m")
         );
         assert_eq!(model_arg(&line("python -m mlx_lm.server --model")), None);
+        assert_eq!(model_arg(&line("mlx_lm.server --model --port 8081")), None);
         assert_eq!(model_arg(&line("python -m mlx_lm.server")), None);
     }
 
