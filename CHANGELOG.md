@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:41 retention by age
+
+- New `state.tiers` thins ports and doctor snapshots as they age. By default it keeps all of them for an hour, one per 10 minutes for a day, and one per hour for a week. `state.thinned_kinds` lists the kinds this applies to; `run` events are never thinned.
+- `state.max_snapshots_per_kind` is now a hard cap of 1000.
+- `hearth config` documents array settings such as `state.tiers`.
+
 ### 2026-10-15 03:36 your own workflows
 
 - `workflows.json` beside the user's config adds workflows to the built-in ones, or replaces them by name. MCP serves them as prompts. A workflow that names a tool hearth does not have is skipped with the reason.
