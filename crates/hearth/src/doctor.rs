@@ -162,7 +162,10 @@ fn trend(a: &BoxHealth, b: &BoxHealth, seconds: f64) -> Trend {
     Trend {
         seconds,
         files_per_second,
-        threads_per_second: (b.threads_counted as f64 - a.threads_counted as f64) / seconds,
+        threads_per_second: match (a.limits.threads_total, b.limits.threads_total) {
+            (Some(x), Some(y)) => (y as f64 - x as f64) / seconds,
+            _ => (b.threads_counted as f64 - a.threads_counted as f64) / seconds,
+        },
         growing,
     }
 }
@@ -295,14 +298,28 @@ fn render(r: &Report) -> String {
                 .map_or("unknown".into(), |n| n.to_string())
         );
     }
-    let _ = writeln!(
-        out,
-        "threads  {} in {} processes · system limit {} · {} processes not inspectable",
-        r.health.threads_counted,
-        r.health.processes.len(),
-        l.threads_max.map_or("unknown".into(), |n| n.to_string()),
-        r.health.uninspectable
-    );
+    match l.threads_total {
+        Some(total) => {
+            let _ = writeln!(
+                out,
+                "threads  {total} total of {} ({}) · {} in processes readable here, {} in {} processes owned by other users",
+                l.threads_max.map_or("unknown".into(), |n| n.to_string()),
+                l.threads_max.map_or("n/a".into(), |m| percent(total, m)),
+                r.health.threads_counted,
+                total.saturating_sub(r.health.threads_counted),
+                r.health.uninspectable
+            );
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "threads  at least {} (system total unavailable; {} processes not inspectable) · limit {}",
+                r.health.threads_counted,
+                r.health.uninspectable,
+                l.threads_max.map_or("unknown".into(), |n| n.to_string()),
+            );
+        }
+    }
     let _ = writeln!(
         out,
         "\nhalf of all open files: {}",

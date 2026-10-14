@@ -157,8 +157,14 @@ pub fn system_limits() -> Result<SystemLimits> {
         .split_whitespace()
         .filter_map(|f| f.parse().ok())
         .collect();
+    // loadavg's fourth field is "runnable/total" scheduling entities, i.e.
+    // every thread on the machine.
+    let threads_total = fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|l| l.split_whitespace().nth(3)?.split_once('/')?.1.parse().ok());
     Ok(SystemLimits {
         files_open: file_nr.first().zip(file_nr.get(1)).map(|(a, u)| a - u),
+        threads_total,
         files_max: file_nr.get(2).copied(),
         files_per_process_max: read_u64("/proc/sys/fs/nr_open"),
         threads_max: read_u64("/proc/sys/kernel/threads-max"),
@@ -219,6 +225,7 @@ mod tests {
         assert!(me.threads.unwrap() >= 1);
         let limits = system_limits().unwrap();
         assert!(limits.files_open.unwrap() <= limits.files_max.unwrap());
+        assert!(limits.threads_total.unwrap() >= me.threads.unwrap());
     }
 
     #[test]

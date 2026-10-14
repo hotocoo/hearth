@@ -30,8 +30,8 @@ Reports memory (available, kernel pressure level, swap), open files, threads and
 Every finding carries a `remediation`.
 
 Sources:
-- macOS: `PROC_PIDLISTFDS`, `PROC_PIDTASKINFO`, `kern.num_files`, `kern.maxfiles`, `kern.maxfilesperproc`, `kern.num_threads`, `kern.num_taskthreads`, `kern.maxproc`.
-- Linux: `/proc/sys/fs/file-nr`, `nr_open`, `threads-max`, `pid_max`, `/proc/*/fd`, `Threads:`.
+- macOS: `PROC_PIDLISTFDS`, `PROC_PIDTASKINFO`, `processor_set_statistics(PROCESSOR_SET_LOAD_INFO)` for the system thread total (the figure `top` shows, including processes owned by other users), `kern.num_files`, `kern.maxfiles`, `kern.maxfilesperproc`, `kern.num_threads`, `kern.num_taskthreads`, `kern.maxproc`.
+- Linux: `/proc/loadavg` (system thread total), `/proc/sys/fs/file-nr`, `nr_open`, `threads-max`, `pid_max`, `/proc/*/fd`, `Threads:`.
 
 Processes owned by other users are counted as not inspectable rather than guessed.
 
@@ -63,6 +63,8 @@ It compares that total against:
 From those it reports whether the model fits the device and fits right now, plus the maximum context each allows, capped at the trained context.
 
 Runtime compute buffers are excluded, and the output says so. They are learned after a model's first load, which needs the daemon.
+
+"Fits right now" is marked `fits_now_provisional: true`. llama.cpp memory-maps weights, and before they are wired the pages may count as reclaimable file cache. Whether available memory really drops by the full weights is criterion (c) of the P0 gate, which has not run yet.
 
 ### GGUF reader
 

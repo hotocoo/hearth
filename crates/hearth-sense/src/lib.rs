@@ -151,6 +151,9 @@ pub struct Accelerator {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SystemLimits {
     pub files_open: Option<u64>,
+    /// Threads in the whole system, as the scheduler counts them; includes
+    /// processes this user cannot inspect individually.
+    pub threads_total: Option<u64>,
     pub files_max: Option<u64>,
     pub files_per_process_max: Option<u64>,
     pub threads_max: Option<u64>,

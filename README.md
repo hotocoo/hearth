@@ -69,7 +69,7 @@ cargo build --release -p hearth-sense --bin hearth-probe
 ./target/release/hearth-probe sample --interval-ms 100 --match llama-server --out run.jsonl
 # full gate: baseline, load A, load B, fill context, unload, reclaim.
 # Every experiment parameter is explicit; the script has no built-in values.
-INTERVAL_MS=100 CTX=8192 BASELINE_S=60 SETTLE_S=20 RECLAIM_S=30 FILL_TOKENS=4096 \
+INTERVAL_MS=100 CTX=8192 BASELINE_S=60 SETTLE_S=20 RECLAIM_S=30 FILL_TOKENS=4096 FILL_TIMEOUT_S=600 \
   scripts/p0-gate.sh runs/$(date +%s) small.gguf larger.gguf
 ./target/release/hearth-probe report runs/<id>/samples.jsonl --criteria docs/adr/000-criteria.json
 ```
@@ -78,7 +78,7 @@ INTERVAL_MS=100 CTX=8192 BASELINE_S=60 SETTLE_S=20 RECLAIM_S=30 FILL_TOKENS=4096
 
 All of this is design, not shipped code. The design is in the ADRs as each phase lands.
 
-- **Admission from measurement.**
+- **Admission from measurement.** Blocked on the P0 gate (ADR-000), which has not run yet; until it does, `hearth fit`'s "fits right now" is marked provisional.
   - Each memory pool gets a budget from the device ceiling, the measured resident footprints and a measured reserve.
   - Load cost comes from GGUF geometry and is corrected by the footprint learned per model.
   - If measurement fails, hearth serializes. It never fails open.

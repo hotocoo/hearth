@@ -58,6 +58,10 @@ struct Report {
     pressure: Option<PressureLevel>,
     fits_device: Option<bool>,
     fits_now: bool,
+    /// True until ADR-000's gate confirms that available memory falls by a
+    /// loaded model's footprint (weights are memory-mapped and may count as
+    /// reclaimable file cache before they are wired).
+    fits_now_provisional: bool,
     max_ctx_device: Option<u64>,
     max_ctx_now: Option<u64>,
     notes: Vec<String>,
@@ -116,6 +120,10 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             args.ctx
         ));
     }
+    notes.push(
+        "fits right now is provisional: whether available memory drops by the full weights of a memory-mapped model is what the P0 gate (ADR-000) measures"
+            .into(),
+    );
     if under_pressure {
         notes.push("the kernel reports memory pressure; nothing should be loaded now".into());
     }
@@ -146,6 +154,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         available_bytes: host.available_bytes,
         pressure: host.pressure,
         fits_now,
+        fits_now_provisional: true,
         geometry,
         notes,
     };
@@ -214,7 +223,7 @@ fn render(r: &Report) -> String {
     }
     let _ = writeln!(
         out,
-        "fits right now:   {} ({} available; max context {})",
+        "fits right now:   {} ({} available; max context {}; provisional, see notes)",
         verdict(r.fits_now),
         bytes(r.available_bytes),
         r.max_ctx_now.map_or("none".into(), |n| n.to_string())

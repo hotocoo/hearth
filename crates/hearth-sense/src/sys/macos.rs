@@ -278,9 +278,56 @@ pub fn accelerators() -> Result<Vec<Accelerator>> {
     }])
 }
 
+unsafe extern "C" {
+    // <mach/mach_host.h> and <mach/processor_set.h>; not in the libc crate.
+    fn processor_set_default(
+        host: libc::mach_port_t,
+        default_set: *mut libc::mach_port_t,
+    ) -> libc::kern_return_t;
+    fn processor_set_statistics(
+        pset: libc::mach_port_t,
+        flavor: libc::c_int,
+        info_out: *mut libc::integer_t,
+        info_out_count: *mut libc::mach_msg_type_number_t,
+    ) -> libc::kern_return_t;
+}
+
+/// Thread count of the default processor set, which is every thread on the
+/// machine: the figure `top` shows, readable without privileges.
+fn system_threads() -> Option<u64> {
+    static PSET: OnceLock<Option<libc::mach_port_t>> = OnceLock::new();
+    let pset = (*PSET.get_or_init(|| {
+        let mut pset: libc::mach_port_t = 0;
+        // SAFETY: `pset` is a valid out-pointer for one port name.
+        let kr = unsafe { processor_set_default(host_port(), &raw mut pset) };
+        (kr == libc::KERN_SUCCESS).then_some(pset)
+    }))?;
+    let mut info = MaybeUninit::<libc::processor_set_load_info>::zeroed();
+    let mut count = libc::mach_msg_type_number_t::try_from(
+        size_of::<libc::processor_set_load_info>() / size_of::<libc::integer_t>(),
+    )
+    .ok()?;
+    // SAFETY: `info` is writable for `count` integers, as `count` declares.
+    let kr = unsafe {
+        processor_set_statistics(
+            pset,
+            libc::PROCESSOR_SET_LOAD_INFO,
+            info.as_mut_ptr().cast(),
+            &raw mut count,
+        )
+    };
+    if kr != libc::KERN_SUCCESS {
+        return None;
+    }
+    // SAFETY: zero-initialised plain-integer struct, filled by the kernel.
+    let info = unsafe { info.assume_init() };
+    u64::try_from(info.thread_count).ok()
+}
+
 pub fn system_limits() -> Result<SystemLimits> {
     Ok(SystemLimits {
         files_open: sysctl_uint("kern.num_files").ok(),
+        threads_total: system_threads(),
         files_max: sysctl_uint("kern.maxfiles").ok(),
         files_per_process_max: sysctl_uint("kern.maxfilesperproc").ok(),
         threads_max: sysctl_uint("kern.num_threads").ok(),
@@ -403,6 +450,7 @@ mod tests {
         assert!(me.threads.unwrap() >= 1);
         let limits = system_limits().unwrap();
         assert!(limits.files_open.unwrap() <= limits.files_max.unwrap());
+        assert!(limits.threads_total.unwrap() >= me.threads.unwrap());
     }
 
     #[test]

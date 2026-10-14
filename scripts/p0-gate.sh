@@ -13,6 +13,7 @@
 #   SETTLE_S       wait after a server is ready before the next phase
 #   RECLAIM_S      wait after an unload
 #   FILL_TOKENS    prompt tokens sent to A to exercise its KV cache
+#   FILL_TIMEOUT_S longest the fill request may take before the run aborts
 # Optional: LLAMA_SERVER (else found on PATH), PROBE (else target/release).
 #
 # Only processes this script starts are ever signalled.
@@ -20,7 +21,7 @@
 set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
-  sed -n '2,21p' "$0"
+  sed -n '2,22p' "$0"
   exit 2
 fi
 OUT=$1 MODEL_A=$2 MODEL_B=$3
@@ -32,7 +33,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PROBE=${PROBE:-$ROOT/target/release/hearth-probe}
 LLAMA_SERVER=${LLAMA_SERVER:-$(command -v llama-server)}
 missing=()
-for var in INTERVAL_MS CTX BASELINE_S SETTLE_S RECLAIM_S FILL_TOKENS; do
+for var in INTERVAL_MS CTX BASELINE_S SETTLE_S RECLAIM_S FILL_TOKENS FILL_TIMEOUT_S; do
   [[ -n ${!var:-} ]] || missing+=("$var")
 done
 if ((${#missing[@]})); then
@@ -62,7 +63,8 @@ file_bytes() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1"; }
 wait_ready() { # port pid
   until curl -fsS "http://127.0.0.1:$1/health" >/dev/null 2>&1; do
     kill -0 "$2" 2>/dev/null || { echo "llama-server pid $2 exited before ready" >&2; return 1; }
-    sleep 0.2
+    # Poll readiness at the probe's own sampling interval.
+    sleep "$(awk "BEGIN { print $INTERVAL_MS / 1000 }")"
   done
 }
 
@@ -86,7 +88,7 @@ start_server() { # label model
 PROBE_PID=$!
 STARTED+=("$PROBE_PID")
 
-mark run_start "interval_ms=$INTERVAL_MS" "fill_tokens=$FILL_TOKENS" "ctx=$CTX" "baseline_s=$BASELINE_S" "settle_s=$SETTLE_S" "reclaim_s=$RECLAIM_S" "extra=${EXTRA[*]:-}"
+mark run_start "interval_ms=$INTERVAL_MS" "fill_tokens=$FILL_TOKENS" "fill_timeout_s=$FILL_TIMEOUT_S" "ctx=$CTX" "baseline_s=$BASELINE_S" "settle_s=$SETTLE_S" "reclaim_s=$RECLAIM_S" "extra=${EXTRA[*]:-}"
 mark baseline_start
 sleep "$BASELINE_S"
 mark baseline_end
@@ -97,16 +99,16 @@ start_server b "$MODEL_B"
 # Exercise the KV cache on A: llama.cpp reserves it at load, so footprint should
 # not grow much here. If it does, admission must reserve per request instead.
 mark fill_start "pid=$a_PID" "tokens=$FILL_TOKENS"
-python3 - "$a_PORT" "$FILL_TOKENS" <<'PY'
+python3 - "$a_PORT" "$FILL_TOKENS" "$FILL_TIMEOUT_S" <<'PY'
 import json, sys, urllib.request
-port, tokens = sys.argv[1], int(sys.argv[2])
+port, tokens, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
 prompt = " ".join(["hearth"] * tokens)
 req = urllib.request.Request(
     f"http://127.0.0.1:{port}/completion",
     data=json.dumps({"prompt": prompt, "n_predict": 16, "cache_prompt": False}).encode(),
     headers={"Content-Type": "application/json"},
 )
-with urllib.request.urlopen(req, timeout=600) as r:
+with urllib.request.urlopen(req, timeout=timeout) as r:
     body = json.load(r)
 print(json.dumps({k: body.get(k) for k in ("tokens_evaluated", "truncated")}))
 PY
