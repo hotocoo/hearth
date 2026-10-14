@@ -56,6 +56,20 @@ jobs:
           else
             grep -q "journalctl" incidents.json incidents.err
           fi
+      - name: journal smoke test (record, note, grep, tag, diff)
+        env:
+          HEARTH_STATE: ${{ runner.temp }}/hearth-state
+        run: |
+          cargo build -p hearth --bin hearth
+          h=./target/debug/hearth
+          $h ports > /dev/null
+          $h note --by ci smoke run
+          $h ports > /dev/null
+          $h log --all
+          test "$($h --json log --all | python3 -c "import json,sys; print(sorted({s['kind'] for s in json.load(sys.stdin)['snapshots']}))")" = "['note', 'ports']"
+          test "$($h --json log --kind note --grep SMOKE | python3 -c "import json,sys; print(len(json.load(sys.stdin)['snapshots']))")" = 1
+          $h tag ci-start --at '~1'
+          $h diff --from ci-start
       - name: probe smoke test
         run: |
           cargo build --release -p hearth-sense --bin hearth-probe
