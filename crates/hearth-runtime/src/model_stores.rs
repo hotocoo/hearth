@@ -71,7 +71,8 @@ fn weights_in(dir: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             let lower = name.to_ascii_lowercase();
-            lower.ends_with(".gguf")
+            p.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
                 && !lower.starts_with("mmproj")
                 && (!lower.contains("-of-") || lower.contains("-00001-of-"))
         })
