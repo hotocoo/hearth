@@ -4,7 +4,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
-### 2026-10-14 22:45 doctor thread total, provisional fit
+### 2026-10-14 22:36 doctor thread total, provisional fit
 
 - `doctor` reads the system-wide thread total from the scheduler. On macOS that is `processor_set_statistics`, the figure `top` shows; on Linux it is `/proc/loadavg`. It also reports how many threads sit in processes owned by other users. Before this, those threads were silently missing from the count; they are the processes that matter in a watchdog panic.
 - `fit` marks "fits right now" as provisional (`fits_now_provisional`) until the P0 gate confirms how memory-mapped weights show up in available memory.
