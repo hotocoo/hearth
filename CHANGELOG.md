@@ -4,6 +4,23 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-14 23:35 journal, hearth log and diff, learned probe deadlines (ADR-003)
+
+- Full runs of `ports` and `doctor` are recorded in hearth's journal: `$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`, created mode 0700.
+  - One JSON file per snapshot, written to a temporary file and renamed, so concurrent runs are safe.
+  - `state.max_snapshots_per_kind` are kept per kind.
+- `hearth log`: snapshots newest first, each with a one-line summary.
+- `hearth diff`:
+  - ports: listeners that appeared or vanished, runtimes that restarted, stopped answering or changed models or health, and footprint movement;
+  - doctor: pressure changes, available memory, swap, kernel-wide and per-process open files, threads and `CLOSE_WAIT`.
+  - Snapshots are referenced by id or `~N`.
+  - `--limit` applies per unit.
+- MCP tools `log` and `diff`. Snapshot references from clients are validated before they reach the file system.
+- `ports` learns each program's probe deadline from its recorded answers. A runtime that misses its learned deadline is asked again, then reported `slow`. Every port reports its `deadline` and its source.
+  - New `[discovery]` knobs: `learned_deadline_multiplier`, `learned_min_samples` and `learned_deadline_floor_ms`.
+  - Answer times are now microseconds (`latency_us`).
+- Configuration values that parse but mean nothing (multiplier below 1, zero samples, zero retention, floor above timeout) are rejected with the key and the reason.
+
 ### 2026-10-14 22:46 hearth ports, layered config (ADR-002)
 
 - `hearth ports` and MCP `ports`: every listening TCP port with its process, identified by what answers there.
