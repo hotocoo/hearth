@@ -129,6 +129,7 @@ fn settings() -> Settings {
         ready_timeout: Duration::from_secs(30),
         stop_grace: Duration::from_millis(500),
         unresponsive_probes: 2,
+        output_lines: 50,
     }
 }
 

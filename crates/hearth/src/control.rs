@@ -151,6 +151,12 @@ pub struct RestartArgs {
     server: String,
 }
 
+#[derive(clap::Args)]
+pub struct LogsArgs {
+    /// Name of the server, as in `[servers.NAME]`.
+    server: String,
+}
+
 /// Text from hearthd without control characters, so nothing it says can
 /// steer the terminal.
 fn printable(v: &Value) -> String {
@@ -186,14 +192,37 @@ pub fn status(_: &StatusArgs, json: bool) -> Result<String, String> {
     Ok(out)
 }
 
-pub fn restart(args: &RestartArgs, json: bool) -> Result<String, String> {
-    let answer = call(&json!({ "op": "restart", "server": args.server }))?;
+/// Sends `op` (`restart`, `stop` or `start`) for one server.
+pub fn order(op: &str, args: &RestartArgs, json: bool) -> Result<String, String> {
+    let answer = call(&json!({ "op": op, "server": args.server }))?;
     if json {
-        crate::to_json(&answer)
-    } else {
-        Ok(format!(
+        return crate::to_json(&answer);
+    }
+    Ok(match op {
+        "stop" => format!(
+            "stop of {} requested; it stays down until `hearth start {}`\n",
+            args.server, args.server
+        ),
+        "start" => format!(
+            "start of {} requested; `hearth status` shows it come up\n",
+            args.server
+        ),
+        _ => format!(
             "restart of {} requested; `hearth status` shows it come back\n",
             args.server
-        ))
+        ),
+    })
+}
+
+/// The server's last lines of output, as hearthd kept them.
+pub fn logs(args: &LogsArgs, json: bool) -> Result<String, String> {
+    let answer = call(&json!({ "op": "logs", "server": args.server }))?;
+    if json {
+        return crate::to_json(&answer);
     }
+    let mut out = String::new();
+    for line in answer["lines"].as_array().into_iter().flatten() {
+        let _ = writeln!(out, "{}", printable(line));
+    }
+    Ok(out)
 }

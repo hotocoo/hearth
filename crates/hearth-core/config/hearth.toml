@@ -74,6 +74,10 @@ stop_grace_ms = 5000
 probe_interval_ms = 1000
 unresponsive_probes = 3
 
+# Lines of each server's own output hearthd keeps, for `hearth logs NAME`
+# and the MCP tool `logs`: enough to see why it failed, not a log archive.
+output_lines = 200
+
 [notify]
 # Who hears about a server hearth gave up on, one it found wedged, or one
 # whose backend poisoned itself. Both channels are off by default.

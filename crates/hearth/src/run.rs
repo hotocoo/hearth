@@ -51,6 +51,7 @@ pub(crate) fn settings(c: &hearth_core::config::Supervise) -> Settings {
         ready_timeout: ms(c.ready_timeout_ms),
         stop_grace: ms(c.stop_grace_ms),
         unresponsive_probes: c.unresponsive_probes,
+        output_lines: c.output_lines,
     }
 }
 
@@ -91,7 +92,8 @@ pub(crate) fn alarming(event: &Event) -> bool {
         Event::Started { .. }
         | Event::Ready { .. }
         | Event::Noticed { .. }
-        | Event::Requested { .. } => false,
+        | Event::Requested { .. }
+        | Event::Halted { .. } => false,
     }
 }
 
@@ -204,6 +206,10 @@ pub(crate) fn describe(event: &Event) -> String {
             next(decision)
         ),
         Event::Noticed { signal, line } => format!("noticed {}: {line}", json(signal)),
+        Event::Halted { stop_error } => format!(
+            "stopped on request{}; stays down until started",
+            stopping(stop_error.as_ref())
+        ),
         Event::Requested { stop_error } => format!(
             "restart requested; stopped{}; starting again",
             stopping(stop_error.as_ref())

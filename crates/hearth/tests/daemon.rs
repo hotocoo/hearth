@@ -14,6 +14,7 @@ use serde_json::Value;
 
 const SERVER: &str = r#"
 import sys, json
+print("e2e server starting", flush=True)
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -147,6 +148,26 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
             .contains("no server named"),
         "unknown names are refused"
     );
+
+    // Stopped on request it stays down, and frees its port; started, it
+    // comes back.
+    hearth(&dir, &["stop", "e2e"]).unwrap();
+    wait_until("stopped", || {
+        state(&dir).is_some_and(|(s, _)| s == "stopped") && !listening(port)
+    });
+    hearth(&dir, &["start", "e2e"]).unwrap();
+    wait_until("ready again", || {
+        state(&dir).is_some_and(|(s, _)| s == "ready")
+    });
+    // What the server printed is kept, across its restarts.
+    let logs = hearth(&dir, &["logs", "e2e"]).unwrap();
+    let starts = logs["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l.as_str() == Some("e2e server starting"))
+        .count();
+    assert!(starts >= 2, "{logs}");
 
     // hearthd watches the machine too, so a second watcher is refused.
     assert!(

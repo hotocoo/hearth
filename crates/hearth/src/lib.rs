@@ -77,6 +77,16 @@ enum Command {
     /// not charged).
     #[cfg(unix)]
     Restart(control::RestartArgs),
+    /// Ask hearthd to stop one of its servers and keep it down, to free its
+    /// memory, until `hearth start`.
+    #[cfg(unix)]
+    Stop(control::RestartArgs),
+    /// Ask hearthd to start a server it stopped or gave up on.
+    #[cfg(unix)]
+    Start(control::RestartArgs),
+    /// The last lines one of hearthd's servers printed.
+    #[cfg(unix)]
+    Logs(control::LogsArgs),
     /// Run hearthd at login under launchd (macOS) or a systemd user unit
     /// (Linux): install, uninstall, or show the unit.
     #[cfg(unix)]
@@ -107,7 +117,13 @@ fn execute(cli: &Cli) -> Result<String, String> {
         #[cfg(unix)]
         Command::Status(args) => control::status(args, cli.json),
         #[cfg(unix)]
-        Command::Restart(args) => control::restart(args, cli.json),
+        Command::Restart(args) => control::order("restart", args, cli.json),
+        #[cfg(unix)]
+        Command::Stop(args) => control::order("stop", args, cli.json),
+        #[cfg(unix)]
+        Command::Start(args) => control::order("start", args, cli.json),
+        #[cfg(unix)]
+        Command::Logs(args) => control::logs(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }

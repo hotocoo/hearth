@@ -44,6 +44,17 @@ struct Status {
 
 enum Order {
     Restart,
+    Stop,
+    Start,
+}
+
+/// Each server's recent output, readable while its thread supervises it.
+type Outputs = BTreeMap<String, hearth_runtime::supervise::Output>;
+
+/// What control requests reach: each server's order queue and output.
+struct Desk {
+    orders: BTreeMap<String, SyncSender<Order>>,
+    outputs: Outputs,
 }
 
 type Board = Arc<Mutex<BTreeMap<String, Status>>>;
@@ -127,9 +138,11 @@ fn supervise(
     config: &Config,
     board: &Board,
     orders: &Receiver<Order>,
+    output: hearth_runtime::supervise::Output,
 ) {
     let _watchman = Watchman { board, name };
-    let mut supervised = supervised(server, config);
+    let mut supervised = supervised(server, config).sharing_output(output);
+    let mut halted = false;
     let journal = Journal::open(config.state.max_snapshots_per_kind)
         .map_err(|e| log(&format!("[{name}] events will not be recorded: {e}")))
         .ok();
@@ -139,13 +152,26 @@ fn supervise(
         let mut events = Vec::new();
         match orders.recv_timeout(interval) {
             Ok(Order::Restart) => {
+                halted = false;
                 events.push(supervised.restart());
                 events.extend(supervised.poll());
             }
+            Ok(Order::Start) if halted || supervised.gave_up() => {
+                halted = false;
+                events.push(supervised.restart());
+                events.extend(supervised.poll());
+            }
+            Ok(Order::Stop) if !halted => {
+                halted = true;
+                events.push(supervised.halt());
+            }
+            // Starting what runs, or stopping what is stopped: nothing to do.
+            Ok(Order::Start | Order::Stop) => {}
             Err(RecvTimeoutError::Timeout) => events.extend(supervised.poll()),
             Err(RecvTimeoutError::Disconnected) => return,
         }
         let (state, pid) = supervised.status();
+        let state = if halted { "stopped" } else { state };
         let restarts = supervised.restarts();
         update(board, name, |s| {
             s.state = state.to_string();
@@ -176,7 +202,12 @@ fn supervise(
     }
 }
 
-fn answer(request: &str, board: &Board, orders: &BTreeMap<String, SyncSender<Order>>) -> Value {
+fn answer(
+    request: &str,
+    board: &Board,
+    orders: &BTreeMap<String, SyncSender<Order>>,
+    outputs: &Outputs,
+) -> Value {
     let Ok(request) = serde_json::from_str::<Value>(request) else {
         return json!({ "error": "not a JSON request" });
     };
@@ -185,36 +216,55 @@ fn answer(request: &str, board: &Board, orders: &BTreeMap<String, SyncSender<Ord
             let servers: Vec<Status> = lock(board).values().cloned().collect();
             json!({ "servers": servers })
         }
-        Some("restart") => {
+        Some(op @ ("restart" | "stop" | "start")) => {
             let name = request["server"].as_str().unwrap_or_default();
+            let order = match op {
+                "stop" => Order::Stop,
+                "start" => Order::Start,
+                _ => Order::Restart,
+            };
             // One pending order per server: asking again before it is acted
-            // on changes nothing, and cannot keep a server down.
-            match orders.get(name).map(|tx| tx.try_send(Order::Restart)) {
-                Some(Ok(()) | Err(TrySendError::Full(_))) => json!({ "requested": name }),
+            // on changes nothing.
+            match orders.get(name).map(|tx| tx.try_send(order)) {
+                Some(Ok(()) | Err(TrySendError::Full(_))) => {
+                    json!({ "requested": op, "server": name })
+                }
                 Some(Err(TrySendError::Disconnected(_))) => {
                     json!({ "error": format!("{name} is no longer supervised") })
                 }
-                None => json!({
-                    "error": format!("no server named {name:?}; hearth status lists them"),
-                }),
+                None => unknown(name),
             }
         }
-        _ => json!({ "error": "op must be status or restart" }),
+        Some("logs") => {
+            let name = request["server"].as_str().unwrap_or_default();
+            match outputs.get(name) {
+                Some(output) => {
+                    let lines: Vec<String> = output
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .iter()
+                        .cloned()
+                        .collect();
+                    json!({ "server": name, "lines": lines })
+                }
+                None => unknown(name),
+            }
+        }
+        _ => json!({ "error": "op must be status, restart, stop, start or logs" }),
     }
+}
+
+fn unknown(name: &str) -> Value {
+    json!({ "error": format!("no server named {name:?}; hearth status lists them") })
 }
 
 /// Answers one client. The deadline bounds how long a stalled client can
 /// hold its handler.
-fn serve(
-    stream: &UnixStream,
-    config: &Config,
-    board: &Board,
-    orders: &BTreeMap<String, SyncSender<Order>>,
-) {
+fn serve(stream: &UnixStream, config: &Config, board: &Board, desk: &Desk) {
     let deadline = Instant::now() + Duration::from_millis(config.control.timeout_ms);
     let reply = match crate::control::read_line(stream, config.control.max_message_bytes, deadline)
     {
-        Ok(line) => answer(&line, board, orders),
+        Ok(line) => answer(&line, board, &desk.orders, &desk.outputs),
         Err(e) => json!({ "error": format!("bad request: {e}") }),
     };
     if let Err(e) = crate::control::write_line(stream, &reply.to_string(), deadline) {
@@ -238,7 +288,7 @@ fn handle(
     stream: UnixStream,
     config: &Arc<Config>,
     board: &Board,
-    orders: &Arc<BTreeMap<String, SyncSender<Order>>>,
+    desk: &Arc<Desk>,
     busy: &Arc<AtomicU64>,
 ) {
     let deadline = Instant::now() + Duration::from_millis(config.control.timeout_ms);
@@ -253,14 +303,13 @@ fn handle(
         refuse(&format!("{} clients at once", config.control.max_clients));
         return;
     }
-    let (config, board, orders, done) =
-        (config.clone(), board.clone(), orders.clone(), busy.clone());
+    let (config, board, desk, done) = (config.clone(), board.clone(), desk.clone(), busy.clone());
     let spawned = std::thread::Builder::new()
         .name("control".into())
         .spawn(move || {
             // Frees the slot however serve ends, a panic included.
             let _slot = Slot(&done);
-            serve(&stream, &config, &board, &orders);
+            serve(&stream, &config, &board, &desk);
         });
     if let Err(e) = spawned {
         busy.fetch_sub(1, Ordering::SeqCst);
@@ -349,6 +398,7 @@ pub fn run() -> Result<(), String> {
     let (listener, _held) = bind()?;
     let board: Board = Arc::default();
     let mut orders = BTreeMap::new();
+    let mut outputs = Outputs::new();
     for (name, server) in &config.servers {
         lock(&board).insert(
             name.clone(),
@@ -366,11 +416,13 @@ pub fn run() -> Result<(), String> {
         );
         let (tx, rx) = sync_channel(1);
         orders.insert(name.clone(), tx);
+        let output = hearth_runtime::supervise::Output::default();
+        outputs.insert(name.clone(), output.clone());
         let (name, server, config, board) =
             (name.clone(), server.clone(), config.clone(), board.clone());
         std::thread::Builder::new()
             .name(format!("supervise {name}"))
-            .spawn(move || supervise(&name, &server, &config, &board, &rx))
+            .spawn(move || supervise(&name, &server, &config, &board, &rx, output))
             .map_err(|e| format!("cannot start supervising: {e}"))?;
     }
     if config.watch.in_hearthd {
@@ -386,11 +438,11 @@ pub fn run() -> Result<(), String> {
         crate::control::socket_path()?.display()
     ));
     let pause = Duration::from_millis(config.control.timeout_ms);
-    let (config, orders) = (Arc::new(config), Arc::new(orders));
+    let (config, desk) = (Arc::new(config), Arc::new(Desk { orders, outputs }));
     let busy = Arc::new(AtomicU64::new(0));
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => handle(stream, &config, &board, &orders, &busy),
+            Ok(stream) => handle(stream, &config, &board, &desk, &busy),
             Err(e) => {
                 // Out of descriptors, typically: say so, and do not spin.
                 log(&format!("control socket: {e}"));

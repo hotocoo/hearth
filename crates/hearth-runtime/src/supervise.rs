@@ -258,6 +258,8 @@ pub struct Settings {
     /// Consecutive probes of a ready server that find it not serving before
     /// it is stopped.
     pub unresponsive_probes: u32,
+    /// Lines of the server's output kept for [`Supervised::recent_output`].
+    pub output_lines: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -325,6 +327,10 @@ pub enum Event {
     Requested {
         stop_error: Option<String>,
     },
+    /// Stopped because someone asked; it stays down until started again.
+    Halted {
+        stop_error: Option<String>,
+    },
     /// The operating system could not say whether the server still runs; it
     /// was stopped.
     Lost {
@@ -363,7 +369,12 @@ pub struct Supervised {
     state: State,
     /// Signals read from the running server's output.
     signals: Option<Receiver<(Signal, String)>>,
+    /// The last lines the server (and the servers before it) printed.
+    output: Output,
 }
+
+/// The most recent lines of output, shared with the threads reading it.
+pub type Output = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>;
 
 impl Supervised {
     #[must_use]
@@ -383,6 +394,7 @@ impl Supervised {
             epoch: now,
             state: State::Waiting { until: now },
             signals: None,
+            output: Output::default(),
         }
     }
 
@@ -525,11 +537,12 @@ impl Supervised {
             Ok(mut child) => {
                 let pid = child.id();
                 let (tx, rx) = channel();
+                let keep = (self.output.clone(), self.settings.output_lines);
                 if let Some(out) = child.stdout.take() {
-                    watch(out, tx.clone());
+                    watch(out, tx.clone(), keep.clone());
                 }
                 if let Some(err) = child.stderr.take() {
-                    watch(err, tx);
+                    watch(err, tx, keep);
                 }
                 self.signals = Some(rx);
                 self.state = State::Starting {
@@ -594,6 +607,32 @@ impl Supervised {
         }
     }
 
+    /// Keeps the server's output in `output`, which the caller can read from
+    /// another thread.
+    #[must_use]
+    pub fn sharing_output(mut self, output: Output) -> Self {
+        self.output = output;
+        self
+    }
+
+    /// Stops the server on request; it stays down until [`Self::restart`].
+    pub fn halt(&mut self) -> Event {
+        Event::Halted {
+            stop_error: self.stop().err(),
+        }
+    }
+
+    /// The last lines the server printed, oldest first, across restarts.
+    #[must_use]
+    pub fn recent_output(&self) -> Vec<String> {
+        self.output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     /// Where the server is in its life, and its pid when one runs.
     #[must_use]
     pub fn status(&self) -> (&'static str, Option<u32>) {
@@ -633,7 +672,11 @@ impl Supervised {
 /// Passes the server's output on to hearth's stderr line by line, and sends
 /// every line that carries a signal. Ends when the server's group closes the
 /// stream.
-fn watch<R: Read + Send + 'static>(stream: R, signals: Sender<(Signal, String)>) {
+fn watch<R: Read + Send + 'static>(
+    stream: R,
+    signals: Sender<(Signal, String)>,
+    (output, keep): (Output, usize),
+) {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
         let mut line = Vec::new();
@@ -646,6 +689,15 @@ fn watch<R: Read + Send + 'static>(stream: R, signals: Sender<(Signal, String)>)
             // A closed stderr leaves the log unseen, never the server unwatched.
             let _ = std::io::stderr().write_all(&line);
             let text = String::from_utf8_lossy(&line);
+            {
+                let mut kept = output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                kept.push_back(text.trim_end().to_string());
+                while kept.len() > keep {
+                    kept.pop_front();
+                }
+            }
             if let Some(signal) = classify(&text) {
                 // Fails only once the supervisor has moved on to another
                 // server; this one's output is still passed on until it closes.

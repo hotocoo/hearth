@@ -47,7 +47,11 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
 - `status`: each server's name, address, expected model, program, state (`starting`, `ready`, `waiting`, `gave_up`), pid, restart count and last event.
 - `restart NAME`: stop and start again at once, without charging the restart budget, because a person asking is not a crash. It also revives a server hearthd gave up on. Unknown names are refused. At most one order is pending per server, so repeated requests cannot hold a server down.
 
-`hearth status`, `hearth restart NAME` and the MCP tools `status` and `restart` are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
+- `stop NAME`: stop the server and keep it down, to free its memory, until `start NAME`. A stop is not a failure: nothing is restarted, charged or notified, and status shows `stopped`.
+- `start NAME`: start a stopped server, or one hearthd gave up on. Starting one that runs does nothing.
+- `logs NAME`: the last `supervise.output_lines` lines the server printed on stdout and stderr, across restarts. These are what explain a load failure, and agents should not have to hunt for log files to find them.
+
+`hearth status`, `hearth restart|stop|start|logs NAME` and the MCP tools of the same names are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
 
 A socket path longer than the platform allows (about a hundred bytes) is reported with its length and the fix (`HEARTH_STATE`), not the kernel's bare `SUN_LEN`.
 
