@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:52 hearth tag
+
+- `hearth tag NAME` names the latest snapshot of each kind. Tagged snapshots are never pruned, and the name works wherever a snapshot is asked for: `hearth diff --from healthy`, `hearth show healthy`.
+- `hearth tag` lists tags; `--delete` removes one.
+- MCP tool `tag`. The `what-changed` workflow compares against a tag.
+
 ### 2026-10-15 01:48 hearth stop, start and logs
 
 - `hearth stop NAME` stops a hearthd server and keeps it down, freeing its memory, until `hearth start NAME`. `start` also revives a server hearthd gave up on.
