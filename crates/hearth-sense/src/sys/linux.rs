@@ -94,13 +94,13 @@ fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> Cgroup {
                         .and_then(|v| v.trim().parse().ok())
                 })
                 .unwrap_or(0);
-            let room = max
+            let headroom = max
                 .saturating_sub(current)
                 .saturating_add(inactive)
                 .min(max);
             out.max = Some(out.max.map_or(max, |m| m.min(max)));
-            if out.available.is_none_or(|a| room < a) {
-                out.available = Some(room);
+            if out.available.is_none_or(|a| headroom < a) {
+                out.available = Some(headroom);
                 out.current = Some(current);
                 let psi = path.join("memory.pressure");
                 out.pressure = psi.is_file().then_some(psi);
