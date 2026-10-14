@@ -195,3 +195,9 @@ A sliding window without `layer_types` or a pattern is costed as full attention 
 
 On `--port` with an OpenAI-compatible server, the `--model` the server was started with wins over its `/v1/models` listing, because `mlx_lm.server` lists the models in the cache, not the one it serves.
 
+## Addendum (2026-10-15): compute buffers learned from starts
+
+A fit used to leave out the runtime's compute buffers, because no file states them. llama.cpp logs them as it loads ("llama_context: Metal compute buffer size = N MiB"), next to its model and KV buffers. The supervisor sums those lines for each start, and the `ready` event carries them in the run journal.
+
+`fit` looks in the run journal for the latest ready event of the same model file at the same total context (`n_ctx` × slots). When it finds one, it adds those compute bytes to the total, the device check, the largest context and the cache-type alternatives, and names the event in a note. A start at another context is reported in a note but not counted, because compute buffers depend on the batch and context settings. A measured value replaces the estimate, so `excludes` disappears from the report.
+

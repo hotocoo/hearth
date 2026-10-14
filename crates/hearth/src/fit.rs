@@ -68,8 +68,14 @@ struct Report {
     cache_type_k: &'static str,
     cache_type_v: &'static str,
     kv_bytes: u64,
+    /// The compute buffers llama.cpp logged when hearth last started this
+    /// model at this context (`hearth run`, hearthd); counted in the total.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compute_bytes: Option<u64>,
     total_bytes: u64,
-    excludes: &'static str,
+    /// What the total leaves out, if anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    excludes: Option<&'static str>,
     geometry: Geometry,
     ceiling: Option<Ceiling>,
     available_bytes: u64,
@@ -338,6 +344,74 @@ fn alternatives(
         .collect()
 }
 
+/// The compute buffers llama.cpp logged the last time hearth started this
+/// model at `ctx` tokens, from the run journal's ready events, and a note
+/// saying where the number came from (or why none was used).
+fn measured_compute(model: &Path, ctx: u64) -> (Option<u64>, Option<String>) {
+    match hearth_core::config::load()
+        .map_err(|e| e.to_string())
+        .and_then(|c| hearth_core::state::Journal::open(&c.state).map_err(|e| e.to_string()))
+    {
+        Ok(journal) => measured_compute_in(&journal, model, ctx),
+        Err(e) => (
+            None,
+            Some(format!("no journal to learn compute buffers from: {e}")),
+        ),
+    }
+}
+
+fn measured_compute_in(
+    journal: &hearth_core::state::Journal,
+    model: &Path,
+    ctx: u64,
+) -> (Option<u64>, Option<String>) {
+    let same = |logged: &str| {
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        canon(Path::new(logged)) == canon(model)
+    };
+    let ids = match journal.ids(crate::run::KIND) {
+        Ok(ids) => ids,
+        Err(e) => return (None, Some(format!("run journal unreadable: {e}"))),
+    };
+    let mut elsewhere = None;
+    for id in ids.iter().rev() {
+        let Ok(s) = journal.read(id) else { continue };
+        let event = &s.body["event"];
+        let (Some(compute), Some(logged)) = (
+            event["buffers"]["compute_bytes"].as_u64(),
+            event["identity"]["model"].as_str(),
+        ) else {
+            continue;
+        };
+        if !same(logged) {
+            continue;
+        }
+        let identity = &event["identity"];
+        let at = identity["n_ctx"]
+            .as_u64()
+            .map(|n| n.saturating_mul(identity["slots"].as_u64().unwrap_or(1).max(1)));
+        if at == Some(ctx) {
+            return (
+                Some(compute),
+                Some(format!(
+                    "compute buffers {} as llama.cpp logged them when hearth started this model at this context ({})",
+                    bytes(compute),
+                    s.id
+                )),
+            );
+        }
+        elsewhere.get_or_insert((compute, at, s.id));
+    }
+    let note = elsewhere.map(|(compute, at, id)| {
+        format!(
+            "compute buffers were {} at {} tokens ({id}); not counted at another context",
+            bytes(compute),
+            at.map_or_else(|| "an unknown context".to_string(), |n| n.to_string())
+        )
+    });
+    (None, note)
+}
+
 /// The key and value cache types: as given, else the server's own.
 fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), String> {
     if let Some(k) = args.cache_type {
@@ -464,7 +538,11 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .zip(args.ubatch)
         .map(|(sequences, ubatch)| Swa { sequences, ubatch });
     let kv_bytes = geometry.kv_bytes(ctx, k, v, swa);
-    let total_bytes = weights_bytes + kv_bytes;
+    let (compute_bytes, compute_note) = measured_compute(&model, ctx);
+    // What does not grow with the context: the weights, and the compute
+    // buffers when a start of this model at this context logged them.
+    let fixed = weights_bytes.saturating_add(compute_bytes.unwrap_or(0));
+    let total_bytes = fixed.saturating_add(kv_bytes);
 
     let host = crate::pressure::host_memory()?;
     let ceiling = device_ceiling()?;
@@ -483,11 +561,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     // largest useful context is capped there even when memory allows more.
     let max_ctx = |budget: u64| {
         budget
-            .checked_sub(weights_bytes)
+            .checked_sub(fixed)
             .and_then(|left| geometry.max_tokens(left, k, v, swa))
             .map(|n| geometry.trained_context.map_or(n, |t| n.min(t)))
     };
     let mut notes = geometry.notes.clone();
+    notes.extend(compute_note);
     if let Some(trained) = geometry.trained_context
         && ctx > trained
     {
@@ -519,13 +598,18 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         cache_type_v: v.name(),
         kv_bytes,
         total_bytes,
-        excludes: "runtime compute buffers (known after the model's first load)",
+        compute_bytes,
+        excludes: if compute_bytes.is_some() {
+            None
+        } else {
+            Some("runtime compute buffers (known after the model's first load)")
+        },
         fits_device: ceiling.as_ref().map(|c| total_bytes <= c.bytes),
         max_ctx_device: ceiling.as_ref().and_then(|c| max_ctx(c.bytes)),
-        fits_device_with: alternatives(ceiling.as_ref(), total_bytes, weights_bytes, |t| {
+        fits_device_with: alternatives(ceiling.as_ref(), total_bytes, fixed, |t| {
             geometry.kv_bytes(ctx, t, t, swa)
         }),
-        fits_device_with_values: alternatives(ceiling.as_ref(), total_bytes, weights_bytes, |t| {
+        fits_device_with_values: alternatives(ceiling.as_ref(), total_bytes, fixed, |t| {
             geometry.kv_bytes(ctx, k, t, swa)
         })
         .into_iter()
@@ -598,14 +682,17 @@ fn render(r: &Report) -> String {
     );
     let _ = writeln!(
         out,
-        "weights {} + KV {} at {} tokens ({}/{}) = {} (excludes {})",
+        "weights {} + KV {} at {} tokens ({}/{}){} = {}{}",
         bytes(r.weights_bytes),
         bytes(r.kv_bytes),
         r.ctx,
         r.cache_type_k,
         r.cache_type_v,
+        r.compute_bytes
+            .map_or_else(String::new, |c| format!(" + compute {}", bytes(c))),
         bytes(r.total_bytes),
         r.excludes
+            .map_or_else(String::new, |e| format!(" (excludes {e})"))
     );
     match (&r.ceiling, r.fits_device) {
         (Some(c), Some(fits)) => {
@@ -964,6 +1051,32 @@ mod port_tests {
         assert_eq!(dtype_cache_type(&dir), Some(CacheType::Bf16));
         std::fs::write(dir.join("config.json"), r#"{"torch_dtype":"float16"}"#).unwrap();
         assert_eq!(dtype_cache_type(&dir), Some(CacheType::F16));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn compute_buffers_are_learned_from_a_ready_event_at_the_same_context() {
+        let dir = std::env::temp_dir().join(format!("hearth-compute-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let journal = hearth_core::state::Journal::at(dir.clone(), 10).unwrap();
+        let ready = |n_ctx: u64, compute: u64| {
+            serde_json::json!({"event": {"event": "ready",
+                "identity": {"kind": "llama_cpp", "model": "/m/q.gguf", "n_ctx": n_ctx, "slots": 2},
+                "buffers": {"model_bytes": 1, "kv_bytes": 1, "compute_bytes": compute}}})
+        };
+        let model = Path::new("/m/q.gguf");
+        assert_eq!(measured_compute_in(&journal, model, 8192), (None, None));
+        journal.record(crate::run::KIND, &ready(4096, 300)).unwrap();
+        journal.record(crate::run::KIND, &ready(1024, 100)).unwrap();
+        // 4096 per slot × 2 slots.
+        assert_eq!(measured_compute_in(&journal, model, 8192).0, Some(300));
+        let (learned, note) = measured_compute_in(&journal, model, 4096);
+        assert_eq!(learned, None);
+        assert!(note.unwrap().contains("2048 tokens"));
+        assert_eq!(
+            measured_compute_in(&journal, Path::new("/other.gguf"), 8192),
+            (None, None)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

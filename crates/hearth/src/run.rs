@@ -174,9 +174,14 @@ pub(crate) fn describe(event: &Event) -> String {
             pid,
             after_ms,
             identity,
+            buffers,
         } => format!(
-            "pid {pid} ready after {after_ms} ms, serving {}",
-            identity.models().join(", ")
+            "pid {pid} ready after {after_ms} ms, serving {}{}",
+            identity.models().join(", "),
+            buffers.map_or_else(String::new, |b| format!(
+                " (compute buffers {})",
+                crate::units::bytes(b.compute_bytes)
+            ))
         ),
         Event::Exited {
             code,
