@@ -6,12 +6,15 @@
 //! guessed.
 
 pub mod gguf;
+pub mod incidents;
 pub mod kv;
 mod sys;
 
 use serde::Serialize;
 
-pub use sys::{accelerators, host_memory, list_processes, process_footprint};
+pub use sys::{
+    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SenseError {
@@ -141,6 +144,76 @@ pub struct Accelerator {
     /// `iogpu.wired_limit_mb` when an override is set; `None` means the kernel
     /// default applies.
     pub wired_limit_bytes: Option<u64>,
+}
+
+/// Kernel-wide limits and usage for the resources that, when exhausted, take
+/// the whole machine down rather than one process.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SystemLimits {
+    pub files_open: Option<u64>,
+    pub files_max: Option<u64>,
+    pub files_per_process_max: Option<u64>,
+    pub threads_max: Option<u64>,
+    pub threads_per_process_max: Option<u64>,
+    pub processes_max: Option<u64>,
+}
+
+/// Open files and threads held by one process. `None` when the OS does not
+/// let this user inspect it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessCounts {
+    pub pid: i32,
+    pub open_files: Option<u64>,
+    pub threads: Option<u64>,
+}
+
+/// One snapshot of everything `hearth doctor` reasons about.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoxHealth {
+    pub memory: HostMemory,
+    pub limits: SystemLimits,
+    pub processes: Vec<ProcessLoad>,
+    /// Sum over processes this user could inspect.
+    pub threads_counted: u64,
+    /// Processes whose counts could not be read (other users, exited).
+    pub uninspectable: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessLoad {
+    pub pid: i32,
+    pub name: String,
+    pub open_files: Option<u64>,
+    pub threads: Option<u64>,
+}
+
+pub fn box_health() -> Result<BoxHealth> {
+    let memory = host_memory()?;
+    let limits = system_limits()?;
+    let mut uninspectable = 0;
+    let processes: Vec<ProcessLoad> = list_processes()?
+        .into_iter()
+        .map(|p| {
+            let counts = process_counts(p.pid).ok();
+            if counts.as_ref().is_none_or(|c| c.threads.is_none()) {
+                uninspectable += 1;
+            }
+            ProcessLoad {
+                pid: p.pid,
+                name: p.name,
+                open_files: counts.as_ref().and_then(|c| c.open_files),
+                threads: counts.and_then(|c| c.threads),
+            }
+        })
+        .collect();
+    let threads_counted = processes.iter().filter_map(|p| p.threads).sum();
+    Ok(BoxHealth {
+        memory,
+        limits,
+        processes,
+        threads_counted,
+        uninspectable,
+    })
 }
 
 pub(crate) fn now_ms() -> u64 {

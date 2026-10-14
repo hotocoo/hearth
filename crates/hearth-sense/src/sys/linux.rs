@@ -4,8 +4,8 @@
 use std::fs;
 
 use crate::{
-    Accelerator, HostMemory, LinuxMem, ProcessEntry, ProcessFootprint, RawHost, Result, SenseError,
-    now_ms,
+    Accelerator, HostMemory, LinuxMem, ProcessCounts, ProcessEntry, ProcessFootprint, RawHost,
+    Result, SenseError, SystemLimits, now_ms,
 };
 
 /// Parses `Key:   123 kB` lines into bytes.
@@ -146,6 +146,46 @@ pub fn accelerators() -> Result<Vec<Accelerator>> {
     Ok(Vec::new())
 }
 
+fn read_u64(path: &str) -> Option<u64> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+pub fn system_limits() -> Result<SystemLimits> {
+    // file-nr: allocated, allocated-but-unused, maximum.
+    let file_nr: Vec<u64> = fs::read_to_string("/proc/sys/fs/file-nr")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|f| f.parse().ok())
+        .collect();
+    Ok(SystemLimits {
+        files_open: file_nr.first().zip(file_nr.get(1)).map(|(a, u)| a - u),
+        files_max: file_nr.get(2).copied(),
+        files_per_process_max: read_u64("/proc/sys/fs/nr_open"),
+        threads_max: read_u64("/proc/sys/kernel/threads-max"),
+        // Linux bounds threads per process only through threads-max and
+        // RLIMIT_NPROC, which is per user, not per process.
+        threads_per_process_max: None,
+        processes_max: read_u64("/proc/sys/kernel/pid_max"),
+    })
+}
+
+pub fn process_counts(pid: i32) -> Result<ProcessCounts> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => SenseError::NoProcess(pid),
+        _ => SenseError::Os {
+            call: "read status",
+            detail: e.to_string(),
+        },
+    })?;
+    Ok(ProcessCounts {
+        pid,
+        open_files: fs::read_dir(format!("/proc/{pid}/fd"))
+            .ok()
+            .map(|d| d.count() as u64),
+        threads: kb_field(&status, "Threads"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +210,15 @@ mod tests {
     fn live_host_reading_is_plausible() {
         let host = host_memory().unwrap();
         assert!(host.available_bytes <= host.total_bytes);
+    }
+
+    #[test]
+    fn live_own_counts_and_limits() {
+        let me = process_counts(std::process::id().cast_signed()).unwrap();
+        assert!(me.open_files.unwrap() >= 3);
+        assert!(me.threads.unwrap() >= 1);
+        let limits = system_limits().unwrap();
+        assert!(limits.files_open.unwrap() <= limits.files_max.unwrap());
     }
 
     #[test]

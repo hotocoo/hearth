@@ -1,0 +1,18 @@
+[package]
+name = "hearth"
+description = "CLI for the hearth local inference control plane: doctor, incidents, fit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+hearth-sense = { path = "../hearth-sense", version = "0.0.1" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

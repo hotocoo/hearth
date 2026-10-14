@@ -1,16 +1,23 @@
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::{accelerators, host_memory, list_processes, process_footprint};
+pub use macos::{
+    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
+};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::{accelerators, host_memory, list_processes, process_footprint};
+pub use linux::{
+    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
+};
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported {
-    use crate::{Accelerator, HostMemory, ProcessEntry, ProcessFootprint, Result, SenseError};
+    use crate::{
+        Accelerator, HostMemory, ProcessCounts, ProcessEntry, ProcessFootprint, Result, SenseError,
+        SystemLimits,
+    };
 
     pub fn host_memory() -> Result<HostMemory> {
         Err(SenseError::Unsupported("host memory"))
@@ -24,6 +31,14 @@ mod unsupported {
     pub fn accelerators() -> Result<Vec<Accelerator>> {
         Err(SenseError::Unsupported("accelerators"))
     }
+    pub fn system_limits() -> Result<SystemLimits> {
+        Err(SenseError::Unsupported("system limits"))
+    }
+    pub fn process_counts(_pid: i32) -> Result<ProcessCounts> {
+        Err(SenseError::Unsupported("process counts"))
+    }
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub use unsupported::{accelerators, host_memory, list_processes, process_footprint};
+pub use unsupported::{
+    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
+};

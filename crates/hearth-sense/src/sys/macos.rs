@@ -8,8 +8,8 @@ use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 
 use crate::{
-    Accelerator, HostMemory, MacVm, PressureLevel, ProcessEntry, ProcessFootprint, RawHost, Result,
-    SenseError, now_ms,
+    Accelerator, HostMemory, MacVm, PressureLevel, ProcessCounts, ProcessEntry, ProcessFootprint,
+    RawHost, Result, SenseError, SystemLimits, now_ms,
 };
 
 fn os_error(call: &'static str) -> SenseError {
@@ -278,6 +278,62 @@ pub fn accelerators() -> Result<Vec<Accelerator>> {
     }])
 }
 
+pub fn system_limits() -> Result<SystemLimits> {
+    Ok(SystemLimits {
+        files_open: sysctl_uint("kern.num_files").ok(),
+        files_max: sysctl_uint("kern.maxfiles").ok(),
+        files_per_process_max: sysctl_uint("kern.maxfilesperproc").ok(),
+        threads_max: sysctl_uint("kern.num_threads").ok(),
+        threads_per_process_max: sysctl_uint("kern.num_taskthreads").ok(),
+        processes_max: sysctl_uint("kern.maxproc").ok(),
+    })
+}
+
+pub fn process_counts(pid: i32) -> Result<ProcessCounts> {
+    Ok(ProcessCounts {
+        pid,
+        open_files: open_files(pid),
+        threads: threads(pid),
+    })
+}
+
+fn open_files(pid: i32) -> Option<u64> {
+    // SAFETY: a null buffer asks only for the size of the descriptor table.
+    let size =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    let size = usize::try_from(size).ok().filter(|&s| s > 0)?;
+    let entry = size_of::<libc::proc_fdinfo>();
+    let mut fds = vec![MaybeUninit::<libc::proc_fdinfo>::uninit(); size.div_ceil(entry)];
+    let cap = i32::try_from(fds.len() * entry).ok()?;
+    // SAFETY: `fds` is writable for `cap` bytes; the kernel reports how many
+    // bytes it filled and nothing is read from the buffer itself.
+    let filled =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, fds.as_mut_ptr().cast(), cap) };
+    let filled = usize::try_from(filled).ok()?;
+    u64::try_from(filled / entry).ok()
+}
+
+fn threads(pid: i32) -> Option<u64> {
+    let mut info = MaybeUninit::<libc::proc_taskinfo>::zeroed();
+    let size = i32::try_from(size_of::<libc::proc_taskinfo>()).ok()?;
+    // SAFETY: `info` is writable for exactly `size` bytes.
+    let filled = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTASKINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if filled != size {
+        return None;
+    }
+    // SAFETY: the kernel filled the whole zero-initialised struct.
+    let info = unsafe { info.assume_init() };
+    u64::try_from(info.pti_threadnum).ok()
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {}
 
@@ -338,6 +394,15 @@ mod tests {
     fn live_own_footprint_is_readable() {
         let fp = process_footprint(std::process::id().cast_signed()).unwrap();
         assert!(fp.footprint_bytes > 0);
+    }
+
+    #[test]
+    fn live_own_counts_and_limits() {
+        let me = process_counts(std::process::id().cast_signed()).unwrap();
+        assert!(me.open_files.unwrap() >= 3);
+        assert!(me.threads.unwrap() >= 1);
+        let limits = system_limits().unwrap();
+        assert!(limits.files_open.unwrap() <= limits.files_max.unwrap());
     }
 
     #[test]

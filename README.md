@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P0, feasibility gate.** Only `hearth-probe`, the measurement instrument, exists today. Nothing below the "Planned" line has shipped yet. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -42,6 +42,18 @@ Run `hearth-probe` on an Apple M4 Max (64 GiB) with no elevated privileges:
 - A package upgrade under a running server makes `proc_pidpath` fail, so processes are matched by kernel name as well as by path.
 
 The P0 gate checks, on real llama-server loads, that these signals predict what the kernel actually does: [scripts/p0-gate.sh](scripts/p0-gate.sh) records and `hearth-probe report` evaluates.
+
+## hearth CLI
+
+```sh
+cargo build --release -p hearth
+./target/release/hearth doctor              # memory, open files, threads vs kernel limits; who holds them
+./target/release/hearth doctor --watch 30   # project time to each limit from measured growth
+./target/release/hearth incidents           # kernel panics (watchdog / GPU driver / other), jetsam, stalls
+./target/release/hearth fit model.gguf --ctx 32768 --cache-type q8_0   # fits the device? fits now? max context?
+```
+
+Every command takes `--json`. Every finding carries a `remediation`. On the development machine, the first `hearth incidents` run found a kernel panic inside the GPU memory driver (`IOGPUMemory.cpp:550`), which is neither a watchdog reboot nor an OOM.
 
 ## hearth-probe
 
