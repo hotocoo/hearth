@@ -46,28 +46,58 @@ fn psi_avg10(text: &str, kind: &str) -> Option<f64> {
         .ok()
 }
 
-/// The cgroup v2 limit and usage of this process's own cgroup. `max` means no
-/// limit and is reported as `None`.
-fn cgroup_memory() -> (Option<u64>, Option<u64>) {
+/// The tightest cgroup v2 memory limit over this process: its own cgroup's
+/// and every ancestor's, since a limit on a parent slice binds too. Returns
+/// `(limit, usage, reclaimable)` of the binding level, where reclaimable is
+/// that cgroup's `inactive_file` page cache, which the kernel takes back
+/// before it fails an allocation. `max` (no limit) everywhere is `None`.
+fn cgroup_memory() -> (Option<u64>, Option<u64>, Option<u64>) {
     let Ok(cgroup) = fs::read_to_string("/proc/self/cgroup") else {
-        return (None, None);
+        return (None, None, None);
     };
     let Some(rel) = cgroup.lines().find_map(|l| l.strip_prefix("0::")) else {
-        return (None, None);
+        return (None, None, None);
     };
-    let base = format!("/sys/fs/cgroup{}", rel.trim_end_matches('/'));
-    let num = |file: &str| {
-        fs::read_to_string(format!("{base}/{file}"))
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-    };
-    (num("memory.max"), num("memory.current"))
+    let mut best: Option<(u64, u64, u64)> = None;
+    let mut path = std::path::PathBuf::from(format!("/sys/fs/cgroup{}", rel.trim_end_matches('/')));
+    loop {
+        let num = |file: &str| {
+            fs::read_to_string(path.join(file))
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+        };
+        if let (Some(max), Some(current)) = (num("memory.max"), num("memory.current")) {
+            let inactive = fs::read_to_string(path.join("memory.stat"))
+                .ok()
+                .and_then(|stat| {
+                    stat.lines()
+                        .find_map(|l| l.strip_prefix("inactive_file "))
+                        .and_then(|v| v.trim().parse().ok())
+                })
+                .unwrap_or(0);
+            let headroom = max
+                .saturating_sub(current)
+                .saturating_add(inactive)
+                .min(max);
+            if best.is_none_or(|(m, c, i)| headroom < m.saturating_sub(c).saturating_add(i).min(m))
+            {
+                best = Some((max, current, inactive));
+            }
+        }
+        if path.as_os_str() == "/sys/fs/cgroup" || !path.pop() {
+            break;
+        }
+    }
+    match best {
+        Some((max, current, inactive)) => (Some(max), Some(current), Some(inactive)),
+        None => (None, None, None),
+    }
 }
 
 pub fn host_memory() -> Result<HostMemory> {
     let meminfo = read("/proc/meminfo", "read meminfo")?;
     let psi = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
-    let (cgroup_max, cgroup_current) = cgroup_memory();
+    let (cgroup_max, cgroup_current, cgroup_reclaimable) = cgroup_memory();
     let swap_total = required(&meminfo, "SwapTotal")?;
     let raw = LinuxMem {
         mem_free: required(&meminfo, "MemFree")?,
@@ -78,10 +108,28 @@ pub fn host_memory() -> Result<HostMemory> {
         cgroup_max_bytes: cgroup_max,
         cgroup_current_bytes: cgroup_current,
     };
+    // Inside a memory-limited cgroup the limit is the machine as far as
+    // this process is concerned: both totals and availability are the
+    // smaller of the host's and the cgroup's.
+    let (host_total, host_available) = (
+        required(&meminfo, "MemTotal")?,
+        required(&meminfo, "MemAvailable")?,
+    );
+    let (total, available) = match (cgroup_max, cgroup_current) {
+        (Some(max), Some(current)) => (
+            host_total.min(max),
+            host_available.min(
+                max.saturating_sub(current)
+                    .saturating_add(cgroup_reclaimable.unwrap_or(0))
+                    .min(max),
+            ),
+        ),
+        _ => (host_total, host_available),
+    };
     Ok(HostMemory {
         taken_at_ms: now_ms(),
-        total_bytes: required(&meminfo, "MemTotal")?,
-        available_bytes: required(&meminfo, "MemAvailable")?,
+        total_bytes: total,
+        available_bytes: available,
         swap_total_bytes: swap_total,
         swap_used_bytes: swap_total.saturating_sub(required(&meminfo, "SwapFree")?),
         // Linux publishes stall percentages, not levels; see `raw`.

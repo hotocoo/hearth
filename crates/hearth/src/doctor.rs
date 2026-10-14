@@ -107,7 +107,14 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
             out.push(d(
                 "memory.available",
                 bytes(m.available_bytes),
-                "/proc/meminfo MemAvailable".into(),
+                match (l.cgroup_max_bytes, l.cgroup_current_bytes) {
+                    (Some(max), Some(current)) => format!(
+                        "the smaller of /proc/meminfo MemAvailable and the binding cgroup's limit {} - usage {} + reclaimable page cache",
+                        bytes(max),
+                        bytes(current)
+                    ),
+                    _ => "/proc/meminfo MemAvailable (no cgroup memory limit)".into(),
+                },
             ));
             out.push(d(
                 "memory.pressure",

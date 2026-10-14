@@ -41,7 +41,8 @@ pub struct HostMemory {
     pub taken_at_ms: u64,
     pub total_bytes: u64,
     /// Memory the OS reports as obtainable without swapping. On Linux this is
-    /// `MemAvailable`. On macOS it is `total - (app + wired + compressed)`, the
+    /// `MemAvailable`, or less inside a memory-limited cgroup (the tightest
+    /// limit over this process: limit - usage + reclaimable page cache). On macOS it is `total - (app + wired + compressed)`, the
     /// "Memory Used" definition Activity Monitor uses; see `raw` for inputs.
     pub available_bytes: u64,
     pub swap_total_bytes: u64,
@@ -101,6 +102,7 @@ pub struct LinuxMem {
     pub cached: u64,
     pub psi_some_avg10: Option<f64>,
     pub psi_full_avg10: Option<f64>,
+    /// The binding cgroup memory limit (own cgroup or an ancestor's).
     pub cgroup_max_bytes: Option<u64>,
     pub cgroup_current_bytes: Option<u64>,
 }
