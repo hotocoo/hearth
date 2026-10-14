@@ -4,6 +4,16 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:14 review fixes: bundle, MCP arguments, orders, tags, follow, logs
+
+- **bundle.** It no longer includes configuration error text, which quoted the offending line. A webhook token leaked through it.
+- **MCP arguments.** They are checked against the tool's schema (types, enums). Values starting with `-` stay values.
+- **hearthd orders.** The latest order wins. `start` and `restart` begin a fresh crash-loop budget.
+- **logs.** Output is bounded per line by `supervise.output_line_bytes` (new key), and answers are trimmed to fit `control.max_message_bytes`.
+- **Tags.** A corrupt tag no longer stops retention, and a tag never names a pruned snapshot.
+- **follow.** `follow --kind run` lists every event.
+- **Write errors.** Write errors other than a closed pipe exit 1.
+
 ### 2026-10-15 01:54 hearth bundle
 
 - `hearth bundle [--since T]` (MCP `bundle`) gathers doctor, ports, incidents, hearthd status, recent `run` events, tags and settings into one JSON document. A part that fails is included as its error.
