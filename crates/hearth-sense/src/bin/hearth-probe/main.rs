@@ -3,9 +3,9 @@
 //! did before any of it is trusted.
 //!
 //! ```text
-//! hearth-probe sample [--interval-ms N] [--duration-s S] [--match SUBSTR]... [--pid PID]... [--pids-from FILE] [--out FILE]
+//! hearth-probe sample --interval-ms N [--duration-s S] [--match SUBSTR]... [--pid PID]... [--pids-from FILE] [--out FILE]
 //! hearth-probe mark --out FILE LABEL [KEY=VALUE]...
-//! hearth-probe report FILE
+//! hearth-probe report FILE --criteria CRITERIA.json
 //! ```
 
 use std::collections::BTreeMap;
@@ -18,24 +18,27 @@ use serde_json::{Value, json};
 mod report;
 
 const USAGE: &str = "usage:
-  hearth-probe sample [--interval-ms N] [--duration-s S] [--match SUBSTR]... [--pid PID]... [--pids-from FILE] [--out FILE]
+  hearth-probe sample --interval-ms N [--duration-s S] [--match SUBSTR]... [--pid PID]... [--pids-from FILE] [--out FILE]
       Sample host memory and the footprint of every process whose name or executable
       path contains SUBSTR (re-resolved each tick, so restarts are followed), whose pid
       is PID, or whose pid is listed one per line in FILE (re-read each tick).
-      --interval-ms defaults to 100. Runs until --duration-s or Ctrl-C.
+      Runs until --duration-s or Ctrl-C.
   hearth-probe mark --out FILE LABEL [KEY=VALUE]...
       Append a timestamped marker line to FILE.
-  hearth-probe report FILE
-      Evaluate a scripts/p0-gate.sh recording against the P0 criteria.";
+  hearth-probe report FILE --criteria CRITERIA.json
+      Evaluate a scripts/p0-gate.sh recording against the thresholds in
+      CRITERIA.json (docs/adr/000-criteria.json for the P0 gate).";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("sample") => parse_sample(&args[1..]).and_then(|o| sample(&o)),
         Some("mark") => mark(&args[1..]),
-        Some("report") => match args.get(1) {
-            Some(file) => report::run(file).map(|text| print!("{text}")),
-            None => Err(USAGE.to_string()),
+        Some("report") => match (args.get(1), args.get(2).map(String::as_str), args.get(3)) {
+            (Some(file), Some("--criteria"), Some(criteria)) => {
+                report::run(file, criteria).map(|text| print!("{text}"))
+            }
+            _ => Err(USAGE.to_string()),
         },
         _ => Err(USAGE.to_string()),
     };
@@ -46,7 +49,7 @@ fn main() {
 }
 
 struct SampleOpts {
-    interval: Duration,
+    interval: Option<Duration>,
     duration: Option<Duration>,
     matches: Vec<String>,
     pids: Vec<i32>,
@@ -56,7 +59,7 @@ struct SampleOpts {
 
 fn parse_sample(args: &[String]) -> Result<SampleOpts, String> {
     let mut opts = SampleOpts {
-        interval: Duration::from_millis(100),
+        interval: None,
         duration: None,
         matches: Vec::new(),
         pids: Vec::new(),
@@ -72,7 +75,7 @@ fn parse_sample(args: &[String]) -> Result<SampleOpts, String> {
         };
         let number = |v: String| v.parse::<u64>().map_err(|e| format!("{flag} {v}: {e}"));
         match flag.as_str() {
-            "--interval-ms" => opts.interval = Duration::from_millis(number(value()?)?),
+            "--interval-ms" => opts.interval = Some(Duration::from_millis(number(value()?)?)),
             "--duration-s" => opts.duration = Some(Duration::from_secs(number(value()?)?)),
             "--match" => opts.matches.push(value()?),
             "--pid" => opts
@@ -83,10 +86,11 @@ fn parse_sample(args: &[String]) -> Result<SampleOpts, String> {
             other => return Err(format!("unknown flag {other}\n{USAGE}")),
         }
     }
-    if opts.interval.is_zero() {
-        return Err("--interval-ms must be > 0".into());
+    match opts.interval {
+        None => Err(format!("--interval-ms is required\n{USAGE}")),
+        Some(i) if i.is_zero() => Err("--interval-ms must be > 0".into()),
+        Some(_) => Ok(opts),
     }
-    Ok(opts)
 }
 
 fn open_out(path: Option<&str>) -> Result<Box<dyn Write>, String> {
@@ -112,6 +116,7 @@ fn emit(out: &mut dyn Write, value: &Value) -> Result<(), String> {
 }
 
 fn sample(opts: &SampleOpts) -> Result<(), String> {
+    let interval = opts.interval.ok_or("--interval-ms is required")?;
     let mut out = open_out(opts.out.as_deref())?;
     let host = hearth_sense::host_memory().map_err(|e| e.to_string())?;
     let accelerators = hearth_sense::accelerators().map_err(|e| e.to_string())?;
@@ -122,7 +127,7 @@ fn sample(opts: &SampleOpts) -> Result<(), String> {
             "t_ms": host.taken_at_ms,
             "total_bytes": host.total_bytes,
             "accelerators": accelerators,
-            "interval_ms": opts.interval.as_millis(),
+            "interval_ms": interval.as_millis(),
             "matches": opts.matches,
             "pids": opts.pids,
         }),
@@ -135,7 +140,7 @@ fn sample(opts: &SampleOpts) -> Result<(), String> {
         }
         let line = take_sample(opts);
         emit(out.as_mut(), &line)?;
-        next += opts.interval;
+        next += interval;
         let now = Instant::now();
         if next > now {
             std::thread::sleep(next - now);

@@ -200,15 +200,22 @@ pub fn process_footprint(pid: i32) -> Result<ProcessFootprint> {
 pub fn list_processes() -> Result<Vec<ProcessEntry>> {
     // SAFETY: a null buffer asks only for the current count.
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    let count = usize::try_from(count).map_err(|_| os_error("proc_listallpids"))?;
-    // Processes can appear between the two calls; leave room for them.
-    let mut pids = vec![0i32; count + count / 4 + 16];
-    let bytes =
-        i32::try_from(pids.len() * size_of::<i32>()).map_err(|_| os_error("proc_listallpids"))?;
-    // SAFETY: `pids` is writable for `bytes` bytes.
-    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-    let filled = usize::try_from(filled).map_err(|_| os_error("proc_listallpids"))?;
-    pids.truncate(filled.min(pids.len()));
+    let mut capacity = usize::try_from(count).map_err(|_| os_error("proc_listallpids"))?;
+    // Processes can start between calls. A completely filled buffer may have
+    // been truncated, so grow and retry until the list fits with room left.
+    let pids = loop {
+        let mut pids = vec![0i32; capacity.max(1) * 2];
+        let bytes = i32::try_from(pids.len() * size_of::<i32>())
+            .map_err(|_| os_error("proc_listallpids"))?;
+        // SAFETY: `pids` is writable for `bytes` bytes.
+        let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        let filled = usize::try_from(filled).map_err(|_| os_error("proc_listallpids"))?;
+        if filled < pids.len() {
+            pids.truncate(filled);
+            break pids;
+        }
+        capacity = pids.len();
+    };
     Ok(pids
         .into_iter()
         .filter(|&pid| pid > 0)

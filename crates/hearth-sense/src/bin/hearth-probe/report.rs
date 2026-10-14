@@ -8,9 +8,19 @@ use serde_json::{Value, json};
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 const MIB: f64 = 1024.0 * 1024.0;
-/// Window used to take a median around an event. Long enough to cover several
-/// samples at any interval the probe allows, short enough to stay inside a phase.
-const WINDOW_MS: u64 = 5_000;
+
+/// Acceptance thresholds, read from the file ADR-000 points to. None of them
+/// live in code.
+#[derive(serde::Deserialize)]
+struct Criteria {
+    footprint_vs_allocated_max_rel: f64,
+    host_vs_footprint_rel: f64,
+    host_vs_footprint_abs_bytes: f64,
+    load_visibility_min_rel: f64,
+    reclaim_min_rel: f64,
+    noise_sigma_multiplier: f64,
+    naive_overstatement_min_rel: f64,
+}
 
 struct Sample {
     t: u64,
@@ -118,9 +128,21 @@ impl Recording {
             .filter(move |s| s.t >= from && s.t <= to)
     }
 
+    /// Start of the phase that ends at `t`: the previous mark. Medians are
+    /// taken over a whole phase, so the window comes from the experiment's own
+    /// structure rather than a fixed duration.
+    fn phase_start(&self, t: u64) -> u64 {
+        self.marks
+            .iter()
+            .map(|m| m.t)
+            .filter(|&m| m < t)
+            .max()
+            .unwrap_or(0)
+    }
+
     fn used_before(&self, t: u64) -> Option<f64> {
         median(
-            self.between(t.saturating_sub(WINDOW_MS), t)
+            self.between(self.phase_start(t), t)
                 .map(|s| s.used)
                 .collect(),
         )
@@ -128,7 +150,7 @@ impl Recording {
 
     fn footprint_before(&self, pid: i64, t: u64) -> Option<f64> {
         median(
-            self.between(t.saturating_sub(WINDOW_MS), t)
+            self.between(self.phase_start(t), t)
                 .filter_map(|s| s.procs.get(&pid).copied())
                 .collect(),
         )
@@ -174,9 +196,12 @@ struct Verdict {
 }
 
 #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
-pub fn run(path: &str) -> Result<String, String> {
+pub fn run(path: &str, criteria_path: &str) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
     let rec = parse(&text)?;
+    let c: Criteria = std::fs::read_to_string(criteria_path)
+        .map_err(|e| format!("read {criteria_path}: {e}"))
+        .and_then(|t| serde_json::from_str(&t).map_err(|e| format!("{criteria_path}: {e}")))?;
     let mut verdicts = Vec::new();
     let mut servers = Vec::new();
 
@@ -188,7 +213,7 @@ pub fn run(path: &str) -> Result<String, String> {
             continue;
         };
         let pid = settled.fields["pid"].as_i64().unwrap_or(-1);
-        let file = start.fields["file_bytes"].as_f64().unwrap_or(0.0);
+        let file = start.fields["file_bytes"].as_f64();
         let buffers = log_buffers(start.fields["log"].as_str().unwrap_or_default());
         let expected: f64 = buffers.values().sum();
         let footprint = rec.footprint_before(pid, settled.t);
@@ -199,7 +224,7 @@ pub fn run(path: &str) -> Result<String, String> {
         let reclaim = rec.mark(&format!("{label}_unload")).and_then(|unload| {
             let before = rec.used_before(unload.t)?;
             let fp = footprint?;
-            let target = before - 0.9 * fp;
+            let target = before - c.reclaim_min_rel * fp;
             let end = rec
                 .mark(&format!("{label}_reclaimed"))
                 .map_or(u64::MAX, |m| m.t);
@@ -219,18 +244,18 @@ pub fn run(path: &str) -> Result<String, String> {
             let err = (fp - expected).abs() / expected;
             verdicts.push(Verdict {
                 id: "a",
-                pass: Some(err <= 0.15),
+                pass: Some(err <= c.footprint_vs_allocated_max_rel),
                 evidence: format!(
-                    "{label}: footprint {:.2} GiB vs log buffers {:.2} GiB (file {:.2} GiB): {:.1}% off",
+                    "{label}: footprint {:.2} GiB vs log buffers {:.2} GiB (file {}): {:.1}% off",
                     fp / GIB,
                     expected / GIB,
-                    file / GIB,
+                    file.map_or("unknown".into(), |f| format!("{:.2} GiB", f / GIB)),
                     err * 100.0
                 ),
             });
         }
         if let (Some(fp), Some(delta)) = (footprint, host_delta) {
-            let tol = (0.10 * fp).max(GIB);
+            let tol = (c.host_vs_footprint_rel * fp).max(c.host_vs_footprint_abs_bytes);
             verdicts.push(Verdict {
                 id: "b",
                 pass: Some((delta - fp).abs() <= tol),
@@ -243,7 +268,7 @@ pub fn run(path: &str) -> Result<String, String> {
             });
             verdicts.push(Verdict {
                 id: "c-load",
-                pass: Some(delta >= 0.8 * fp),
+                pass: Some(delta >= c.load_visibility_min_rel * fp),
                 evidence: format!(
                     "{label}: available fell {:.0}% of footprint",
                     delta / fp * 100.0
@@ -259,8 +284,18 @@ pub fn run(path: &str) -> Result<String, String> {
                 id: "c-reclaim",
                 pass: Some(hit.is_some()),
                 evidence: hit.map_or_else(
-                    || format!("{label}: 90% not reclaimed within {window} ms"),
-                    |ms| format!("{label}: 90% reclaimed after {ms} ms"),
+                    || {
+                        format!(
+                            "{label}: {:.0}% not reclaimed within {window} ms",
+                            c.reclaim_min_rel * 100.0
+                        )
+                    },
+                    |ms| {
+                        format!(
+                            "{label}: {:.0}% reclaimed after {ms} ms",
+                            c.reclaim_min_rel * 100.0
+                        )
+                    },
                 ),
             });
         }
@@ -296,7 +331,7 @@ pub fn run(path: &str) -> Result<String, String> {
                 - used.iter().copied().fold(f64::MAX, f64::min);
             verdicts.push(Verdict {
                 id: "d",
-                pass: reserve_floor.map(|floor| 3.0 * sd < floor),
+                pass: reserve_floor.map(|floor| c.noise_sigma_multiplier * sd < floor),
                 evidence: format!(
                     "idle σ {:.0} MiB, drift {:.0} MiB over {} samples; reserve floor (memsize − Metal working set) {}",
                     sd / MIB,
@@ -317,7 +352,7 @@ pub fn run(path: &str) -> Result<String, String> {
         if let (Some(n), Some(r)) = (median(naive), median(real)) {
             verdicts.push(Verdict {
                 id: "f",
-                pass: Some(n - r > 0.05),
+                pass: Some(n - r > c.naive_overstatement_min_rel),
                 evidence: format!(
                     "free-pages-only reads {:.1}% used; Activity Monitor formula reads {:.1}%",
                     n * 100.0,

@@ -5,22 +5,22 @@
 #
 # usage: scripts/p0-gate.sh OUT_DIR MODEL_A.gguf MODEL_B.gguf [-- extra llama-server args]
 #
-# Environment (all optional; each value is an experiment parameter, recorded in
-# the marks so the report states what was run):
-#   LLAMA_SERVER   llama-server binary            (default: from PATH)
-#   CTX            context per server             (default: 8192)
-#   BASELINE_S     idle sampling before loads     (default: 60)
-#   SETTLE_S       wait after ready before next   (default: 20)
-#   RECLAIM_S      wait after unload              (default: 30)
-#   FILL_TOKENS    approximate prompt tokens sent to A to exercise the KV cache
-#                  (default: CTX / 2)
+# Every experiment parameter is required; none has a built-in value. Each is
+# recorded in the marks so the report states exactly what was run:
+#   INTERVAL_MS    probe sampling interval
+#   CTX            context per server (-c)
+#   BASELINE_S     idle sampling before any load
+#   SETTLE_S       wait after a server is ready before the next phase
+#   RECLAIM_S      wait after an unload
+#   FILL_TOKENS    prompt tokens sent to A to exercise its KV cache
+# Optional: LLAMA_SERVER (else found on PATH), PROBE (else target/release).
 #
 # Only processes this script starts are ever signalled.
 
 set -euo pipefail
 
 if [[ $# -lt 3 ]]; then
-  sed -n '2,20p' "$0"
+  sed -n '2,21p' "$0"
   exit 2
 fi
 OUT=$1 MODEL_A=$2 MODEL_B=$3
@@ -31,11 +31,14 @@ EXTRA=("$@")
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PROBE=${PROBE:-$ROOT/target/release/hearth-probe}
 LLAMA_SERVER=${LLAMA_SERVER:-$(command -v llama-server)}
-CTX=${CTX:-8192}
-BASELINE_S=${BASELINE_S:-60}
-SETTLE_S=${SETTLE_S:-20}
-RECLAIM_S=${RECLAIM_S:-30}
-FILL_TOKENS=${FILL_TOKENS:-$((CTX / 2))}
+missing=()
+for var in INTERVAL_MS CTX BASELINE_S SETTLE_S RECLAIM_S FILL_TOKENS; do
+  [[ -n ${!var:-} ]] || missing+=("$var")
+done
+if ((${#missing[@]})); then
+  echo "required: ${missing[*]}" >&2
+  exit 2
+fi
 
 mkdir -p "$OUT"
 SAMPLES=$OUT/samples.jsonl
@@ -79,11 +82,11 @@ start_server() { # label model
   eval "${label}_PID=$pid ${label}_PORT=$port"
 }
 
-"$PROBE" sample --interval-ms 100 --pids-from "$PIDS" --out "$SAMPLES" &
+"$PROBE" sample --interval-ms "$INTERVAL_MS" --pids-from "$PIDS" --out "$SAMPLES" &
 PROBE_PID=$!
 STARTED+=("$PROBE_PID")
 
-mark run_start "ctx=$CTX" "baseline_s=$BASELINE_S" "settle_s=$SETTLE_S" "reclaim_s=$RECLAIM_S" "extra=${EXTRA[*]:-}"
+mark run_start "interval_ms=$INTERVAL_MS" "fill_tokens=$FILL_TOKENS" "ctx=$CTX" "baseline_s=$BASELINE_S" "settle_s=$SETTLE_S" "reclaim_s=$RECLAIM_S" "extra=${EXTRA[*]:-}"
 mark baseline_start
 sleep "$BASELINE_S"
 mark baseline_end

@@ -31,8 +31,11 @@ jobs:
       - name: probe smoke test
         run: |
           cargo build --release -p hearth-sense --bin hearth-probe
-          ./target/release/hearth-probe sample --duration-s 2 --interval-ms 200 --pid $$ --out probe.jsonl
-          test "$(grep -c '"kind":"sample"' probe.jsonl)" -ge 5
+          duration_s=2 interval_ms=200
+          ./target/release/hearth-probe sample --duration-s $duration_s --interval-ms $interval_ms --pid $$ --out probe.jsonl
+          # At least every tick but the last must have produced a sample.
+          expected=$(( duration_s * 1000 / interval_ms - 1 ))
+          test "$(grep -c '"kind":"sample"' probe.jsonl)" -ge "$expected"
 
   msrv:
     runs-on: ubuntu-latest

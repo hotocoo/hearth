@@ -14,26 +14,26 @@ No gateway, scheduler or supervisor code is written until the signals are shown 
 
 ## Decision
 
-Validate with `hearth-probe` and `scripts/p0-gate.sh` on the primary development machine (Apple M4 Max, 64 GiB), loading real llama-server instances. Run three model sizes, each with and without `--no-mmap`.
+Validate with `hearth-probe` and `scripts/p0-gate.sh` on the primary development machine (Apple M4 Max, 64 GiB), loading real llama-server instances of several sizes, each with and without `--no-mmap`.
 
-Signals sampled at 10 Hz:
+Signals, sampled at the interval recorded in each run:
 
 - Host: `host_statistics64` (free, active, inactive, speculative, wired, purgeable, internal, external, compressor), `kern.memorystatus_level`, `kern.memorystatus_vm_pressure_level`, `vm.swapusage`.
 - Per process: `ri_phys_footprint`, `ri_resident_size`, `ri_wired_size`, `ri_lifetime_max_phys_footprint`.
 - Device: Metal `recommendedMaxWorkingSetSize`, `iogpu.wired_limit_mb`.
 - llama.cpp's own buffer accounting, from its log (model, KV and compute buffers).
 
-These are experiment thresholds, not product constants. All must pass:
+These are experiment thresholds, not product constants. Their numeric values live only in [000-criteria.json](000-criteria.json), which `hearth-probe report --criteria` reads; the table describes them. All must pass:
 
 | id | criterion |
 |---|---|
-| a | Per-process footprint is within 10% (median) / 15% (worst) of what llama.cpp says it allocated |
-| b | The footprint change explains the host "used" change within max(10%, 1 GiB) |
-| c | Available memory falls by ≥80% of the footprint on load, and recovers ≥90% within 30 s of unload |
-| d | Idle noise (3σ) is small relative to the reserve floor (memsize − Metal working set) |
-| e | Under induced pressure, a signal trips at least 2 ticks before swap grows or latency doubles |
-| f | Free pages alone misread the machine (reproduces the old governor bug) |
-| g | Predicted admission refuses 100% of real overloads and wrongly refuses none of the loads with ≥2 GiB true headroom |
+| a | Per-process footprint is within `footprint_vs_allocated_max_rel` of what llama.cpp says it allocated |
+| b | The footprint change explains the host "used" change within max(`host_vs_footprint_rel`, `host_vs_footprint_abs_bytes`) |
+| c | Available memory falls by ≥ `load_visibility_min_rel` of the footprint on load, and recovers ≥ `reclaim_min_rel` within the run's reclaim window |
+| d | Idle noise (`noise_sigma_multiplier` × σ) is below the reserve floor (memsize − Metal working set) |
+| e | Under induced pressure, a signal trips before swap grows or latency degrades |
+| f | Free pages alone overstate use by more than `naive_overstatement_min_rel` (reproduces the old governor bug) |
+| g | Predicted admission refuses every real overload and wrongly refuses no load that actually fit |
 
 If the gate fails, admission falls back to learned per-model footprints with serialized loads, and this ADR records why.
 

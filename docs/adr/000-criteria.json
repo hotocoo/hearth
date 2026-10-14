@@ -1,0 +1,10 @@
+{
+  "_doc": "P0 gate acceptance thresholds (ADR-000). The only place these numbers live; hearth-probe report reads them with --criteria.",
+  "footprint_vs_allocated_max_rel": 0.15,
+  "host_vs_footprint_rel": 0.10,
+  "host_vs_footprint_abs_bytes": 1073741824,
+  "load_visibility_min_rel": 0.8,
+  "reclaim_min_rel": 0.9,
+  "noise_sigma_multiplier": 3.0,
+  "naive_overstatement_min_rel": 0.05
+}

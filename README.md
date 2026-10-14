@@ -47,11 +47,13 @@ The P0 gate checks, on real llama-server loads, that these signals predict what 
 
 ```sh
 cargo build --release -p hearth-sense --bin hearth-probe
-# host memory + every llama-server, 10 Hz, as JSON lines
-./target/release/hearth-probe sample --match llama-server --out run.jsonl
-# full gate: baseline, load A, load B, fill context, unload, reclaim
-scripts/p0-gate.sh runs/$(date +%s) small.gguf larger.gguf
-./target/release/hearth-probe report runs/<id>/samples.jsonl
+# host memory + every llama-server, as JSON lines
+./target/release/hearth-probe sample --interval-ms 100 --match llama-server --out run.jsonl
+# full gate: baseline, load A, load B, fill context, unload, reclaim.
+# Every experiment parameter is explicit; the script has no built-in values.
+INTERVAL_MS=100 CTX=8192 BASELINE_S=60 SETTLE_S=20 RECLAIM_S=30 FILL_TOKENS=4096 \
+  scripts/p0-gate.sh runs/$(date +%s) small.gguf larger.gguf
+./target/release/hearth-probe report runs/<id>/samples.jsonl --criteria docs/adr/000-criteria.json
 ```
 
 ## Planned

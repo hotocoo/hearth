@@ -5,6 +5,8 @@
 //! which needs to know the difference between what was measured and what was
 //! guessed.
 
+pub mod gguf;
+pub mod kv;
 mod sys;
 
 use serde::Serialize;
