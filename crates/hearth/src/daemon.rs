@@ -18,8 +18,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
+use std::sync::Condvar;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -48,12 +48,39 @@ enum Order {
     Start,
 }
 
+/// One server's pending order. Only the latest counts: `stop` then `start`
+/// before either is acted on means start, so no order is lost in a way that
+/// leaves a server in the state nobody asked for last.
+#[derive(Default)]
+struct Mailbox {
+    order: Mutex<Option<Order>>,
+    arrived: Condvar,
+}
+
+impl Mailbox {
+    fn post(&self, order: Order) {
+        *self.order.lock().unwrap_or_else(PoisonError::into_inner) = Some(order);
+        self.arrived.notify_one();
+    }
+
+    /// The pending order, waiting at most `timeout` for one.
+    fn take(&self, timeout: Duration) -> Option<Order> {
+        let guard = self.order.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mut guard, _) = self
+            .arrived
+            .wait_timeout_while(guard, timeout, |o| o.is_none())
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.take()
+    }
+}
+
 /// Each server's recent output, readable while its thread supervises it.
 type Outputs = BTreeMap<String, hearth_runtime::supervise::Output>;
 
 /// What control requests reach: each server's order queue and output.
 struct Desk {
-    orders: BTreeMap<String, SyncSender<Order>>,
+    orders: BTreeMap<String, Arc<Mailbox>>,
+    max_message_bytes: u64,
     outputs: Outputs,
 }
 
@@ -137,7 +164,7 @@ fn supervise(
     server: &Server,
     config: &Config,
     board: &Board,
-    orders: &Receiver<Order>,
+    orders: &Mailbox,
     output: hearth_runtime::supervise::Output,
 ) {
     let _watchman = Watchman { board, name };
@@ -150,7 +177,7 @@ fn supervise(
     let interval = Duration::from_millis(config.supervise.probe_interval_ms);
     loop {
         let mut events = Vec::new();
-        match orders.recv_timeout(interval) {
+        match orders.take(interval).ok_or(()) {
             Ok(Order::Restart) => {
                 halted = false;
                 events.push(supervised.restart());
@@ -167,8 +194,7 @@ fn supervise(
             }
             // Starting what runs, or stopping what is stopped: nothing to do.
             Ok(Order::Start | Order::Stop) => {}
-            Err(RecvTimeoutError::Timeout) => events.extend(supervised.poll()),
-            Err(RecvTimeoutError::Disconnected) => return,
+            Err(()) => events.extend(supervised.poll()),
         }
         let (state, pid) = supervised.status();
         let state = if halted { "stopped" } else { state };
@@ -202,12 +228,7 @@ fn supervise(
     }
 }
 
-fn answer(
-    request: &str,
-    board: &Board,
-    orders: &BTreeMap<String, SyncSender<Order>>,
-    outputs: &Outputs,
-) -> Value {
+fn answer(request: &str, board: &Board, desk: &Desk) -> Value {
     let Ok(request) = serde_json::from_str::<Value>(request) else {
         return json!({ "error": "not a JSON request" });
     };
@@ -223,29 +244,41 @@ fn answer(
                 "start" => Order::Start,
                 _ => Order::Restart,
             };
-            // One pending order per server: asking again before it is acted
-            // on changes nothing.
-            match orders.get(name).map(|tx| tx.try_send(order)) {
-                Some(Ok(()) | Err(TrySendError::Full(_))) => {
-                    json!({ "requested": op, "server": name })
-                }
-                Some(Err(TrySendError::Disconnected(_))) => {
+            let unsupervised = lock(board)
+                .get(name)
+                .is_some_and(|s| s.state == "unsupervised");
+            match desk.orders.get(name) {
+                Some(_) if unsupervised => {
                     json!({ "error": format!("{name} is no longer supervised") })
+                }
+                Some(mailbox) => {
+                    mailbox.post(order);
+                    json!({ "requested": op, "server": name })
                 }
                 None => unknown(name),
             }
         }
         Some("logs") => {
             let name = request["server"].as_str().unwrap_or_default();
-            match outputs.get(name) {
+            match desk.outputs.get(name) {
                 Some(output) => {
-                    let lines: Vec<String> = output
+                    let mut lines: Vec<String> = output
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .iter()
                         .cloned()
                         .collect();
-                    json!({ "server": name, "lines": lines })
+                    // The answer must fit one control message: the newest
+                    // lines are kept, and the answer says how many were not.
+                    let limit = usize::try_from(desk.max_message_bytes).unwrap_or(usize::MAX);
+                    let mut left_out = 0;
+                    let mut reply = json!({ "server": name, "lines": lines, "left_out": 0 });
+                    while reply.to_string().len() >= limit && !lines.is_empty() {
+                        lines.remove(0);
+                        left_out += 1;
+                        reply = json!({ "server": name, "lines": lines, "left_out": left_out });
+                    }
+                    reply
                 }
                 None => unknown(name),
             }
@@ -264,7 +297,7 @@ fn serve(stream: &UnixStream, config: &Config, board: &Board, desk: &Desk) {
     let deadline = Instant::now() + Duration::from_millis(config.control.timeout_ms);
     let reply = match crate::control::read_line(stream, config.control.max_message_bytes, deadline)
     {
-        Ok(line) => answer(&line, board, &desk.orders, &desk.outputs),
+        Ok(line) => answer(&line, board, desk),
         Err(e) => json!({ "error": format!("bad request: {e}") }),
     };
     if let Err(e) = crate::control::write_line(stream, &reply.to_string(), deadline) {
@@ -414,15 +447,15 @@ pub fn run() -> Result<(), String> {
                 last_event_at_ms: None,
             },
         );
-        let (tx, rx) = sync_channel(1);
-        orders.insert(name.clone(), tx);
+        let mailbox = Arc::new(Mailbox::default());
+        orders.insert(name.clone(), mailbox.clone());
         let output = hearth_runtime::supervise::Output::default();
         outputs.insert(name.clone(), output.clone());
         let (name, server, config, board) =
             (name.clone(), server.clone(), config.clone(), board.clone());
         std::thread::Builder::new()
             .name(format!("supervise {name}"))
-            .spawn(move || supervise(&name, &server, &config, &board, &rx, output))
+            .spawn(move || supervise(&name, &server, &config, &board, &mailbox, output))
             .map_err(|e| format!("cannot start supervising: {e}"))?;
     }
     if config.watch.in_hearthd {
@@ -438,7 +471,12 @@ pub fn run() -> Result<(), String> {
         crate::control::socket_path()?.display()
     ));
     let pause = Duration::from_millis(config.control.timeout_ms);
-    let (config, desk) = (Arc::new(config), Arc::new(Desk { orders, outputs }));
+    let desk = Arc::new(Desk {
+        orders,
+        max_message_bytes: config.control.max_message_bytes,
+        outputs,
+    });
+    let config = Arc::new(config);
     let busy = Arc::new(AtomicU64::new(0));
     for stream in listener.incoming() {
         match stream {

@@ -163,12 +163,13 @@ pub fn main() {
             use std::io::Write as _;
             // A reader that went away (`| head`) has all it wanted.
             let mut out = std::io::stdout().lock();
-            if out
-                .write_all(text.as_bytes())
-                .and_then(|()| out.flush())
-                .is_err()
-            {
-                std::process::exit(0);
+            match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("hearth: writing the output failed: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         Err(e) => {

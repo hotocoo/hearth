@@ -52,6 +52,7 @@ pub(crate) fn settings(c: &hearth_core::config::Supervise) -> Settings {
         stop_grace: ms(c.stop_grace_ms),
         unresponsive_probes: c.unresponsive_probes,
         output_lines: c.output_lines,
+        output_line_bytes: c.output_line_bytes,
     }
 }
 
@@ -63,7 +64,16 @@ pub fn entries(body: &serde_json::Value) -> Vec<(String, String)> {
         body["addr"].as_str().unwrap_or("?"),
         body["command"].as_str().unwrap_or("?")
     );
-    vec![(who.trim().to_string(), summary(body))]
+    // The event's own fields tell repeated events apart (code, signal,
+    // error, line).
+    let mut detail = body["event"].clone();
+    if let Some(o) = detail.as_object_mut() {
+        o.remove("event");
+    }
+    vec![(
+        who.trim().to_string(),
+        format!("{} {detail}", summary(body)),
+    )]
 }
 
 /// One line for `hearth log`.

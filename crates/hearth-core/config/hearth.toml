@@ -78,6 +78,10 @@ unresponsive_probes = 3
 # and the MCP tool `logs`: enough to see why it failed, not a log archive.
 output_lines = 200
 
+# Longest line of server output kept; the rest is cut. Servers that print
+# progress bars without newlines would otherwise make one line of anything.
+output_line_bytes = 1024
+
 [notify]
 # Who hears about a server hearth gave up on, one it found wedged, or one
 # whose backend poisoned itself. Both channels are off by default.

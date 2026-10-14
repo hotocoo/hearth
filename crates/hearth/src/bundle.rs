@@ -4,7 +4,10 @@
 //! Each part is the same command run with `--json`. A part that fails is
 //! included as its error, so the bundle is always complete about what it
 //! could not see. Secrets are left out: the webhook URL (it carries a
-//! token) and server arguments (they can carry keys) are redacted.
+//! token) and server arguments (they can carry keys) are redacted, and a
+//! configuration that fails to load is reported without its error text,
+//! which quotes the offending line. Like the commands it runs, a bundle
+//! records fresh ports and doctor snapshots.
 
 use serde_json::{Value, json};
 
@@ -15,13 +18,25 @@ pub struct Args {
     since: Option<String>,
 }
 
+/// What a configuration error says, when the configuration fails to load:
+/// such errors quote the offending line, which may be the webhook URL or a
+/// server command with a key in it, so they never go into a bundle.
+fn config_error() -> Option<String> {
+    hearth_core::config::load().err().map(|e| e.to_string())
+}
+
+const WITHHELD: &str = "the configuration does not load; details withheld from the bundle because they quote the offending line (run hearth config to see them)";
+
 /// Runs one hearth command line and returns its JSON, or its error.
-fn part(argv: &[&str]) -> Value {
+fn part(argv: &[&str], config_error: Option<&str>) -> Value {
     let mut line = vec!["hearth".to_string(), "--json".to_string()];
     line.extend(argv.iter().map(|a| (*a).to_string()));
     match crate::dispatch(&line).and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string())) {
         Ok(v) => v,
-        Err(e) => json!({ "error": e }),
+        Err(e) => match config_error {
+            Some(c) if e.contains(c) => json!({ "error": WITHHELD }),
+            _ => json!({ "error": e }),
+        },
     }
 }
 
@@ -46,18 +61,20 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
     if let Some(s) = &args.since {
         incidents.extend(["--since", s.as_str()]);
     }
-    let mut config = part(&["config"]);
+    let broken = config_error();
+    let c = broken.as_deref();
+    let mut config = part(&["config"], c);
     redact(&mut config);
     let bundle = json!({
         "hearth_version": env!("CARGO_PKG_VERSION"),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
-        "doctor": part(&["doctor"]),
-        "ports": part(&["ports"]),
-        "incidents": part(&incidents),
-        "hearthd": part(&["status"]),
-        "run_events": part(&["log", "--kind", "run", "--limit", "50"]),
-        "tags": part(&["tag"]),
+        "doctor": part(&["doctor"], c),
+        "ports": part(&["ports"], c),
+        "incidents": part(&incidents, c),
+        "hearthd": part(&["status"], c),
+        "run_events": part(&["log", "--kind", "run", "--limit", "50"], c),
+        "tags": part(&["tag"], c),
         "config": config,
     });
     crate::to_json(&bundle)

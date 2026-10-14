@@ -83,6 +83,7 @@ pub struct Supervise {
     pub probe_interval_ms: u64,
     pub unresponsive_probes: u32,
     pub output_lines: usize,
+    pub output_line_bytes: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]

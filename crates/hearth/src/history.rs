@@ -400,11 +400,15 @@ struct Step {
 /// The steps of everything matching `pattern` through `snapshots`, oldest
 /// first: a step where a match appears, changes (or every snapshot with
 /// `all`), and a `gone` step where it disappears.
+///
+/// With `events`, each snapshot is one event rather than a state of the
+/// whole machine: every matching one is listed, and nothing is ever `gone`
+/// because another snapshot is about something else.
 fn timeline(
     snapshots: &[Snapshot],
     entries: impl Fn(&Value) -> Vec<(String, String)>,
     pattern: &str,
-    all: bool,
+    (all, events): (bool, bool),
 ) -> Vec<Step> {
     let pattern = pattern.to_lowercase();
     let mut steps = Vec::new();
@@ -423,9 +427,12 @@ fn timeline(
             });
         };
         for (who, state) in &now {
-            if all || last.get(who) != Some(state) {
+            if all || events || last.get(who) != Some(state) {
                 step(who, state.clone());
             }
+        }
+        if events {
+            continue;
         }
         for who in last.keys().filter(|w| !now.contains_key(*w)) {
             step(who, "gone".into());
@@ -452,11 +459,12 @@ pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
             Err(e) => unreadable.push(e.to_string()),
         }
     }
+    let events = matches!(args.kind, Kind::Run);
     let steps = timeline(
         &snapshots,
         |b| args.kind.entries(b),
         &args.pattern,
-        args.all,
+        (args.all, events),
     );
     if json {
         return crate::to_json(&serde_json::json!({
@@ -504,7 +512,11 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
             }
             serde_json::json!({ "tagged": name, "snapshots": ids })
         }
-        (None, _) => serde_json::json!({ "tags": journal.tags().map_err(|e| e.to_string())? }),
+        (None, _) => {
+            let (tags, errors) = journal.tags_lenient().map_err(|e| e.to_string())?;
+            let errors: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            serde_json::json!({ "tags": tags, "unreadable": errors })
+        }
     };
     if json {
         return crate::to_json(&value);
@@ -516,6 +528,9 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
         }
         for (name, ids) in tags {
             let _ = writeln!(out, "{name}: {ids}");
+        }
+        for e in value["unreadable"].as_array().into_iter().flatten() {
+            let _ = writeln!(out, "unreadable: {}", e.as_str().unwrap_or_default());
         }
     } else if let Some(name) = value["tagged"].as_str() {
         let _ = writeln!(
@@ -566,7 +581,7 @@ mod tests {
             snap(3, &[("ollama pid 5", "NO ANSWER")]),
             snap(4, &[]),
         ];
-        let got: Vec<(u64, String)> = timeline(&history, entries, "OLLAMA", false)
+        let got: Vec<(u64, String)> = timeline(&history, entries, "OLLAMA", (false, false))
             .into_iter()
             .map(|s| (s.taken_at_ms, s.state))
             .collect();
@@ -578,6 +593,20 @@ mod tests {
                 (4, "gone".into())
             ]
         );
-        assert_eq!(timeline(&history, entries, "ollama", true).len(), 4);
+        assert_eq!(
+            timeline(&history, entries, "ollama", (true, false)).len(),
+            4
+        );
+        // Events: every match, and another server's event is not a "gone".
+        let events = [
+            snap(1, &[("chat", "exited")]),
+            snap(2, &[("vision", "ready")]),
+            snap(3, &[("chat", "exited")]),
+        ];
+        let got: Vec<String> = timeline(&events, entries, "chat", (false, true))
+            .into_iter()
+            .map(|s| s.state)
+            .collect();
+        assert_eq!(got, ["exited", "exited"]);
     }
 }

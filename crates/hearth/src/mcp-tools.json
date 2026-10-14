@@ -245,7 +245,7 @@
   },
   {
     "name": "status",
-    "description": "What hearthd keeps alive: each owned server's name, address, state (starting, ready, waiting, gave_up), pid, restart count and last event (exited, wedged, poisoned, ...). Fails with a clear message when hearthd is not running.",
+    "description": "What hearthd keeps alive: each owned server's name, address, state (starting, ready, waiting, stopped, gave_up, or unsupervised if its supervising thread failed), pid, restart count and last event (exited, wedged, poisoned, ...). Fails with a clear message when hearthd is not running.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -275,7 +275,7 @@
   },
   {
     "name": "stop",
-    "description": "Ask hearthd to stop one of the servers it owns and keep it down, to free its memory (for example before loading a bigger model). It stays down until start. Only servers configured under [servers]: hearth never touches a process it did not start.",
+    "description": "Ask hearthd to stop one of the servers it owns and keep it down, to free its memory (for example before loading a bigger model). It stays down until start or restart. Only servers configured under [servers]: hearth never touches a process it did not start.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -296,7 +296,7 @@
   },
   {
     "name": "start",
-    "description": "Ask hearthd to start a server it stopped, or one it gave up on after a crash loop.",
+    "description": "Ask hearthd to start a server it stopped, or one it gave up on after a crash loop. The crash-loop budget starts afresh.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -338,7 +338,7 @@
   },
   {
     "name": "bundle",
-    "description": "Everything hearth can say about this machine in one document: doctor, ports, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port).",
+    "description": "Everything hearth can say about this machine in one document: doctor, ports, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port). Like ports and doctor, it records fresh snapshots of both.",
     "inputSchema": {
       "type": "object",
       "properties": {

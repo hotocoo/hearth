@@ -99,6 +99,9 @@ pub fn ensure_dir(dir: &Path) -> Result<(), StateError> {
     })
 }
 
+/// Tags by name, each with the snapshot id it names per kind.
+pub type Tags = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
+
 /// A snapshot that was written, and anything that went wrong tidying up
 /// after it. The snapshot is on disk either way.
 #[derive(Debug)]
@@ -314,24 +317,36 @@ impl Journal {
         if !valid_tag(name) {
             return Err(StateError::BadRef(name.to_string()));
         }
-        let mut ids = std::collections::BTreeMap::new();
-        for kind in kinds {
-            if let Some(id) = self.ids(kind)?.pop() {
-                ids.insert((*kind).to_string(), id);
+        let latest = || -> Result<std::collections::BTreeMap<String, String>, StateError> {
+            let mut ids = std::collections::BTreeMap::new();
+            for kind in kinds {
+                if let Some(id) = self.ids(kind)?.pop() {
+                    ids.insert((*kind).to_string(), id);
+                }
             }
-        }
+            Ok(ids)
+        };
         let dir = self.tags_dir();
         ensure_dir(&dir)?;
         let path = dir.join(format!("{name}.{EXTENSION}"));
-        let text = serde_json::to_vec(&ids).map_err(|source| StateError::Json {
-            path: path.clone(),
-            source,
-        })?;
-        let tmp = dir.join(format!(".{name}.tmp"));
-        write_synced(&tmp, &text)
-            .and_then(|()| std::fs::rename(&tmp, &path))
-            .map_err(|source| StateError::Io { path, source })?;
-        Ok(ids)
+        // A prune that ran between choosing the ids and writing the tag may
+        // have removed one; choose again until the tag names what exists.
+        loop {
+            let ids = latest()?;
+            let text = serde_json::to_vec(&ids).map_err(|source| StateError::Json {
+                path: path.clone(),
+                source,
+            })?;
+            let tmp = dir.join(format!(".{name}.{}.tmp", unique_nanos()));
+            let written = write_synced(&tmp, &text).and_then(|()| std::fs::rename(&tmp, &path));
+            if let Err(source) = written {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(StateError::Io { path, source });
+            }
+            if ids.values().all(|id| self.file(id).exists()) {
+                return Ok(ids);
+            }
+        }
     }
 
     /// The ids tag `name` holds, by kind.
@@ -350,22 +365,28 @@ impl Journal {
         serde_json::from_slice(&text).map_err(|source| StateError::Json { path, source })
     }
 
-    /// Every tag, by name.
-    pub fn tags(
-        &self,
-    ) -> Result<
-        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
-        StateError,
-    > {
+    /// Every tag, by name. One tag that cannot be read fails the whole list;
+    /// [`Self::tags_lenient`] skips it instead.
+    pub fn tags(&self) -> Result<Tags, StateError> {
+        let (tags, mut errors) = self.tags_lenient()?;
+        match errors.pop() {
+            Some(e) => Err(e),
+            None => Ok(tags),
+        }
+    }
+
+    /// Every readable tag, and the errors for those that are not.
+    pub fn tags_lenient(&self) -> Result<(Tags, Vec<StateError>), StateError> {
         let dir = self.tags_dir();
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(std::collections::BTreeMap::default());
+                return Ok((Tags::default(), Vec::new()));
             }
             Err(source) => return Err(StateError::Io { path: dir, source }),
         };
-        let mut out = std::collections::BTreeMap::new();
+        let mut out = Tags::new();
+        let mut errors = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|source| StateError::Io {
                 path: dir.clone(),
@@ -377,10 +398,18 @@ impl Journal {
             if let Some(name) = file.strip_suffix(&format!(".{EXTENSION}"))
                 && valid_tag(name)
             {
-                out.insert(name.to_string(), self.tag(name)?);
+                match self.tag(name) {
+                    Ok(ids) => {
+                        out.insert(name.to_string(), ids);
+                    }
+                    // Deleted between listing and reading: not a tag any more.
+                    Err(StateError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => errors.push(e),
+                }
             }
         }
-        Ok(out)
+        Ok((out, errors))
     }
 
     /// Removes tag `name`; its snapshots are pruned like any other again.
@@ -392,9 +421,12 @@ impl Journal {
         std::fs::remove_file(&path).map_err(|source| StateError::Io { path, source })
     }
 
+    /// Drops the oldest untagged snapshots of `kind` beyond retention. A tag
+    /// that cannot be read protects nothing but does not stop pruning; it is
+    /// returned as the error, after pruning.
     fn prune(&self, kind: &str) -> Result<(), StateError> {
-        let tagged: std::collections::BTreeSet<String> = self
-            .tags()?
+        let (tags, mut bad) = self.tags_lenient()?;
+        let tagged: std::collections::BTreeSet<String> = tags
             .into_values()
             .flat_map(std::collections::BTreeMap::into_values)
             .collect();
@@ -414,7 +446,10 @@ impl Journal {
                 Ok(()) => {}
             }
         }
-        Ok(())
+        match bad.pop() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }
 
@@ -508,6 +543,14 @@ mod tests {
         for bad in ["1abc", "~1", "../x", "A", "a/b", "a..b"] {
             assert!(j.set_tag(bad, &["ports"]).is_err(), "{bad}");
         }
+        // A corrupt tag protects nothing and does not stop retention.
+        std::fs::write(dir.join("tags").join("broken.json"), "{").unwrap();
+        for n in 5..8 {
+            let r = j.record("ports", &serde_json::json!({ "n": n })).unwrap();
+            assert_eq!(r.warnings.len(), 1, "the broken tag is reported");
+        }
+        assert_eq!(j.ids("ports").unwrap().len(), 3, "still pruned");
+        std::fs::remove_file(dir.join("tags").join("broken.json")).unwrap();
         j.delete_tag("healthy").unwrap();
         j.record("ports", &serde_json::json!({ "n": 5 })).unwrap();
         assert_eq!(

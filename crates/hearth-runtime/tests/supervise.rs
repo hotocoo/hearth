@@ -130,6 +130,7 @@ fn settings() -> Settings {
         stop_grace: Duration::from_millis(500),
         unresponsive_probes: 2,
         output_lines: 50,
+        output_line_bytes: 1024,
     }
 }
 

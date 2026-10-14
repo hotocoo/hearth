@@ -88,6 +88,13 @@ impl Restarts {
         }
     }
 
+    /// Forgets the exits so far and the grown back-off: a person asking for
+    /// a start is a new beginning, not one more crash.
+    pub fn reset(&mut self) {
+        self.exits.clear();
+        self.backoff = self.policy.backoff_start;
+    }
+
     /// Restarts decided so far.
     #[must_use]
     pub fn count(&self) -> u64 {
@@ -260,6 +267,8 @@ pub struct Settings {
     pub unresponsive_probes: u32,
     /// Lines of the server's output kept for [`Supervised::recent_output`].
     pub output_lines: usize,
+    /// Longest line kept; the rest of a longer line is cut.
+    pub output_line_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -537,7 +546,11 @@ impl Supervised {
             Ok(mut child) => {
                 let pid = child.id();
                 let (tx, rx) = channel();
-                let keep = (self.output.clone(), self.settings.output_lines);
+                let keep = (
+                    self.output.clone(),
+                    self.settings.output_lines,
+                    self.settings.output_line_bytes,
+                );
                 if let Some(out) = child.stdout.take() {
                     watch(out, tx.clone(), keep.clone());
                 }
@@ -652,6 +665,7 @@ impl Supervised {
             State::Waiting { .. } | State::GaveUp => None,
         };
         self.signals = None;
+        self.restarts.reset();
         self.state = State::Waiting {
             until: Instant::now(),
         };
@@ -675,14 +689,19 @@ impl Supervised {
 fn watch<R: Read + Send + 'static>(
     stream: R,
     signals: Sender<(Signal, String)>,
-    (output, keep): (Output, usize),
+    (output, keep, line_bytes): (Output, usize, usize),
 ) {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
         let mut line = Vec::new();
         loop {
             line.clear();
-            match reader.read_until(b'\n', &mut line) {
+            // Memory stays bounded however the server writes: a line longer
+            // than the cap arrives in pieces of that size.
+            match (&mut reader)
+                .take(cap(line_bytes))
+                .read_until(b'\n', &mut line)
+            {
                 Ok(0) | Err(_) => return,
                 Ok(_) => {}
             }
@@ -693,7 +712,7 @@ fn watch<R: Read + Send + 'static>(
                 let mut kept = output
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                kept.push_back(text.trim_end().to_string());
+                kept.push_back(cut(text.trim_end(), line_bytes));
                 while kept.len() > keep {
                     kept.pop_front();
                 }
@@ -705,6 +724,24 @@ fn watch<R: Read + Send + 'static>(
             }
         }
     });
+}
+
+/// The most read as one piece of a line: twice the kept length, so a
+/// signature that starts near the end of the kept part is still seen whole.
+fn cap(line_bytes: usize) -> u64 {
+    u64::try_from(line_bytes.saturating_mul(2)).unwrap_or(u64::MAX)
+}
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn cut(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{} [cut]", &text[..end])
 }
 
 /// Closes the tether's pipe, which stops the server's process group with

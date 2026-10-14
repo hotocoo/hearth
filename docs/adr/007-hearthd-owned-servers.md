@@ -45,11 +45,13 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
 - **Bounds.** One JSON request and one JSON answer per line, each at most `control.max_message_bytes`, the exchange within `control.timeout_ms`. Each client gets its own handler, up to `control.max_clients` at once. A client beyond that is answered "busy" straight away, so stalled clients can occupy handlers for at most the timeout, but never memory or threads without bound. (A first version answered clients one at a time; on CI a stalled client then held the next one past its own deadline.) A malformed or oversized request gets an error answer. Text printed by `hearth status` is stripped of control characters.
 
 - `status`: each server's name, address, expected model, program, state (`starting`, `ready`, `waiting`, `gave_up`), pid, restart count and last event.
-- `restart NAME`: stop and start again at once, without charging the restart budget, because a person asking is not a crash. It also revives a server hearthd gave up on. Unknown names are refused. At most one order is pending per server, so repeated requests cannot hold a server down.
+- `restart NAME`: stop and start again at once, without charging the restart budget, because a person asking is not a crash. It also revives a server hearthd gave up on. Unknown names are refused. Orders do not queue: the latest one for a server replaces any not yet acted on, so `stop` then `start` means start, and repeated requests cannot hold a server down.
 
 - `stop NAME`: stop the server and keep it down, to free its memory, until `start NAME`. A stop is not a failure: nothing is restarted, charged or notified, and status shows `stopped`.
-- `start NAME`: start a stopped server, or one hearthd gave up on. Starting one that runs does nothing.
-- `logs NAME`: the last `supervise.output_lines` lines the server printed on stdout and stderr, across restarts. These are what explain a load failure, and agents should not have to hunt for log files to find them.
+- `start NAME`: start a stopped server, or one hearthd gave up on. Starting one that runs does nothing. A start or restart forgets the crash ledger, because a person asking is a new beginning; without that, a server started right after a give-up would give up again at its first exit.
+- `logs NAME`: the last `supervise.output_lines` lines the server printed on stdout and stderr, across restarts.
+  - Each line is cut at `supervise.output_line_bytes`, and output without newlines is taken in pieces, so memory stays bounded.
+  - An answer that would exceed `control.max_message_bytes` drops its oldest lines and says how many (`left_out`). These are what explain a load failure, and agents should not have to hunt for log files to find them.
 
 `hearth status`, `hearth restart|stop|start|logs NAME` and the MCP tools of the same names are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
 

@@ -193,50 +193,91 @@ fn tools() -> Value {
 fn command_line(tool: &Value, args: &Value) -> Result<Vec<String>, String> {
     let name = tool["name"].as_str().unwrap_or_default();
     let cli = &tool["cli"];
-    let mut line: Vec<String> = vec!["hearth".into(), "--json".into(), name.into()];
+    let schema = &tool["inputSchema"];
+    let empty = serde_json::Map::new();
+    let given = match args {
+        Value::Null => &empty,
+        Value::Object(o) => o,
+        _ => return Err(format!("{name}: arguments must be an object")),
+    };
+    for key in schema["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if given.get(key).is_none_or(Value::is_null) {
+            return Err(format!("{key} is required"));
+        }
+    }
     let positional: Vec<&str> = cli["positional"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .collect();
-    let required: Vec<&str> = tool["inputSchema"]["required"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
-    for key in &required {
-        if args[*key].is_null() {
-            return Err(format!("{key} is required"));
-        }
-    }
-    let text = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
-    for key in &positional {
-        if !args[*key].is_null() {
-            line.push(text(&args[*key]));
-        }
-    }
-    let Some(given) = args.as_object() else {
-        return Ok(line);
-    };
+    let mut flags: Vec<String> = Vec::new();
+    let mut tail: Vec<(usize, String)> = Vec::new();
     for (key, value) in given {
-        if positional.contains(&key.as_str()) || value.is_null() {
+        if value.is_null() {
             continue;
         }
-        if tool["inputSchema"]["properties"].get(key).is_none() {
-            return Err(format!("{name} takes no argument {key}"));
-        }
-        let flag = cli["flags"][key]
-            .as_str()
-            .map_or_else(|| format!("--{}", key.replace('_', "-")), str::to_string);
-        match value {
-            Value::Bool(true) => line.push(flag),
-            Value::Bool(false) => {}
-            v => line.extend([flag, text(v)]),
+        let spec = schema["properties"]
+            .get(key)
+            .ok_or_else(|| format!("{name} takes no argument {key}"))?;
+        let text = typed(key, value, spec)?;
+        if let Some(at) = positional.iter().position(|p| p == key) {
+            tail.push((at, text));
+        } else if spec["type"] == "boolean" {
+            if value == &Value::Bool(true) {
+                flags.push(flag(cli, key));
+            }
+        } else {
+            flags.push(format!("{}={text}", flag(cli, key)));
         }
     }
+    tail.sort_by_key(|(at, _)| *at);
+    let mut line: Vec<String> = vec!["hearth".into(), "--json".into(), name.into()];
+    line.extend(flags);
+    // Everything after `--` is a value, whatever it starts with.
+    if !tail.is_empty() {
+        line.push("--".into());
+        line.extend(tail.into_iter().map(|(_, t)| t));
+    }
     Ok(line)
+}
+
+/// The CLI flag for argument `key`: renamed in the tool's `cli.flags`, else
+/// `--key` with `_` as `-`.
+fn flag(cli: &Value, key: &str) -> String {
+    cli["flags"][key]
+        .as_str()
+        .map_or_else(|| format!("--{}", key.replace('_', "-")), str::to_string)
+}
+
+/// `value` as command-line text, if it has the type (and is one of the
+/// values) the tool's schema declares for `key`.
+fn typed(key: &str, value: &Value, spec: &Value) -> Result<String, String> {
+    let ok = match spec["type"].as_str() {
+        Some("string") => value.is_string(),
+        Some("integer") => value.is_u64() || value.is_i64(),
+        Some("boolean") => value.is_boolean(),
+        _ => false,
+    };
+    if !ok {
+        return Err(format!("{key} must be a {}", spec["type"]));
+    }
+    if let Some(allowed) = spec["enum"].as_array()
+        && !allowed.contains(value)
+    {
+        return Err(format!(
+            "{key} must be one of {}",
+            Value::Array(allowed.clone())
+        ));
+    }
+    Ok(value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_string))
 }
 
 fn call(name: &str, args: &Value) -> Result<Value, String> {
@@ -361,9 +402,17 @@ mod tests {
             &json!({"model":"qwen3:8b","ctx":4096,"cache_type":"q8_0","parallel":2,"ubatch":512}),
         )
         .unwrap();
-        assert_eq!(&line[..4], ["hearth", "--json", "fit", "qwen3:8b"]);
-        assert!(line.windows(2).any(|w| w == ["--cache-type", "q8_0"]));
-        assert!(line.windows(2).any(|w| w == ["--ctx", "4096"]));
+        assert_eq!(&line[..3], ["hearth", "--json", "fit"]);
+        assert_eq!(&line[line.len() - 2..], ["--", "qwen3:8b"]);
+        assert!(line.contains(&"--cache-type=q8_0".to_string()));
+        assert!(line.contains(&"--ctx=4096".to_string()));
+        // A value that looks like a flag stays a value.
+        let follow = command_line(&find("follow"), &json!({"pattern":"--kind=run"})).unwrap();
+        assert_eq!(&follow[3..], ["--", "--kind=run"]);
+        // Types and enums are the schema's.
+        assert!(command_line(&find("tag"), &json!({"delete":"healthy"})).is_err());
+        assert!(command_line(&find("log"), &json!({"kind":"secrets"})).is_err());
+        assert!(command_line(&find("log"), &json!(["x"])).is_err());
         let ports = command_line(&find("ports"), &json!({"runtimes_only": true})).unwrap();
         assert_eq!(ports.last().unwrap(), "--runtimes");
         assert!(command_line(&find("follow"), &json!({})).is_err());
