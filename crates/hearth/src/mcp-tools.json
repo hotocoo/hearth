@@ -337,6 +337,20 @@
     }
   },
   {
+    "name": "bundle",
+    "description": "Everything hearth can say about this machine in one document: doctor, ports, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "description": "Incidents since this time prefix, e.g. 2026-10-14."
+        }
+      }
+    },
+    "cli": {}
+  },
+  {
     "name": "config",
     "description": "Every hearth setting in effect: value, source (built-in or the user's file), and what it means. hearth keeps no numbers in code; use this to see why it waited, retried, restarted or reported something, and which key to change.",
     "inputSchema": {

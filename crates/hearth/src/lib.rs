@@ -6,6 +6,7 @@
 //! document meant for scripts and AI agents. Nothing here guesses: values are
 //! measured, read from files, or given on the command line.
 
+mod bundle;
 mod config_cmd;
 #[cfg(unix)]
 mod control;
@@ -94,6 +95,10 @@ enum Command {
     /// (Linux): install, uninstall, or show the unit.
     #[cfg(unix)]
     Service(service::Args),
+    /// Everything hearth can say about this machine in one JSON document:
+    /// doctor, ports, incidents, hearthd, recent run events, tags and
+    /// settings, with secrets redacted. For bug reports and agents.
+    Bundle(bundle::Args),
     /// Every setting in effect: its value, whether it is built in or comes
     /// from your file, and what it means.
     Config(config_cmd::Args),
@@ -116,6 +121,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Run(args) => run::run(args, cli.json),
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),
+        Command::Bundle(args) => bundle::run(args, cli.json),
         #[cfg(unix)]
         Command::Service(args) => service::run(args, cli.json),
         #[cfg(unix)]
