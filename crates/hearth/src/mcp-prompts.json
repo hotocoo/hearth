@@ -3,7 +3,7 @@
     "name": "diagnose-slow-machine",
     "description": "The machine is slow, swapping, or close to falling over: find which resource is running out, who holds it, and what to do.",
     "arguments": [],
-    "template": "This machine is slow or unstable. Diagnose it with hearth's tools, in this order, and stop as soon as the cause is clear:\n\n1. Call `doctor` with watch_seconds 30. Note memory pressure, available memory, swap, and any open-file, thread or CLOSE_WAIT growth with its projected time to the limit.\n2. Call `diff` with kind \"doctor\" and from \"~10\" to see what moved across recent recorded observations; steady growth in one process across snapshots is a leak.\n3. Call `incidents` with since set to today's date to see whether the kernel already panicked, killed (jetsam or OOM) or found hung tasks.\n4. Call `ports` with runtimes_only true to see which model servers are resident and how much memory each holds.\n\nThen answer in this shape: the resource that is running out; the process responsible, with evidence from the tools; what to do now, naming the exact server or process; and what to watch for. Do not stop or restart anything yourself unless it is a server hearthd owns (see `status`) and the user asked for it."
+    "template": "This machine is slow or unstable. Diagnose it with hearth's tools, in this order, and stop as soon as the cause is clear:\n\n1. Call `doctor` with watch_seconds 30. Note memory pressure, available memory, swap, and any open-file, thread or CLOSE_WAIT growth with its projected time to the limit.\n2. Call `diff` with kind \"doctor\" and from \"~10\" to see what moved across recent recorded observations; steady growth in one process across snapshots is a leak. If there are not enough snapshots, step 1 has just recorded one: say that history starts now and go on.\n3. Call `incidents` with since set to today's date to see whether the kernel already panicked, killed (jetsam or OOM) or found hung tasks.\n4. Call `ports` with runtimes_only true to see which model servers are resident and how much memory each holds.\n\nThen answer in this shape: the resource that is running out; the process responsible, with evidence from the tools; what to do now, naming the exact server or process; and what to watch for. Do not stop or restart anything yourself unless it is a server hearthd owns (see `status`) and the user asked for it."
   },
   {
     "name": "server-died",
@@ -13,10 +13,10 @@
         "name": "server",
         "description": "Name in hearthd's [servers], or the port the server listens on.",
         "required": false,
-        "default": "the one that failed; find it from status and ports"
+        "default": "unknown"
       }
     ],
-    "template": "A model server ({server}) stopped working. Find out why:\n\n1. Call `status` to see whether hearthd owns it: its state (ready, waiting, gave_up), restart count and last event. If hearthd is not running, say so and continue.\n2. Call `log` with kind \"run\" and limit 30. Read the events for this server in order: exited (with code or signal), wedged (stopped answering), poisoned (backend latched after an out-of-memory error; it answers /health but fails every request), not_ready, give_up.\n3. Call `ports` to see what answers on its port now, and whether it is reported as not answering.\n4. Call `incidents` with since set to today's date: a jetsam or OOM kill of this process explains an exit with signal 9.\n5. Call `diff` with kind \"ports\" to see when it vanished or restarted.\n\nAnswer with: the cause (exit, wedge, poisoned backend, killed for memory, or crash loop), the evidence, and the fix. If hearthd owns it and is no longer restarting it, offer `restart` and say what will happen. If memory was the cause, say which other servers to unload first (from `ports`) and suggest a smaller context, checked with `fit`."
+    "template": "A model server stopped working (named: {server}; if unknown, find the failing one in the steps below). Find out why:\n\n1. Call `status` to see whether hearthd owns it: its state (ready, waiting, gave_up), restart count and last event. If hearthd is not running, say so and continue.\n2. Call `log` with kind \"run\" and limit 30. Read the events for this server in order: exited (with code or signal), wedged (stopped answering), poisoned (backend latched after an out-of-memory error; it answers /health but fails every request), not_ready, give_up.\n3. Call `ports` to see what answers on its port now, and whether it is reported as not answering.\n4. Call `incidents` with since set to today's date: a jetsam or OOM kill of this process explains an exit with signal 9.\n5. Call `diff` with kind \"ports\" to see when it vanished or restarted.\n\nAnswer with: the cause (exit, wedge, poisoned backend, killed for memory, or crash loop), the evidence, and the fix. If hearthd owns it and is no longer restarting it, offer `restart` and say what will happen. If memory was the cause, say which other servers to unload first (from `ports`) and suggest a smaller context, checked with `fit`."
   },
   {
     "name": "can-i-load",
@@ -34,7 +34,7 @@
       },
       {
         "name": "cache_type",
-        "description": "KV cache type, e.g. f16 or q8_0.",
+        "description": "KV cache type, e.g. f16 or q8_0 (default f16).",
         "required": false,
         "default": "f16"
       }

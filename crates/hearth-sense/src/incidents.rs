@@ -147,7 +147,7 @@ pub fn parse_file(path: &Path) -> Option<Incident> {
     })
 }
 
-/// Incidents in kernel log lines as `journalctl -k -o short-iso` prints
+/// Incidents in kernel log lines as `journalctl -o short-iso` prints
 /// them: `<time> <host> kernel: <message>`. The messages matched are the
 /// kernel's own format strings:
 /// * `mm/oom_kill.c`: `"%s: Killed process %d (%s) total-vm:%lukB,

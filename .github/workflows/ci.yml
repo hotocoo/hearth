@@ -34,6 +34,8 @@ jobs:
           cargo build -p hearth --bin hearth
           # The runner may not be allowed to read the kernel log; then the
           # command must say why, not crash or claim there is nothing.
+          # Every boot, not only the current one (-k would imply -b).
+          echo "kernel lines, all boots: $(journalctl _TRANSPORT=kernel -q --no-pager 2>/dev/null | wc -l); current boot: $(journalctl -k -q --no-pager 2>/dev/null | wc -l)"
           if ./target/debug/hearth --json incidents > incidents.json 2> incidents.err; then
             python3 -c "import json; json.load(open('incidents.json'))"
           else

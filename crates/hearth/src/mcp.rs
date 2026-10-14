@@ -114,8 +114,20 @@ fn prompt_list() -> Vec<Value> {
     prompts()
         .into_iter()
         .map(|mut p| {
+            // Only what the protocol defines: the template and the
+            // argument defaults stay on this side.
             if let Some(o) = p.as_object_mut() {
                 o.remove("template");
+                for arg in o
+                    .get_mut("arguments")
+                    .and_then(Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(a) = arg.as_object_mut() {
+                        a.remove("default");
+                    }
+                }
             }
             p
         })
@@ -285,6 +297,17 @@ mod tests {
         let listed = reply["result"]["prompts"].as_array().unwrap();
         assert!(listed.len() >= 4);
         assert!(listed.iter().all(|p| p.get("template").is_none()));
+        let allowed = ["name", "description", "required"];
+        for arg in listed
+            .iter()
+            .flat_map(|p| p["arguments"].as_array().unwrap())
+        {
+            let keys: Vec<&String> = arg.as_object().unwrap().keys().collect();
+            assert!(
+                keys.iter().all(|k| allowed.contains(&k.as_str())),
+                "{keys:?}"
+            );
+        }
         let tools: Vec<String> = tools()
             .as_array()
             .unwrap()

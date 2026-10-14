@@ -20,22 +20,30 @@ pub struct Args {
     all: bool,
 }
 
-/// The kernel log, where Linux records OOM kills and hung tasks. Reading
+/// The kernel log, where Linux records OOM kills and hung tasks, from every
+/// boot the journal kept: `journalctl -k` would mean the current boot only,
+/// and the kill that matters is usually the one before the reboot. Reading
 /// it needs membership in `systemd-journal` or `adm` on most systems.
 fn kernel_log() -> Result<Vec<Incident>, String> {
     let out = std::process::Command::new("journalctl")
-        .args(["-k", "-o", "short-iso", "--no-pager", "--quiet"])
+        .args([
+            "_TRANSPORT=kernel",
+            "-o",
+            "short-iso",
+            "--no-pager",
+            "--quiet",
+        ])
         .output()
         .map_err(|e| format!("journalctl: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "journalctl -k: {}; reading the kernel log usually needs the systemd-journal or adm group",
+            "journalctl _TRANSPORT=kernel: {}; reading the kernel log usually needs the systemd-journal or adm group",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
     Ok(incidents::from_kernel_log(
         &String::from_utf8_lossy(&out.stdout),
-        std::path::Path::new("journalctl -k"),
+        std::path::Path::new("journalctl _TRANSPORT=kernel"),
     ))
 }
 

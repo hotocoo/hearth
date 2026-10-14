@@ -82,7 +82,7 @@ The GGUF reader is bounded:
 
 ## Addendum (2026-10-15): Linux incidents
 
-On Linux, `hearth incidents` reads the kernel log through `journalctl -k -o short-iso`. It reports two kinds of incident:
+On Linux, `hearth incidents` reads the kernel log with `journalctl _TRANSPORT=kernel -o short-iso`, which covers every boot the journal kept. `journalctl -k` would imply the current boot only, and the kill that matters after a reboot is in the boot before. A journal kept in memory only (`Storage=volatile`) keeps nothing across reboots, whatever is asked. It reports two kinds of incident:
 - **OOM kills.** Machine-wide or by a memory cgroup's limit. Each gives the process, its pid, and the anonymous memory the kill freed.
 - **Hung tasks.** A task in uninterruptible sleep past the kernel's hung-task timeout, which is what a process stuck on a dead device or GPU driver looks like.
 
