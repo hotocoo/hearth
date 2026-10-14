@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:36 your own workflows
+
+- `workflows.json` beside the user's config adds workflows to the built-in ones, or replaces them by name. MCP serves them as prompts. A workflow that names a tool hearth does not have is skipped with the reason.
+- `hearth workflows` lists every workflow with its source. `hearth workflows NAME --arg KEY=VALUE` prints one, filled in.
+- `doctor --explain` names each platform's own source (sysctl or `/proc` file), and MCP `doctor` takes `explain`.
+
 ### 2026-10-15 03:04 doctor --explain
 
 - `hearth doctor --explain` (MCP `doctor` with `explain`) lists, for every memory figure and limit, the counter, sysctl or file it comes from and the formula that combines them.
