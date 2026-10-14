@@ -175,7 +175,7 @@
   },
   {
     "name": "diff",
-    "description": "What changed between two recorded snapshots. ports: listeners that appeared or vanished, runtimes that restarted (new pid), stopped answering, changed health or loaded models, and footprint movement. doctor: memory pressure changes, available memory, swap, kernel-wide open files and threads, and per-process open files, threads and CLOSE_WAIT movement (a leak shows as steady growth across snapshots). Defaults to the last two snapshots; run ports or doctor first to record a fresh one.",
+    "description": "What changed between two recorded snapshots. ports: listeners that appeared or vanished, runtimes that restarted (new pid), stopped answering, changed health or loaded models, and footprint movement. doctor: memory pressure changes, available memory, swap, kernel-wide open files and threads, and per-process open files, threads and CLOSE_WAIT movement (a leak shows as steady growth across snapshots). Defaults to the last two snapshots; run ports or doctor first to record a fresh one. meanwhile lists the notes and run events recorded between the two snapshots, oldest first: what someone did, or what a supervised server did, between them.",
     "inputSchema": {
       "type": "object",
       "properties": {

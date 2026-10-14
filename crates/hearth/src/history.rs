@@ -452,6 +452,50 @@ struct DiffReport {
     changes: Vec<Change>,
     /// Grouped by unit, largest movement first within each.
     deltas: Vec<Delta>,
+    /// What was noted (`hearth note`) and what supervised servers did
+    /// between the two snapshots, oldest first: the why behind the what.
+    meanwhile: Vec<LogEntry>,
+    /// Events in that span that could not be read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unreadable: Vec<String>,
+}
+
+/// Notes and run events recorded after snapshot `from` and up to `to`,
+/// oldest first. Ids start with their zero-padded time, so comparing ids
+/// compares times.
+fn meanwhile(
+    journal: &Journal,
+    from: &str,
+    to: &str,
+) -> Result<(Vec<LogEntry>, Vec<String>), String> {
+    let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+    let mut entries = Vec::new();
+    let mut unreadable = Vec::new();
+    for kind in [Kind::Run, Kind::Note] {
+        let ids = journal.ids(kind.name()).map_err(|e| e.to_string())?;
+        let count = ids.len();
+        for (i, id) in ids.iter().enumerate() {
+            if id.as_str() <= lo || id.as_str() > hi {
+                continue;
+            }
+            match journal.read(id) {
+                Ok(s) => entries.push(LogEntry {
+                    kind: kind.name(),
+                    back: count - 1 - i,
+                    summary: kind.summary(&s.body),
+                    id: s.id,
+                    taken_at_ms: s.taken_at_ms,
+                    hearth_version: s.hearth_version,
+                }),
+                // Thinned away after listing: gone, not unreadable.
+                Err(hearth_core::state::StateError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => unreadable.push(e.to_string()),
+            }
+        }
+    }
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok((entries, unreadable))
 }
 
 pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
@@ -474,12 +518,15 @@ pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
             n <= limit.get()
         });
     }
+    let (meanwhile, unreadable) = meanwhile(&journal, &from.id, &to.id)?;
     let report = DiffReport {
         kind: kind.name(),
         from: Side::from(&from),
         to: Side::from(&to),
         changes,
         deltas,
+        meanwhile,
+        unreadable,
     };
     if json {
         crate::to_json(&report)
@@ -527,6 +574,21 @@ fn render_diff(r: &DiffReport) -> String {
             d.unit
                 .show(u64::try_from(d.by.unsigned_abs()).unwrap_or(u64::MAX))
         );
+    }
+    if !r.meanwhile.is_empty() {
+        let _ = writeln!(out, "meanwhile:");
+    }
+    for e in &r.meanwhile {
+        let _ = writeln!(
+            out,
+            "  {:<4} {:>11}  {}",
+            e.kind,
+            age(e.taken_at_ms),
+            e.summary
+        );
+    }
+    for e in &r.unreadable {
+        let _ = writeln!(out, "  unreadable: {e}");
     }
     out
 }
@@ -759,6 +821,32 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn diff_lists_what_happened_between_its_snapshots() {
+        let dir = std::env::temp_dir().join(format!("hearth-meanwhile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let j = Journal::at(dir.clone(), 10).unwrap();
+        j.record("note", &serde_json::json!({"message": "before"}))
+            .unwrap();
+        let from = j.record("ports", &1).unwrap().snapshot.id;
+        j.record(
+            "note",
+            &serde_json::json!({"message": "during", "by": "me"}),
+        )
+        .unwrap();
+        let to = j.record("ports", &2).unwrap().snapshot.id;
+        j.record("note", &serde_json::json!({"message": "after"}))
+            .unwrap();
+        let (entries, unreadable) = meanwhile(&j, &from, &to).unwrap();
+        let said: Vec<&str> = entries.iter().map(|e| e.summary.as_str()).collect();
+        assert_eq!(said, ["me: during"]);
+        assert_eq!(entries[0].back, 1);
+        assert!(unreadable.is_empty());
+        // Either order of the two ends gives the same span.
+        assert_eq!(meanwhile(&j, &to, &from).unwrap().0.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn a_wrong_pointer_says_where_it_went_wrong() {
         let v = serde_json::json!({"body": {"ports": [1, 2], "health": {"memory": 1}}});
