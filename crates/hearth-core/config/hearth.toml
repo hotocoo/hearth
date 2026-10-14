@@ -107,6 +107,11 @@ limit_horizon_ms = 3600000
 # once.
 confirm_rounds = 2
 
+# Whether hearthd runs these rounds too, alongside keeping its servers. When
+# it does, `hearth watch` refuses to run beside it, so nothing is reported
+# twice.
+in_hearthd = true
+
 [control]
 # hearthd's control socket (hearth status, hearth restart, MCP). Requests and
 # answers are a few hundred bytes of JSON; anything past this many bytes is

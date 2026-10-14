@@ -268,6 +268,26 @@ fn handle(
     }
 }
 
+/// Why `hearth watch` should not run: hearthd already watches this state
+/// directory when it holds the lock and has watching on. The lock is only
+/// tested, never kept.
+#[must_use]
+pub fn watching() -> Option<String> {
+    let config = hearth_core::config::load().ok()?;
+    if !config.watch.in_hearthd {
+        return None;
+    }
+    let dir = hearth_core::state::dir().ok()?;
+    let file = File::open(dir.join("hearthd.lock")).ok()?;
+    match file.try_lock_shared() {
+        Err(std::fs::TryLockError::WouldBlock) => Some(
+            "hearthd already watches this machine (watch.in_hearthd); its findings are in its log and in hearth log --kind doctor / ports. Stop it or set watch.in_hearthd = false to watch here."
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// Holds the state directory's lock for as long as hearthd runs. The kernel
 /// releases it however hearthd ends, so whoever holds it is the one live
 /// hearthd, and a socket found without it is stale.
@@ -352,6 +372,13 @@ pub fn run() -> Result<(), String> {
             .name(format!("supervise {name}"))
             .spawn(move || supervise(&name, &server, &config, &board, &rx))
             .map_err(|e| format!("cannot start supervising: {e}"))?;
+    }
+    if config.watch.in_hearthd {
+        let config = config.clone();
+        std::thread::Builder::new()
+            .name("watch".into())
+            .spawn(move || crate::watch::forever(&config))
+            .map_err(|e| format!("cannot start watching: {e}"))?;
     }
     log(&format!(
         "hearthd: keeping {} server(s); control socket {}",

@@ -49,6 +49,7 @@ pub struct Watch {
     pub ports_interval_ms: u64,
     pub limit_horizon_ms: u64,
     pub confirm_rounds: u32,
+    pub in_hearthd: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

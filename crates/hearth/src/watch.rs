@@ -88,23 +88,29 @@ impl Tracker {
     }
 }
 
-struct Out<'a> {
-    stdout: std::io::StdoutLock<'a>,
+struct Out {
     json: bool,
+    /// Whether a closed stdout ends the watch: yes for the command, whose
+    /// reader is gone; no inside hearthd, whose watching matters more than
+    /// its log.
+    strict: bool,
     notify: hearth_core::config::Notify,
     sending: Vec<JoinHandle<()>>,
 }
 
-impl Out<'_> {
+impl Out {
     fn say(&mut self, value: &Value, line: &str) -> Result<(), String> {
         let text = if self.json {
             value.to_string()
         } else {
             line.to_string()
         };
-        writeln!(self.stdout, "{text}")
-            .and_then(|()| self.stdout.flush())
-            .map_err(|e| format!("output closed: {e}"))
+        let mut stdout = std::io::stdout().lock();
+        let written = writeln!(stdout, "{text}").and_then(|()| stdout.flush());
+        match written {
+            Err(e) if self.strict => Err(format!("output closed: {e}")),
+            _ => Ok(()),
+        }
     }
 
     fn notify(&mut self, title: &str, text: &str, event: &Value) {
@@ -185,6 +191,25 @@ fn ports_round(
     Ok((report, problems))
 }
 
+/// Watches until the process ends, for hearthd: the same rounds, records and
+/// notifications as `hearth watch`, logged as plain lines.
+pub fn forever(config: &hearth_core::config::Config) {
+    let w = &config.watch;
+    let mut out = Out {
+        json: false,
+        strict: false,
+        notify: config.notify.clone(),
+        sending: Vec::new(),
+    };
+    let every = (
+        Duration::from_millis(w.doctor_interval_ms),
+        Duration::from_millis(w.ports_interval_ms),
+        Duration::from_millis(w.limit_horizon_ms),
+    );
+    // Only output can fail the loop, and output never fails here.
+    let _ = watch(&mut out, w, None, every);
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
     let w = &config.watch;
@@ -199,8 +224,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         ),
         None => None,
     };
+    #[cfg(unix)]
+    if let Some(why) = crate::daemon::watching() {
+        return Err(why);
+    }
     let mut out = Out {
-        stdout: std::io::stdout().lock(),
+        strict: true,
         json,
         notify: config.notify.clone(),
         sending: Vec::new(),

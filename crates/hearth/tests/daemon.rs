@@ -148,6 +148,14 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         "unknown names are refused"
     );
 
+    // hearthd watches the machine too, so a second watcher is refused.
+    assert!(
+        hearth(&dir, &["watch", "--for-seconds", "1"])
+            .unwrap_err()
+            .contains("already watches"),
+        "hearth watch beside hearthd"
+    );
+
     // One hearthd per state directory.
     let second = hearthd(&dir).output().unwrap();
     assert!(!second.status.success());

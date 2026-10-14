@@ -63,7 +63,7 @@ cargo build --release -p hearth
 ./target/release/hearth watch               # doctor + ports on intervals, all recorded; reports pressure, limits
 #                                             reached within the horizon, runtimes that vanish or go silent
 ./target/release/hearth config supervise    # every setting in effect, its source and meaning; no number lives in code
-./target/release/hearthd                    # keeps every [servers.NAME] in your config alive, like hearth run each
+./target/release/hearthd                    # keeps every [servers.NAME] alive like hearth run, and watches like hearth watch
 ./target/release/hearth status              # what hearthd keeps: state, pid, restarts, last event
 ./target/release/hearth restart vision      # restart one now (owned servers only)
 ./target/release/hearth service install     # run hearthd at login: launchd on macOS, systemd user unit on Linux
