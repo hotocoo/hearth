@@ -43,6 +43,14 @@ impl Kind {
         }
     }
 
+    fn entries(self, body: &Value) -> Vec<(String, String)> {
+        match self {
+            Self::Ports => crate::ports::entries(body),
+            Self::Doctor => crate::doctor::entries(body),
+            Self::Run => crate::run::entries(body),
+        }
+    }
+
     fn diff(self, before: &Value, after: &Value) -> Result<(Vec<Change>, Vec<Delta>), String> {
         match self {
             Self::Ports => Ok(crate::ports::diff(before, after)),
@@ -78,6 +86,27 @@ pub struct DiffArgs {
     /// deltas cannot crowd out a growing count of open files or threads.
     #[arg(long)]
     limit: Option<NonZeroUsize>,
+}
+
+#[derive(clap::Args)]
+pub struct ShowArgs {
+    #[arg(long, value_enum, default_value_t = Kind::Ports)]
+    kind: Kind,
+    /// An id from `hearth log`, or ~N for N before the latest.
+    #[arg(default_value = "~0")]
+    reference: String,
+}
+
+#[derive(clap::Args)]
+pub struct FollowArgs {
+    /// Part of a process name, pid, address, path or server name; case is
+    /// ignored.
+    pattern: String,
+    #[arg(long, value_enum, default_value_t = Kind::Ports)]
+    kind: Kind,
+    /// Show every snapshot, not only those where something changed.
+    #[arg(long)]
+    all: bool,
 }
 
 /// Something that is different between two snapshots.
@@ -339,4 +368,153 @@ fn render_diff(r: &DiffReport) -> String {
         );
     }
     out
+}
+
+/// `hearth show`: one recorded snapshot in full, as it was written.
+pub fn show(args: &ShowArgs, _json: bool) -> Result<String, String> {
+    let snapshot = journal()?
+        .resolve(args.kind.name(), &args.reference)
+        .map_err(|e| e.to_string())?;
+    crate::to_json(&snapshot)
+}
+
+#[derive(Serialize)]
+struct Step {
+    id: String,
+    taken_at_ms: u64,
+    who: String,
+    state: String,
+}
+
+/// The steps of everything matching `pattern` through `snapshots`, oldest
+/// first: a step where a match appears, changes (or every snapshot with
+/// `all`), and a `gone` step where it disappears.
+fn timeline(
+    snapshots: &[Snapshot],
+    entries: impl Fn(&Value) -> Vec<(String, String)>,
+    pattern: &str,
+    all: bool,
+) -> Vec<Step> {
+    let pattern = pattern.to_lowercase();
+    let mut steps = Vec::new();
+    let mut last: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for s in snapshots {
+        let now: std::collections::BTreeMap<String, String> = entries(&s.body)
+            .into_iter()
+            .filter(|(who, _)| who.to_lowercase().contains(&pattern))
+            .collect();
+        let mut step = |who: &String, state: String| {
+            steps.push(Step {
+                id: s.id.clone(),
+                taken_at_ms: s.taken_at_ms,
+                who: who.clone(),
+                state,
+            });
+        };
+        for (who, state) in &now {
+            if all || last.get(who) != Some(state) {
+                step(who, state.clone());
+            }
+        }
+        for who in last.keys().filter(|w| !now.contains_key(*w)) {
+            step(who, "gone".into());
+        }
+        last = now;
+    }
+    steps
+}
+
+/// `hearth follow`: what one process, port or server looked like in every
+/// recorded snapshot, oldest first. By default only the snapshots where its
+/// state changed, appeared or vanished are listed, the way `git log` lists
+/// commits that touched a file.
+pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
+    let journal = journal()?;
+    let mut snapshots = Vec::new();
+    let mut unreadable = Vec::new();
+    for snapshot in journal
+        .recent(args.kind.name(), usize::MAX)
+        .map_err(|e| e.to_string())?
+    {
+        match snapshot {
+            Ok(s) => snapshots.push(s),
+            Err(e) => unreadable.push(e.to_string()),
+        }
+    }
+    let steps = timeline(
+        &snapshots,
+        |b| args.kind.entries(b),
+        &args.pattern,
+        args.all,
+    );
+    if json {
+        return crate::to_json(&serde_json::json!({
+            "kind": args.kind.name(),
+            "pattern": args.pattern,
+            "steps": steps,
+            "unreadable": unreadable,
+        }));
+    }
+    let mut out = String::new();
+    if steps.is_empty() {
+        let _ = writeln!(
+            out,
+            "nothing matching {:?} in the {} snapshots recorded",
+            args.pattern,
+            args.kind.name()
+        );
+    }
+    for s in &steps {
+        let _ = writeln!(out, "{:>11}  {}: {}", age(s.taken_at_ms), s.who, s.state);
+    }
+    for e in &unreadable {
+        let _ = writeln!(out, "unreadable: {e}");
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snap(n: u64, ports: &[(&str, &str)]) -> Snapshot {
+        Snapshot {
+            id: format!("{n}-1-ports"),
+            kind: "ports".into(),
+            taken_at_ms: n,
+            hearth_version: String::new(),
+            body: serde_json::json!(ports),
+        }
+    }
+
+    fn entries(body: &Value) -> Vec<(String, String)> {
+        body.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p[0].as_str().unwrap().into(), p[1].as_str().unwrap().into()))
+            .collect()
+    }
+
+    #[test]
+    fn follow_lists_appearance_changes_and_disappearance_only() {
+        let history = [
+            snap(1, &[("ollama pid 5", "ok"), ("node pid 9", "ok")]),
+            snap(2, &[("ollama pid 5", "ok")]),
+            snap(3, &[("ollama pid 5", "NO ANSWER")]),
+            snap(4, &[]),
+        ];
+        let got: Vec<(u64, String)> = timeline(&history, entries, "OLLAMA", false)
+            .into_iter()
+            .map(|s| (s.taken_at_ms, s.state))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (1, "ok".into()),
+                (3, "NO ANSWER".into()),
+                (4, "gone".into())
+            ]
+        );
+        assert_eq!(timeline(&history, entries, "ollama", true).len(), 4);
+    }
 }

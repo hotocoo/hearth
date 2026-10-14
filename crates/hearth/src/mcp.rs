@@ -69,7 +69,7 @@ fn handle(msg: &Value) -> Option<Value> {
             )
         }
         Some("ping") => ok(id, json!({})),
-        Some("tools/list") => ok(id, json!({ "tools": tools() })),
+        Some("tools/list") => ok(id, json!({ "tools": listed_tools() })),
         Some("prompts/list") => ok(id, json!({ "prompts": prompt_list() })),
         Some("prompts/get") => match prompt(
             params["name"].as_str().unwrap_or_default(),
@@ -167,99 +167,91 @@ fn prompt(name: &str, arguments: &Value) -> Result<Value, String> {
 
 /// The tool list, kept as data next to this file. Its validity is checked by
 /// the tests below.
+/// The tool list as MCP clients see it: without the CLI mapping.
+fn listed_tools() -> Value {
+    let mut tools = tools();
+    for t in tools.as_array_mut().into_iter().flatten() {
+        if let Some(o) = t.as_object_mut() {
+            o.remove("cli");
+        }
+    }
+    tools
+}
+
 fn tools() -> Value {
     serde_json::from_str(include_str!("mcp-tools.json")).unwrap_or_else(
         |e| json!([{ "name": "broken", "description": format!("mcp-tools.json: {e}") }]),
     )
 }
 
-fn call(name: &str, args: &Value) -> Result<Value, String> {
-    let mut command_line: Vec<String> = vec!["hearth".into(), "--json".into()];
-    match name {
-        "doctor" => {
-            command_line.push("doctor".into());
-            if let Some(s) = args["watch_seconds"].as_u64() {
-                command_line.extend(["--watch".into(), s.to_string()]);
-            }
+/// Turns a tool call into the command line the CLI would get, from the
+/// tool's own definition: its `cli` entry names the arguments that are
+/// positional (in that order) and the ones whose flag is spelled
+/// differently; every other argument `x_y` is the flag `--x-y`, and `true`
+/// booleans are bare flags. Then the CLI parses it, so agents and people
+/// get the same validation.
+fn command_line(tool: &Value, args: &Value) -> Result<Vec<String>, String> {
+    let name = tool["name"].as_str().unwrap_or_default();
+    let cli = &tool["cli"];
+    let mut line: Vec<String> = vec!["hearth".into(), "--json".into(), name.into()];
+    let positional: Vec<&str> = cli["positional"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let required: Vec<&str> = tool["inputSchema"]["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    for key in &required {
+        if args[*key].is_null() {
+            return Err(format!("{key} is required"));
         }
-        "incidents" => {
-            command_line.push("incidents".into());
-            if let Some(s) = args["since"].as_str() {
-                command_line.extend(["--since".into(), s.into()]);
-            }
-            if args["all"].as_bool() == Some(true) {
-                command_line.push("--all".into());
-            }
-        }
-        "fit" => {
-            command_line.push("fit".into());
-            match (args["model"].as_str(), args["port"].as_u64()) {
-                (None, None) => return Err("model or port is required".into()),
-                (model, port) => {
-                    command_line.extend(model.map(str::to_string));
-                    if let Some(p) = port {
-                        command_line.extend(["--port".into(), p.to_string()]);
-                    }
-                }
-            }
-            command_line.extend([
-                "--ctx".into(),
-                args["ctx"].as_u64().ok_or("ctx is required")?.to_string(),
-                "--cache-type".into(),
-                args["cache_type"]
-                    .as_str()
-                    .ok_or("cache_type is required")?
-                    .into(),
-            ]);
-            if let Some(v) = args["cache_type_v"].as_str() {
-                command_line.extend(["--cache-type-v".into(), v.into()]);
-            }
-            for key in ["parallel", "ubatch"] {
-                if let Some(n) = args[key].as_u64() {
-                    command_line.extend([format!("--{key}"), n.to_string()]);
-                }
-            }
-        }
-        "ports" => {
-            argv_push_ports(&mut command_line, args);
-        }
-        "log" | "diff" => {
-            command_line.push(name.into());
-            if let Some(kind) = args["kind"].as_str() {
-                command_line.extend(["--kind".into(), kind.into()]);
-            }
-            if let Some(n) = args["limit"].as_u64() {
-                command_line.extend(["--limit".into(), n.to_string()]);
-            }
-            for key in ["from", "to"] {
-                if let Some(r) = args[key].as_str() {
-                    command_line.extend([format!("--{key}"), r.into()]);
-                }
-            }
-        }
-        "status" => command_line.push("status".into()),
-        "restart" => {
-            command_line.push("restart".into());
-            command_line.push(args["server"].as_str().ok_or("server is required")?.into());
-        }
-        "config" => {
-            command_line.push("config".into());
-            if let Some(f) = args["filter"].as_str() {
-                command_line.push(f.into());
-            }
-        }
-        "process_memory" => return process_memory(args),
-        other => return Err(format!("unknown tool {other}")),
     }
-    let text = crate::dispatch(&command_line)?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+    let text = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
+    for key in &positional {
+        if !args[*key].is_null() {
+            line.push(text(&args[*key]));
+        }
+    }
+    let Some(given) = args.as_object() else {
+        return Ok(line);
+    };
+    for (key, value) in given {
+        if positional.contains(&key.as_str()) || value.is_null() {
+            continue;
+        }
+        if tool["inputSchema"]["properties"].get(key).is_none() {
+            return Err(format!("{name} takes no argument {key}"));
+        }
+        let flag = cli["flags"][key]
+            .as_str()
+            .map_or_else(|| format!("--{}", key.replace('_', "-")), str::to_string);
+        match value {
+            Value::Bool(true) => line.push(flag),
+            Value::Bool(false) => {}
+            v => line.extend([flag, text(v)]),
+        }
+    }
+    Ok(line)
 }
 
-fn argv_push_ports(command_line: &mut Vec<String>, args: &Value) {
-    command_line.push("ports".into());
-    if args["runtimes_only"].as_bool() == Some(true) {
-        command_line.push("--runtimes".into());
+fn call(name: &str, args: &Value) -> Result<Value, String> {
+    if name == "process_memory" {
+        return process_memory(args);
     }
+    let tools = tools();
+    let tool = tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|t| t["name"] == name && t.get("cli").is_some())
+        .ok_or_else(|| format!("unknown tool {name}"))?;
+    let text = crate::dispatch(&command_line(tool, args)?)?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
 fn process_memory(args: &Value) -> Result<Value, String> {
@@ -351,6 +343,47 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(text.contains("\"~1\""), "defaults fill in");
+    }
+
+    #[test]
+    fn tool_arguments_become_the_cli_command_line() {
+        let find = |n: &str| {
+            tools()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == n)
+                .unwrap()
+                .clone()
+        };
+        let line = command_line(
+            &find("fit"),
+            &json!({"model":"qwen3:8b","ctx":4096,"cache_type":"q8_0","parallel":2,"ubatch":512}),
+        )
+        .unwrap();
+        assert_eq!(&line[..4], ["hearth", "--json", "fit", "qwen3:8b"]);
+        assert!(line.windows(2).any(|w| w == ["--cache-type", "q8_0"]));
+        assert!(line.windows(2).any(|w| w == ["--ctx", "4096"]));
+        let ports = command_line(&find("ports"), &json!({"runtimes_only": true})).unwrap();
+        assert_eq!(ports.last().unwrap(), "--runtimes");
+        assert!(command_line(&find("follow"), &json!({})).is_err());
+        assert!(command_line(&find("log"), &json!({"evil":"--x"})).is_err());
+        // Every tool the CLI serves parses with an empty or minimal call.
+        for t in tools().as_array().unwrap() {
+            assert!(
+                t.get("cli").is_some() || t["name"] == "process_memory",
+                "{}",
+                t["name"]
+            );
+        }
+        let listed = listed_tools();
+        assert!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|t| t.get("cli").is_none())
+        );
     }
 
     #[test]

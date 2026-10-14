@@ -53,5 +53,18 @@
       }
     ],
     "template": "Report what changed on this machine over the last {since} recorded snapshot(s).\n\n1. Call `diff` with kind \"ports\" and from \"~{since}\": model servers that appeared, vanished, restarted (new pid) or stopped answering, and footprint movement.\n2. Call `diff` with kind \"doctor\" and from \"~{since}\" and limit 10: memory pressure, available memory, swap, and the processes whose open files, threads or CLOSE_WAIT sockets moved most.\n3. Call `log` with kind \"run\" and limit 20 for supervision events in that time.\n\nIf `diff` says there are not enough snapshots, call `ports` and `doctor` once to record a fresh one and say that history starts now. Summarize the changes that matter first: restarts, silences, pressure, growth toward a limit."
+  },
+  {
+    "name": "find-a-leak",
+    "description": "Something is leaking open files, threads or sockets, or a server keeps growing: find which process, since when, and how fast.",
+    "arguments": [
+      {
+        "name": "suspect",
+        "description": "Part of a process name or pid to follow, if one is suspected (default: find it first).",
+        "required": false,
+        "default": "find it first"
+      }
+    ],
+    "template": "Find a leak on this machine. Suspect: {suspect}.\n\n1. Call `doctor` with watch_seconds 30; its trend names processes whose open files, threads or CLOSE_WAIT sockets are growing, with the time to their limit.\n2. Call `diff` with kind \"doctor\", from \"~10\" and limit 10 to see which processes moved most across recorded observations.\n3. For the process that stands out (or the suspect), call `follow` with that name and kind \"doctor\" to see its counts in every recorded snapshot: steady growth is a leak, a sawtooth is normal churn. If it is a model server, also `follow` it with kind \"ports\" for its footprint, and with kind \"run\" for restarts.\n\nAnswer with the process, the resource, the growth rate and since when, the projected time to its limit, and what to do (restart it before the limit; CLOSE_WAIT growth means a server not closing sockets after clients disconnect). If there is too little history, say so: hearth watch, or hearthd, records it from now on."
   }
 ]

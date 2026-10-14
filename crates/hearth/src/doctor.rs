@@ -222,6 +222,29 @@ fn record(report: &mut Report) {
     }
 }
 
+/// Each process in a recorded report as `(who, how it was)`, for
+/// `hearth follow`: name and pid; open files, threads and `CLOSE_WAIT`
+/// sockets.
+pub fn entries(body: &Value) -> Vec<(String, String)> {
+    let count = |v: &Value| v.as_u64().map_or("?".into(), |n| n.to_string());
+    body["health"]["processes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            (
+                format!("{} pid {}", p["name"].as_str().unwrap_or("?"), p["pid"]),
+                format!(
+                    "open files {}, threads {}, CLOSE_WAIT {}",
+                    count(&p["open_files"]),
+                    count(&p["threads"]),
+                    count(&p["close_wait"])
+                ),
+            )
+        })
+        .collect()
+}
+
 /// One line for `hearth log`.
 pub fn summary(body: &Value) -> String {
     let h = &body["health"];

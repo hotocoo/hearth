@@ -516,6 +516,33 @@ fn state_of(port: &Value) -> String {
     }
 }
 
+/// Each port in a recorded report as `(who, how it was)`: who is process,
+/// pid, address and path, for `hearth follow` to match; how is the state
+/// with the footprint when one was measured.
+pub fn entries(body: &Value) -> Vec<(String, String)> {
+    body["ports"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            let who = format!(
+                "{} pid {} {} {}",
+                p["process"].as_str().unwrap_or("?"),
+                p["pid"],
+                p["addr"].as_str().unwrap_or("?"),
+                p["path"].as_str().unwrap_or("")
+            );
+            let memory = p["memory"]["footprint_bytes"]
+                .as_u64()
+                .map_or(String::new(), |b| format!(" · footprint {}", bytes(b)));
+            (
+                who.trim_end().to_string(),
+                format!("{}{memory}", state_of(p)),
+            )
+        })
+        .collect()
+}
+
 /// One line for `hearth log`.
 pub fn summary(body: &Value) -> String {
     let ports = recorded(body);

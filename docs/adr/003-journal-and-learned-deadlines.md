@@ -95,3 +95,20 @@ deadline = min(first_contact_timeout_ms,
   The first-contact deadline is 2.5 s.
 - A port that is silent from the start still waits the full first-contact deadline. Learning speeds up classification only for programs that have answered before.
 - The journal grows to at most `max_snapshots_per_kind` files per kind. A doctor snapshot holds every process's counts, about the size of `hearth doctor --json`.
+
+## Addendum (2026-10-15): `show` and `follow`
+
+The journal reads like a version history, so two more commands follow git:
+
+- **`hearth show [--kind K] [REF]`** prints one snapshot in full, as it was written, like `git show`.
+- **`hearth follow PATTERN [--kind K] [--all]`** follows everything whose name, pid, address, path or server name contains the pattern through every snapshot, oldest first, like `git log --follow`. It lists:
+  - when the match appeared;
+  - each change in its state (ports: state and footprint; doctor: open files, threads and `CLOSE_WAIT`; run: events);
+  - when it went away.
+
+  `--all` lists every snapshot, not only changes.
+
+Both are MCP tools. MCP tool calls are now translated to the CLI from each tool's own definition in `mcp-tools.json` (its `cli` entry names positional arguments and renamed flags). Adding a tool needs no Rust beyond the command itself, and unknown arguments are refused rather than passed through.
+
+On the development machine, `follow llama-server` showed the user's server footprint going from 34.5 GiB to 35.0 GiB and then to 24.2 GiB. `follow remoting --kind doctor` showed a remote-desktop host's open files climbing from 41 to 54.
+

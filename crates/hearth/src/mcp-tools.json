@@ -11,6 +11,11 @@
           "description": "Seconds between the two samples."
         }
       }
+    },
+    "cli": {
+      "flags": {
+        "watch_seconds": "--watch"
+      }
     }
   },
   {
@@ -28,7 +33,8 @@
           "description": "Include resource-limit reports (disk writes, CPU, wakeups)."
         }
       }
-    }
+    },
+    "cli": {}
   },
   {
     "name": "fit",
@@ -74,6 +80,11 @@
           "description": "Instead of model (or with an Ollama model name): the port of a running server on this machine, asked which model it serves. Answers whether that server could take a different context."
         }
       }
+    },
+    "cli": {
+      "positional": [
+        "model"
+      ]
     }
   },
   {
@@ -86,6 +97,11 @@
           "type": "boolean",
           "description": "Only ports where a model runtime answers."
         }
+      }
+    },
+    "cli": {
+      "flags": {
+        "runtimes_only": "--runtimes"
       }
     }
   },
@@ -110,7 +126,8 @@
           "description": "Only the most recent N."
         }
       }
-    }
+    },
+    "cli": {}
   },
   {
     "name": "diff",
@@ -140,6 +157,68 @@
           "description": "Only the N largest movements."
         }
       }
+    },
+    "cli": {}
+  },
+  {
+    "name": "show",
+    "description": "One recorded snapshot in full, as it was written (the complete ports, doctor or run report). Use after log or diff to see everything a snapshot holds.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ports",
+            "doctor",
+            "run"
+          ],
+          "description": "Which command's snapshots (default ports)."
+        },
+        "reference": {
+          "type": "string",
+          "description": "An id from log, or ~N for N before the latest (default ~0)."
+        }
+      }
+    },
+    "cli": {
+      "positional": [
+        "reference"
+      ]
+    }
+  },
+  {
+    "name": "follow",
+    "description": "One process, port or server across every recorded snapshot, oldest first: when it appeared, changed state, restarted (new pid), grew, or went away. ports: state and footprint; doctor: open files, threads and CLOSE_WAIT per process (a leak shows as steady growth); run: supervision events.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "pattern"
+      ],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Part of a process name, pid, address, path or server name; case is ignored."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ports",
+            "doctor",
+            "run"
+          ],
+          "description": "Which snapshots to follow it through (default ports)."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Every snapshot, not only those where something changed."
+        }
+      }
+    },
+    "cli": {
+      "positional": [
+        "pattern"
+      ]
     }
   },
   {
@@ -148,7 +227,8 @@
     "inputSchema": {
       "type": "object",
       "properties": {}
-    }
+    },
+    "cli": {}
   },
   {
     "name": "restart",
@@ -164,6 +244,11 @@
           "description": "Server name as in [servers.NAME]; status lists them."
         }
       }
+    },
+    "cli": {
+      "positional": [
+        "server"
+      ]
     }
   },
   {
@@ -177,6 +262,11 @@
           "description": "Only keys containing this, e.g. supervise or deadline."
         }
       }
+    },
+    "cli": {
+      "positional": [
+        "filter"
+      ]
     }
   },
   {

@@ -56,6 +56,11 @@ enum Command {
     /// vanished, runtimes that restarted, stopped answering or loaded other
     /// models, and how their memory moved. Defaults to the last two.
     Diff(history::DiffArgs),
+    /// One recorded snapshot in full, as JSON (`hearth log` lists them).
+    Show(history::ShowArgs),
+    /// One process, port or server across every recorded snapshot: when it
+    /// appeared, changed, restarted, grew or went away.
+    Follow(history::FollowArgs),
     /// Start a model server and keep it alive: restart it when it exits or
     /// stops answering, give up on a crash loop, and stop it when hearth
     /// stops. Refuses a port another server already holds.
@@ -92,6 +97,8 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Ports(args) => ports::run(args, cli.json),
         Command::Log(args) => history::log(args, cli.json),
         Command::Diff(args) => history::diff(args, cli.json),
+        Command::Show(args) => history::show(args, cli.json),
+        Command::Follow(args) => history::follow(args, cli.json),
         Command::Run(args) => run::run(args, cli.json),
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),
@@ -126,7 +133,18 @@ pub fn main() {
     let cli = Cli::parse();
     let result = execute(&cli);
     match result {
-        Ok(text) => print!("{text}"),
+        Ok(text) => {
+            use std::io::Write as _;
+            // A reader that went away (`| head`) has all it wanted.
+            let mut out = std::io::stdout().lock();
+            if out
+                .write_all(text.as_bytes())
+                .and_then(|()| out.flush())
+                .is_err()
+            {
+                std::process::exit(0);
+            }
+        }
         Err(e) => {
             if cli.json {
                 println!("{}", serde_json::json!({ "error": e }));

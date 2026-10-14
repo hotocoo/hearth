@@ -54,6 +54,17 @@ pub(crate) fn settings(c: &hearth_core::config::Supervise) -> Settings {
     }
 }
 
+/// A recorded event as `(who, what happened)`, for `hearth follow`.
+pub fn entries(body: &serde_json::Value) -> Vec<(String, String)> {
+    let who = format!(
+        "{} {} {}",
+        body["server"].as_str().unwrap_or(""),
+        body["addr"].as_str().unwrap_or("?"),
+        body["command"].as_str().unwrap_or("?")
+    );
+    vec![(who.trim().to_string(), summary(body))]
+}
+
 /// One line for `hearth log`.
 pub fn summary(body: &serde_json::Value) -> String {
     let event = &body["event"];
