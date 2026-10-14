@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:54 review fixes: workflows, journal reads, config checks
+
+- **Workflows.** Arguments are substituted in one pass. Undeclared or mistyped arguments are refused. Argument lists, duplicate names and backticks are validated. Problems are reported on MCP's stderr and in its instructions.
+- **Journal.** `log --since` no longer reports snapshots thinned away mid-read. `log --stats` reports unreadable tags.
+- **Configuration.** Unknown `state.thinned_kinds` and NUL in `servers.*.env` values are rejected.
+
 ### 2026-10-15 03:47 fit by Hugging Face and LM Studio name
 
 - `hearth fit org/repo:Q6_K` finds the model in the Hugging Face cache or LM Studio's models directory. It also accepts `org/repo/file.gguf`.
