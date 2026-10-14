@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:43 log --stats
+
+- `hearth log --stats` (MCP `log` with `stats`) reports, per kind, how many snapshots are kept, the time they span and their size on disk, plus the number of tags.
+
 ### 2026-10-15 03:41 retention by age
 
 - New `state.tiers` thins ports and doctor snapshots as they age. By default it keeps all of them for an hour, one per 10 minutes for a day, and one per hour for a week. `state.thinned_kinds` lists the kinds this applies to; `run` events are never thinned.
