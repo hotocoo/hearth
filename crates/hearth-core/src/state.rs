@@ -408,6 +408,27 @@ impl Journal {
             .collect())
     }
 
+    /// How much history of `kind` there is: snapshots, oldest and newest time
+    /// (ms since the epoch), and bytes on disk.
+    pub fn stats(&self, kind: &str) -> Result<(usize, Option<u64>, Option<u64>, u64), StateError> {
+        let ids = self.ids(kind)?;
+        let ms = |id: &String| {
+            nanos_of(id)
+                .map(|n| u64::try_from(Duration::from_nanos(n).as_millis()).unwrap_or(u64::MAX))
+        };
+        let bytes = ids
+            .iter()
+            .filter_map(|id| std::fs::metadata(self.file(id)).ok())
+            .map(|m| m.len())
+            .sum();
+        Ok((
+            ids.len(),
+            ids.first().and_then(ms),
+            ids.last().and_then(ms),
+            bytes,
+        ))
+    }
+
     fn remove(&self, id: &str) -> Result<(), StateError> {
         let path = self.file(id);
         match std::fs::remove_file(&path) {

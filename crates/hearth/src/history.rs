@@ -73,6 +73,10 @@ pub struct LogArgs {
     /// Only snapshots from this long ago until now: 90s, 30m, 2h, 1d.
     #[arg(long, value_parser = parse_age)]
     since: Option<std::time::Duration>,
+    /// Instead of listing: how much history of every kind is kept (count,
+    /// time span, bytes), i.e. how far back references can reach.
+    #[arg(long, conflicts_with_all = ["limit", "since"])]
+    stats: bool,
 }
 
 fn parse_age(text: &str) -> Result<std::time::Duration, String> {
@@ -236,8 +240,48 @@ struct LogReport {
     unreadable: Vec<String>,
 }
 
+fn stats(journal: &Journal, json: bool) -> Result<String, String> {
+    let mut kinds = Vec::new();
+    for kind in [Kind::Ports, Kind::Doctor, Kind::Run] {
+        let (count, oldest, newest, bytes) =
+            journal.stats(kind.name()).map_err(|e| e.to_string())?;
+        kinds.push(serde_json::json!({
+            "kind": kind.name(), "snapshots": count,
+            "oldest_ms": oldest, "newest_ms": newest, "bytes": bytes,
+        }));
+    }
+    let tags = journal.tags_lenient().map_err(|e| e.to_string())?.0.len();
+    let report = serde_json::json!({
+        "directory": journal.path().display().to_string(),
+        "kinds": kinds,
+        "tags": tags,
+    });
+    if json {
+        return crate::to_json(&report);
+    }
+    let mut out = format!("{}\n", journal.path().display());
+    for k in &kinds {
+        let span = match (k["oldest_ms"].as_u64(), k["newest_ms"].as_u64()) {
+            (Some(o), Some(n)) => format!("from {} to {}", age(o), age(n)),
+            _ => "nothing recorded".into(),
+        };
+        let _ = writeln!(
+            out,
+            "  {:<7} {:>5} snapshots, {span}, {}",
+            k["kind"].as_str().unwrap_or_default(),
+            k["snapshots"],
+            bytes(k["bytes"].as_u64().unwrap_or_default())
+        );
+    }
+    let _ = writeln!(out, "  {tags} tags");
+    Ok(out)
+}
+
 pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
+    if args.stats {
+        return stats(&journal, json);
+    }
     let kind = args.kind;
     let mut report = LogReport {
         kind: kind.name(),

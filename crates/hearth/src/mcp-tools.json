@@ -132,6 +132,10 @@
         "since": {
           "type": "string",
           "description": "Only snapshots from this long ago until now: 90s, 30m, 2h, 1d."
+        },
+        "stats": {
+          "type": "boolean",
+          "description": "Instead of listing: how much history of each kind is kept (count, oldest and newest time, bytes), i.e. how far back references like @1d can reach."
         }
       }
     },
