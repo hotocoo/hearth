@@ -16,7 +16,8 @@ The plan's daemon also proxies inference and admits work from measured memory. T
 `hearthd` reads `[servers.NAME]` tables from the user's configuration and keeps each server alive. Each table has:
 - `port`;
 - `command`, as a list;
-- optionally `host` and `expect`.
+- optionally `host` and `expect`;
+- optionally `env`, variables set on top of hearthd's own (`GGML_METAL_*`, `CUDA_VISIBLE_DEVICES`, `HF_HOME`), and `dir`, the absolute working directory. A relative program path is taken relative to `dir`. `hearth bundle` redacts every `env` value, since tokens go there.
 
 None are built in, and an empty `[servers]` is an error with the fix in the message.
 

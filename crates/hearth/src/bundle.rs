@@ -55,8 +55,10 @@ fn scrub(value: &mut Value, error: &str) {
 fn redact(config: &mut Value) {
     for s in config["settings"].as_array_mut().into_iter().flatten() {
         let key = s["key"].as_str().unwrap_or_default().to_string();
+        // Server variables are where tokens go (HF_TOKEN and the like).
         let secret = key == "notify.webhook_url"
-            || (key.starts_with("servers.") && key.ends_with(".command"));
+            || (key.starts_with("servers.")
+                && (key.ends_with(".command") || key.contains(".env.")));
         if secret && !s["value"].is_null() {
             s["value"] = match (key.ends_with(".command"), s["value"].as_array()) {
                 // The program says what runs; its arguments may hold keys.
@@ -112,15 +114,16 @@ mod tests {
         let mut config = json!({ "settings": [
             { "key": "notify.webhook_url", "value": "https://ntfy.sh/secret-token" },
             { "key": "servers.chat.command", "value": ["llama-server", "--api-key", "sk-1"] },
+            { "key": "servers.chat.env.HF_TOKEN", "value": "hf_secret" },
             { "key": "supervise.restart_budget", "value": 5 },
         ]});
         redact(&mut config);
         let text = config.to_string();
         assert!(
-            !text.contains("secret-token") && !text.contains("sk-1"),
+            !text.contains("secret-token") && !text.contains("sk-1") && !text.contains("hf_secret"),
             "{text}"
         );
         assert!(text.contains("llama-server"));
-        assert_eq!(config["settings"][2]["value"], 5);
+        assert_eq!(config["settings"][3]["value"], 5);
     }
 }

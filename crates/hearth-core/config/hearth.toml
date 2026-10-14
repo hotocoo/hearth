@@ -151,4 +151,7 @@ max_clients = 8
 # A program without a path is looked up in hearthd's PATH, which under a
 # login service is the PATH `hearth service install` was run with; an
 # absolute path avoids the question.
+# Optional per server: env, a table of variables set for it on top of
+# hearthd's own (GGML_METAL_*, CUDA_VISIBLE_DEVICES, HF_HOME), and dir, the
+# absolute working directory it starts in.
 [servers]

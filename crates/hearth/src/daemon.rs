@@ -321,11 +321,21 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
         max_bytes: config.discovery.max_probe_response_bytes,
     };
     let command = server.command.clone();
+    let (env, dir) = (server.env.clone(), server.dir.clone());
     let make = Box::new(move || {
         let (program, args) = command.split_first().ok_or("no command")?;
-        crate::run::find_program(program.as_ref())?;
+        // A relative path is relative to where the server starts.
+        let path = std::path::Path::new(program);
+        let check = match &dir {
+            Some(d) if path.is_relative() && path.components().count() > 1 => d.join(path),
+            _ => path.to_path_buf(),
+        };
+        crate::run::find_program(check.as_os_str())?;
         let mut c = Command::new(program);
-        c.args(args);
+        c.args(args).envs(&env);
+        if let Some(d) = &dir {
+            c.current_dir(d);
+        }
         Ok(c)
     });
     Supervised::new(
@@ -745,6 +755,8 @@ mod tests {
             host: None,
             expect: None,
             command: vec![program.into()],
+            env: BTreeMap::new(),
+            dir: None,
         }
     }
 

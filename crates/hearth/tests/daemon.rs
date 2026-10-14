@@ -14,7 +14,9 @@ use serde_json::Value;
 
 const SERVER: &str = r#"
 import sys, json
+import os
 print("e2e server starting", flush=True)
+print("mark", os.environ.get("E2E_MARK"), "in", os.getcwd(), flush=True)
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -55,8 +57,9 @@ fn config(dir: &Path, port: u16) {
     std::fs::write(
         dir.join("hearth.toml"),
         format!(
-            "[control]\ntimeout_ms = 1000\nmax_message_bytes = 1024\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\n",
-            script.display()
+            "[control]\ntimeout_ms = 1000\nmax_message_bytes = 1024\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
+            script.display(),
+            dir.display()
         ),
     )
     .unwrap();
@@ -177,6 +180,16 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         .filter(|l| l.as_str() == Some("e2e server starting"))
         .count();
     assert!(starts >= 2, "{logs}");
+    // It ran with its own variables, in its own directory.
+    let marked = format!("mark on in {}", dir.display());
+    assert!(
+        logs["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str() == Some(marked.as_str())),
+        "{logs}"
+    );
 
     check_reload(&dir);
 

@@ -47,6 +47,11 @@ pub struct Server {
     pub host: Option<std::net::IpAddr>,
     pub expect: Option<String>,
     pub command: Vec<String>,
+    /// Variables set for the server on top of hearthd's environment.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    /// Working directory the server starts in.
+    pub dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,6 +175,20 @@ impl Config {
             }
             if server.command.first().is_none_or(String::is_empty) {
                 invalid("servers.*.command", name, "needs a program to run")?;
+            }
+            if server
+                .env
+                .keys()
+                .any(|k| k.is_empty() || k.contains(['=', '\0']))
+            {
+                invalid(
+                    "servers.*.env",
+                    name,
+                    "variable names cannot be empty or contain '=' or NUL",
+                )?;
+            }
+            if server.dir.as_ref().is_some_and(|d| !d.is_absolute()) {
+                invalid("servers.*.dir", name, "must be an absolute path")?;
             }
             let addr = (server.host, server.port);
             if let Some(other) = ports.insert(addr, name) {
