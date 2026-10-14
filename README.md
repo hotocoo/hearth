@@ -57,6 +57,7 @@ cargo build --release -p hearth
 ./target/release/hearth fit qwen3:8b --ctx 32768 --cache-type q8_0     # an Ollama model, read from its store
 ./target/release/hearth fit org/repo-GGUF:Q6_K --ctx 32768 --cache-type q8_0   # from the Hugging Face cache or LM Studio
 ./target/release/hearth fit --port 8080 --ctx 131072 --cache-type q8_0 # the model a running server serves: could it take this context?
+./target/release/hearth fit --port 8080 --cache-type q8_0            # ...or does its current context fit at all?
 ./target/release/hearth ports --runtimes    # which model runtime answers on which port, with memory
 ./target/release/hearth log                 # snapshots ports recorded, newest first (--kind doctor)
 ./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory

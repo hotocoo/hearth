@@ -46,7 +46,6 @@
     "inputSchema": {
       "type": "object",
       "required": [
-        "ctx",
         "cache_type"
       ],
       "properties": {
@@ -57,7 +56,7 @@
         "ctx": {
           "type": "integer",
           "minimum": 1,
-          "description": "Total tokens of KV cache the runtime will allocate (llama.cpp -c; Ollama num_ctx x OLLAMA_NUM_PARALLEL)."
+          "description": "Total tokens of KV cache the runtime will allocate (llama.cpp -c; Ollama num_ctx x OLLAMA_NUM_PARALLEL). With port and no ctx, the context the running server reports is used."
         },
         "cache_type": {
           "type": "string",

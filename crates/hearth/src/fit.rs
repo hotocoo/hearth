@@ -29,8 +29,8 @@ pub struct Args {
     port: Option<u16>,
     /// Total tokens of KV cache the runtime will allocate (llama.cpp `-c`;
     /// for Ollama, `num_ctx` × `OLLAMA_NUM_PARALLEL`).
-    #[arg(long)]
-    ctx: u64,
+    #[arg(long, required_unless_present = "port")]
+    ctx: Option<u64>,
     /// KV cache type for keys, and for values unless --cache-type-v is given
     /// (llama.cpp --cache-type-k, Ollama `OLLAMA_KV_CACHE_TYPE`).
     #[arg(long, value_parser = parse_cache)]
@@ -88,16 +88,21 @@ struct Ceiling {
 
 /// The model's file: from the server on `port` when given, else the path
 /// given, else the Ollama model of that name.
-fn locate(args: &Args) -> Result<PathBuf, String> {
+/// The model's file, and the context a running server holds it with when
+/// it was asked (`--port`) and says.
+fn locate(args: &Args) -> Result<(PathBuf, Option<u64>), String> {
     match (args.port, &args.model) {
         (Some(port), model) => from_server(port, model.as_deref()),
-        (None, Some(model)) => from_name(model),
+        (None, Some(model)) => from_name(model).map(|p| (p, None)),
         (None, None) => Err("give a model or --port".into()),
     }
 }
 
 /// Asks the server on `port` which model it serves, read-only.
-fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, String> {
+fn from_server(
+    port: u16,
+    model: Option<&std::path::Path>,
+) -> Result<(PathBuf, Option<u64>), String> {
     use hearth_runtime::fingerprint::{Identity, fingerprint};
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
     let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
@@ -109,10 +114,12 @@ fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, St
     .identity;
     match identity {
         Identity::LlamaCpp {
-            model: Some(path), ..
-        } if model.is_none() => Ok(PathBuf::from(path)),
+            model: Some(path),
+            n_ctx,
+            ..
+        } if model.is_none() => Ok((PathBuf::from(path), n_ctx)),
         Identity::Ollama { loaded, .. } => {
-            let names: Vec<String> = loaded.into_iter().map(|l| l.name).collect();
+            let names: Vec<String> = loaded.iter().map(|l| l.name.clone()).collect();
             let name = match (model, names.as_slice()) {
                 (Some(m), _) => m.to_string_lossy().into_owned(),
                 (None, [only]) => only.clone(),
@@ -128,7 +135,11 @@ fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, St
                     ));
                 }
             };
-            hearth_runtime::ollama_store::weights(&name)
+            let ctx = loaded
+                .iter()
+                .find(|l| l.name == name)
+                .and_then(|l| l.context_length);
+            hearth_runtime::ollama_store::weights(&name).map(|p| (p, ctx))
         }
         Identity::LmStudio { models } => {
             let loaded: Vec<&str> = models
@@ -157,6 +168,7 @@ fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, St
                         "{name}: not found in LM Studio's models directory; the id LM Studio reports may differ from its folder: pass the file with --model"
                     ))
                 })
+                .map(|p| (p, None))
         }
         Identity::LlamaCpp { .. } if model.is_some() => Err(
             "--model and --port name the model twice: a llama.cpp server reports its own".into(),
@@ -191,7 +203,11 @@ fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
-    let model = locate(args)?;
+    let (model, server_ctx) = locate(args)?;
+    let ctx = args
+        .ctx
+        .or(server_ctx)
+        .ok_or("the server does not say its context; give --ctx (tokens of KV cache to fit)")?;
     let files = gguf::model_files(&model);
     let weights_bytes = files
         .iter()
@@ -211,7 +227,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .parallel
         .zip(args.ubatch)
         .map(|(sequences, ubatch)| Swa { sequences, ubatch });
-    let kv_bytes = geometry.kv_bytes(args.ctx, k, v, swa);
+    let kv_bytes = geometry.kv_bytes(ctx, k, v, swa);
     let total_bytes = weights_bytes + kv_bytes;
 
     let host = crate::pressure::host_memory()?;
@@ -237,11 +253,10 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     };
     let mut notes = geometry.notes.clone();
     if let Some(trained) = geometry.trained_context
-        && args.ctx > trained
+        && ctx > trained
     {
         notes.push(format!(
-            "requested context {} exceeds the trained context {trained}",
-            args.ctx
+            "requested context {ctx} exceeds the trained context {trained}"
         ));
     }
     notes.push(
@@ -263,7 +278,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         model: model.clone(),
         files,
         weights_bytes,
-        ctx: args.ctx,
+        ctx,
         kv_bytes,
         total_bytes,
         excludes: "runtime compute buffers (known after the model's first load)",
@@ -416,7 +431,11 @@ mod port_tests {
             ),
             ("/health", r#"{"status":"ok"}"#),
         ]);
-        assert_eq!(from_server(port, None).unwrap(), PathBuf::from("/m/q.gguf"));
+        // The server's own context comes with its file.
+        assert_eq!(
+            from_server(port, None).unwrap(),
+            (PathBuf::from("/m/q.gguf"), Some(4096))
+        );
         assert!(
             from_server(port, Some(std::path::Path::new("x")))
                 .unwrap_err()

@@ -120,6 +120,9 @@ pub struct Loaded {
     pub name: String,
     pub size_bytes: Option<u64>,
     pub size_vram_bytes: Option<u64>,
+    /// The context this model was loaded with, where Ollama reports it.
+    #[serde(default)]
+    pub context_length: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,6 +243,7 @@ fn ollama(p: &Prober, version: &Value) -> Identity {
                     name: m["name"].as_str()?.to_string(),
                     size_bytes: m["size"].as_u64(),
                     size_vram_bytes: m["size_vram"].as_u64(),
+                    context_length: m["context_length"].as_u64(),
                 })
             })
             .collect(),
