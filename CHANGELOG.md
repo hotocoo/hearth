@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:52 models --serving
+
+- `hearth models --serving` marks the models a running server serves now, and where: llama.cpp by model file, Ollama by loaded model.
+- `scripts/check.sh` runs CI's checks locally.
+
 ### 2026-10-15 06:47 models listing fixes
 
 - **Store reads.** `models` reads each model from the store it is listed in. A stray file such as `.DS_Store` or one unreadable directory no longer hides other stores' models.
