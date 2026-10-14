@@ -103,7 +103,9 @@ Reading the kernel log usually needs the `systemd-journal` or `adm` group. When 
 - `diagnose-slow-machine`;
 - `server-died`;
 - `can-i-load`;
-- `what-changed`.
+- `what-changed`;
+- `find-a-leak`;
+- `when-did-it-start`, which uses `log --grep` to find the first snapshot that mentions something and diffs it against the one before.
 
 Each workflow names the tools to call in order, how to read their answers, and the shape of the reply. Each also states what not to do: never load a model, and restart only servers hearthd owns. Arguments have documented defaults, and a missing required argument is a JSON-RPC invalid-params error.
 
