@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:37 hearth config
+
+- `hearth config [FILTER]` and MCP `config`: every setting in effect, with its value, its source (built in, the user's file, or unset) and the shipped file's explanation of it.
+- A test fails when a key in `config/hearth.toml` has no comment, so every number hearth uses stays explained.
+
 ### 2026-10-15 00:33 hearth watch (ADR-006)
 
 - `hearth watch [--for-seconds N]` runs `doctor` and `ports` on the `[watch]` intervals. Every round is recorded, so `log` and `diff` cover the time watched.
