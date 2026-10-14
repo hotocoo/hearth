@@ -222,7 +222,7 @@ fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
         return Some(match candidates.as_slice() {
             [one] => Ok(one.clone()),
             [] => Err(format!(
-                "{name}: no matching .gguf in the {store} ({})",
+                "{name}: no matching .gguf (nor .safetensors with config.json) in the {store} ({})",
                 files.display()
             )),
             several => Err(format!(
