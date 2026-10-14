@@ -51,6 +51,10 @@ struct Model {
     /// Where its weights are (a directory for MLX and safetensors).
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<std::path::PathBuf>,
+    /// The file it resolves to, to match running servers' model paths
+    /// (the Hugging Face cache's names are links to blobs).
+    #[serde(skip)]
+    canonical: Option<std::path::PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -117,6 +121,7 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
         serving_on: Vec::new(),
         error: None,
         path: None,
+        canonical: None,
     };
     let found = source
         .locate(&model.name)
@@ -129,7 +134,9 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
         }
     };
     let cache = cache.or_else(|| crate::fit::dtype_cache_type(&path));
-    model.path = Some(std::fs::canonicalize(&path).unwrap_or(path));
+    // A path that cannot be resolved matches no server: it is not served.
+    model.canonical = std::fs::canonicalize(&path).ok();
+    model.path = Some(path);
     model.arch = Some(geometry.arch.clone());
     model.weights_bytes = Some(weights);
     model.trained_context = geometry.trained_context;
@@ -158,11 +165,11 @@ fn served() -> Result<Served, String> {
     for p in report["ports"].as_array().into_iter().flatten() {
         let addr = p["addr"].as_str().unwrap_or("?").to_string();
         if let Some(m) = p["model"].as_str() {
-            let m = std::path::Path::new(m);
-            files.push((
-                std::fs::canonicalize(m).unwrap_or_else(|_| m.to_path_buf()),
-                addr.clone(),
-            ));
+            // A server's model file that cannot be resolved is not on this
+            // disk as listed, so it matches nothing.
+            if let Ok(canonical) = std::fs::canonicalize(m) {
+                files.push((canonical, addr.clone()));
+            }
         }
         for l in p["loaded"].as_array().into_iter().flatten() {
             if let Some(n) = l["name"].as_str() {
@@ -190,10 +197,22 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         })
         .collect();
     let mut models = models;
-    if args.serving {
-        let (files, names) = served()?;
+    let served = if args.serving {
+        match served() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                errors.push(format!("could not ask the running servers: {e}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some((files, names)) = served {
         for m in &mut models {
-            let by_file = files.iter().filter(|(f, _)| m.path.as_ref() == Some(f));
+            let by_file = files
+                .iter()
+                .filter(|(f, _)| m.canonical.as_ref() == Some(f));
             let by_name = names
                 .iter()
                 .filter(|(n, _)| m.store == "ollama" && *n == m.name);

@@ -132,7 +132,7 @@ pub fn weights_of(name: &str, store: Store) -> Result<Vec<String>, String> {
     let Some(files) = files_dir(store, &dir)? else {
         return Ok(Vec::new());
     };
-    let ggufs = weights_in(&files);
+    let ggufs = weights_in(&files)?;
     if ggufs.is_empty() {
         return Ok(match find_in(name, store) {
             Some(Ok(p)) if p.is_dir() => vec![name.to_string()],
@@ -203,15 +203,20 @@ fn later_shard(name: &str) -> bool {
 
 /// Model weights in `dir`: `.gguf` files that are not a multimodal
 /// projector, and of a split model only its first shard.
-fn weights_in(dir: &Path) -> Vec<PathBuf> {
+fn weights_in(dir: &Path) -> Result<Vec<PathBuf>, String> {
     // Repos often keep each quantization in its own folder
     // (`Q4_K_M/m-Q4_K_M-00001-of-00002.gguf`), so folders are walked too.
+    // Symlinked folders are not followed, so a link loop cannot recurse;
+    // symlinked files (the Hugging Face cache's) are read as usual.
     let mut files = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
+    let failed = |d: &Path, e: std::io::Error| format!("{}: {e}", d.display());
     while let Some(d) = pending.pop() {
-        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+        for entry in std::fs::read_dir(&d).map_err(|e| failed(&d, e))? {
+            let entry = entry.map_err(|e| failed(&d, e))?;
+            let kind = entry.file_type().map_err(|e| failed(&d, e))?;
             let p = entry.path();
-            if p.is_dir() {
+            if kind.is_dir() {
                 pending.push(p);
                 continue;
             }
@@ -227,7 +232,7 @@ fn weights_in(dir: &Path) -> Vec<PathBuf> {
         }
     }
     files.sort();
-    files
+    Ok(files)
 }
 
 /// `path` relative to `base`, with `/` between its parts, as a name's
@@ -249,6 +254,7 @@ pub fn parse(name: &str) -> Option<(String, String, Option<String>, Option<Strin
     let safe = |s: &str| {
         !s.is_empty()
             && s != ".."
+            && s != "."
             && s.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
     };
@@ -308,7 +314,11 @@ fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
                 Err(format!("{name}: no {f} in {}", files.display()))
             });
         }
-        let candidates: Vec<PathBuf> = weights_in(&files)
+        let found = match weights_in(&files) {
+            Ok(f) => f,
+            Err(e) => return Some(Err(e)),
+        };
+        let candidates: Vec<PathBuf> = found
             .into_iter()
             .filter(|p| {
                 // The quantization may name the file or its folder.
@@ -399,6 +409,7 @@ mod tests {
         std::fs::write(dir.join("Q4_K_M/m-Q4_K_M-00001-of-00002.gguf"), "").unwrap();
         std::fs::write(dir.join("Q4_K_M/m-Q4_K_M-00002-of-00002.gguf"), "").unwrap();
         let names: Vec<String> = weights_in(&dir)
+            .unwrap()
             .iter()
             .map(|p| relative(p, &dir).unwrap())
             .collect();
