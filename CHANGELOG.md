@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 03:47 fit by Hugging Face and LM Studio name
+
+- `hearth fit org/repo:Q6_K` finds the model in the Hugging Face cache or LM Studio's models directory. It also accepts `org/repo/file.gguf`.
+- `hearth fit --port` works for LM Studio servers.
+
 ### 2026-10-15 03:43 log --stats
 
 - `hearth log --stats` (MCP `log` with `stats`) reports, per kind, how many snapshots are kept, the time they span and their size on disk, plus the number of tags.
