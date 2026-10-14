@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:59 server env and dir
+
+- `[servers.NAME]` takes `env = { VAR = "value" }` and `dir = "/abs/path"`. Both are validated, and `env` values are redacted from bundles.
+
 ### 2026-10-15 02:54 time references
 
 - A snapshot reference can be `@AGE` (`@30m`, `@2h`, `@1d`): the latest snapshot at least that old, accepted wherever an id, `~N` or a tag is.
