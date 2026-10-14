@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:07 cache types and oversized-check fixes
+
+- **Cache types from the command line.** The last `-ctk`/`-ctv` wins. An absent flag means the type is unknown, not f16, because the server may take it from its environment.
+- **Oversized check.** `ports` checks each llama.cpp server with what it already probed and that process's own arguments, without probing again. Its message handles weights that alone exceed the device.
+- **Fit check before start.** A too-big verdict is re-checked at each start.
+
 ### 2026-10-15 04:55 servers configured past the device are flagged
 
 - `hearth ports` warns about any llama.cpp server whose model, at its context and cache types, exceeds the device. The warning gives the largest context that fits and the cache types that would keep the context.
