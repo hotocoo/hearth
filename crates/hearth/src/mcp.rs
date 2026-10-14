@@ -59,12 +59,13 @@ fn handle(msg: &Value) -> Option<Value> {
                     "protocolVersion": version,
                     "capabilities": { "tools": {}, "prompts": {} },
                     "serverInfo": { "name": "hearth", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": "hearth inspects a machine that runs local models. \
-                        Use doctor before loading a model or when the machine is slow, \
-                        incidents after a crash or reboot, fit before starting a model \
-                        server, ports to find which runtimes run where and whether one is wedged, \
-                        process_memory to see what a server really uses, \
-                        log and diff to see what changed on the machine since an earlier ports or doctor run."
+                    "instructions": "hearth inspects a machine that runs local models and keeps the servers hearthd owns alive. \
+                        Start with a workflow from prompts/list when one fits (diagnose-slow-machine, server-died, can-i-load, what-changed, find-a-leak). \
+                        Otherwise: doctor for memory, files and threads; ports for what runs where (owned_by says what hearthd owns); \
+                        incidents for crashes and kills; fit before loading a model; \
+                        log, diff, show, follow and tag for history (references: ~N, @2h, ids, tag names); \
+                        status, logs, restart, stop, start and reload for hearthd's servers (only those: never act on a process hearth did not start); \
+                        config for why hearth did something; bundle for everything at once."
                 }),
             )
         }
