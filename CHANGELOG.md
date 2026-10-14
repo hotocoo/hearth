@@ -6,7 +6,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ### 2026-10-15 06:13 values-only cache types
 
-- `fit` shows the cache types it costed. When the context does not fit, it also lists `fits_device_with_values`: the value cache types that alone make it fit, with keys left unchanged (llama.cpp `-ctv`, which needs `-fa`). Keys carry more of attention's precision.
+- `fit` shows the cache types it costed. When the context does not fit, it also lists `fits_device_with_values`: the value cache types that alone make it fit, with keys left unchanged (llama.cpp `-ctv`, which needs `-fa on`). Keys carry more of attention's precision.
 - The `ports` oversized finding names the largest such type.
 
 ### 2026-10-15 06:10 right-size-a-server workflow

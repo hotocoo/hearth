@@ -581,11 +581,17 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                     } else {
                         format!(", or keep the context with -ctk/-ctv {}", kinds.join(" / "))
                     },
-                    // The largest values-only type keeps the most precision.
-                    values.first().map_or_else(String::new, |v| format!(
-                        ", or keep -ctk {} and set only -ctv {v} (with -fa)",
-                        r["cache_type_k"].as_str().unwrap_or("as is")
-                    ))
+                    // All of them: the largest has the least headroom, and
+                    // compute buffers are not counted.
+                    if values.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ", or keep -ctk {} and set only -ctv {} (with -fa on)",
+                            r["cache_type_k"].as_str().unwrap_or("as is"),
+                            values.join(" / ")
+                        )
+                    }
                 ),
             })
         })

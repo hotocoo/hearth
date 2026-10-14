@@ -529,6 +529,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             geometry.kv_bytes(ctx, k, t, swa)
         })
         .into_iter()
+        // Values at the keys' own type are fits_device_with's case.
         .filter(|(t, _)| t != k.name())
         .collect(),
         max_ctx_now: if under_pressure {
@@ -641,7 +642,7 @@ fn render(r: &Report) -> String {
             .collect();
         let _ = writeln!(
             out,
-            "or keep keys at {}, values at: {} (llama.cpp -ctv; a quantized V cache needs flash attention, -fa)",
+            "or keep keys at {}, values at: {} (llama.cpp -ctv; a quantized V cache needs flash attention, -fa on)",
             r.cache_type_k,
             options.join(", ")
         );

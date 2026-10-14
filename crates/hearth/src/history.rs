@@ -390,6 +390,7 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     let mut out = String::new();
     if report.snapshots.is_empty() {
         let _ = match &args.grep {
+            Some(g) if args.all => writeln!(out, "nothing recorded mentions {g:?}"),
             Some(g) => writeln!(out, "no {} snapshot mentions {g:?}", report.kind),
             None if args.all => writeln!(
                 out,
