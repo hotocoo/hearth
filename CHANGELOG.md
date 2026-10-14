@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:33 hearth run fit check
+
+- `hearth run --model M --ctx N --cache-type T -- …` checks before every start that the model fits the device, as hearthd does for declared servers.
+
 ### 2026-10-15 04:30 fit check before start
 
 - `[servers.NAME]` can declare `model`, `ctx` and `cache_type`, together. hearthd checks before every start that the model at that context fits the device, and refuses one that cannot. The refusal reports the sizes and the largest context that fits.
