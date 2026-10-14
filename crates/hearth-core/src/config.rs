@@ -229,6 +229,13 @@ impl Config {
                 server.ctx.is_some(),
                 server.cache_type.is_some(),
             ];
+            if server.ctx == Some(0) || server.model.as_ref().is_some_and(String::is_empty) {
+                invalid(
+                    "servers.*.model",
+                    name,
+                    "model must name something and ctx be at least 1",
+                )?;
+            }
             if fit_parts.iter().any(|&p| p) && !fit_parts.iter().all(|&p| p) {
                 invalid(
                     "servers.*.model",

@@ -17,6 +17,11 @@ use hearth_runtime::supervise::{
     Decision, Event, Preflight, Probe, RestartPolicy, Settings, Supervised, preflight,
 };
 
+/// A cache type name `hearth fit` accepts.
+fn cache_name(s: &str) -> Result<String, String> {
+    crate::fit::parse_cache(s).map(|_| s.to_string())
+}
+
 /// The journal kind `run` records its events under.
 pub const KIND: &str = "run";
 
@@ -36,7 +41,7 @@ pub struct Args {
     #[arg(long, requires = "model")]
     ctx: Option<u64>,
     /// KV cache type the server uses, for the fit check.
-    #[arg(long, requires = "model")]
+    #[arg(long, requires = "model", value_parser = cache_name)]
     cache_type: Option<String>,
     /// Ready only when the runtime reports a model whose name contains this.
     /// Without it, any model runtime answering on the port counts.
@@ -300,14 +305,15 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         eprintln!("hearth: run events will not be recorded: {e}");
     }
     let mut sending = Vec::new();
-    let declared = args
+    let check = args
         .model
         .clone()
         .zip(args.ctx)
-        .zip(args.cache_type.clone());
+        .zip(args.cache_type.clone())
+        .map(|((m, c), t)| crate::fit::start_check(format!("[{}]", probe.addr), m, c, t));
     let make = Box::new(move || {
-        if let Some(((model, ctx), cache)) = &declared {
-            crate::fit::fits_device(model, *ctx, cache)?;
+        if let Some(check) = &check {
+            check()?;
         }
         let mut c = Command::new(&program);
         c.args(&rest);

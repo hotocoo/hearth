@@ -46,7 +46,7 @@ pub struct Args {
     ubatch: Option<u64>,
 }
 
-fn parse_cache(s: &str) -> Result<CacheType, String> {
+pub(crate) fn parse_cache(s: &str) -> Result<CacheType, String> {
     CacheType::parse(s).ok_or_else(|| {
         format!("unknown cache type {s}; one of f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0 iq4_nl")
     })
@@ -113,11 +113,19 @@ fn from_server(
     )
     .identity;
     match identity {
+        // `/props` reports n_ctx per sequence (llama_n_ctx_seq); with
+        // several slots and a non-unified cache, the cache holds that many
+        // times more. Multiplying is exact then and an overestimate for a
+        // unified cache, which is the safe side for a fit.
         Identity::LlamaCpp {
             model: Some(path),
             n_ctx,
+            slots,
             ..
-        } if model.is_none() => Ok((PathBuf::from(path), n_ctx)),
+        } if model.is_none() => Ok((
+            PathBuf::from(path),
+            n_ctx.map(|n| n.saturating_mul(slots.unwrap_or(1).max(1))),
+        )),
         Identity::Ollama { loaded, .. } => {
             let names: Vec<String> = loaded.iter().map(|l| l.name.clone()).collect();
             let name = match (model, names.as_slice()) {
@@ -395,7 +403,7 @@ fn render(r: &Report) -> String {
 /// all, as `hearth fit` computes it. Only the device ceiling is checked: it
 /// does not move, while what is free now is provisional (ADR-000) and is
 /// the supervisor's to find out.
-pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Result<(), String> {
+pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Verdict {
     let line: Vec<String> = [
         "hearth",
         "--json",
@@ -410,19 +418,70 @@ pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Result<(), Stri
     .iter()
     .map(|s| (*s).to_string())
     .collect();
-    let report: serde_json::Value = crate::dispatch(&line)
+    let report: serde_json::Value = match crate::dispatch(&line)
         .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
-        .map_err(|e| format!("fit check failed: {e}"))?;
-    if report["fits_device"] == false {
-        return Err(format!(
-            "{model} at {ctx} tokens needs {} but the device holds {} ({}); the largest context that fits is {}: lower ctx in the configuration",
-            crate::units::bytes(report["total_bytes"].as_u64().unwrap_or_default()),
-            crate::units::bytes(report["ceiling"]["bytes"].as_u64().unwrap_or_default()),
-            report["ceiling"]["source"].as_str().unwrap_or("device"),
-            report["max_ctx_device"]
-        ));
+    {
+        Ok(r) => r,
+        Err(e) => return Verdict::Unknown(e),
+    };
+    if report["fits_device"] != false {
+        return Verdict::Fits;
     }
-    Ok(())
+    let advice = report["max_ctx_device"].as_u64().map_or_else(
+        || "the weights alone do not fit: use a smaller model or quantization".to_string(),
+        |n| format!("the largest context that fits is {n}: lower ctx"),
+    );
+    Verdict::TooBig(format!(
+        "{model} at {ctx} tokens needs {} but the device holds {} ({}); {advice}",
+        crate::units::bytes(report["total_bytes"].as_u64().unwrap_or_default()),
+        crate::units::bytes(report["ceiling"]["bytes"].as_u64().unwrap_or_default()),
+        report["ceiling"]["source"].as_str().unwrap_or("device"),
+    ))
+}
+
+/// What the fit check concluded.
+pub(crate) enum Verdict {
+    Fits,
+    /// Never fits the device: starting it would only run out of memory.
+    TooBig(String),
+    /// The check itself could not run (a driver query failed, the model is
+    /// not downloaded yet). Not a verdict on the model.
+    Unknown(String),
+}
+
+/// The fit check a supervisor runs before each start: refuses only what
+/// cannot fit; a check that cannot run is reported and the start goes
+/// ahead, since the server's own failure is then the honest answer. The
+/// device ceiling does not change, so a verdict is kept for later starts.
+pub(crate) fn start_check(
+    label: String,
+    model: String,
+    ctx: u64,
+    cache: String,
+) -> impl Fn() -> Result<(), String> + Send {
+    let known: std::sync::Mutex<Option<Result<(), String>>> = std::sync::Mutex::new(None);
+    move || {
+        let mut known = known
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(verdict) = known.as_ref() {
+            return verdict.clone();
+        }
+        match fits_device(&model, ctx, &cache) {
+            Verdict::Fits => {
+                *known = Some(Ok(()));
+                Ok(())
+            }
+            Verdict::TooBig(why) => {
+                *known = Some(Err(why.clone()));
+                Err(why)
+            }
+            Verdict::Unknown(why) => {
+                eprintln!("{label} fit check could not run ({why}); starting anyway");
+                Ok(())
+            }
+        }
+    }
 }
 
 #[cfg(test)]

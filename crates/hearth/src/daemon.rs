@@ -118,6 +118,9 @@ impl Desk {
 
 /// Starts supervising `server` on its own thread.
 fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<Kept, String> {
+    if let Some(t) = &server.cache_type {
+        crate::fit::parse_cache(t).map_err(|e| format!("[{name}] cache_type: {e}"))?;
+    }
     lock(board).insert(
         name.to_string(),
         Status {
@@ -322,14 +325,23 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
     };
     let command = server.command.clone();
     let (env, dir) = (server.env.clone(), server.dir.clone());
-    let declared = server
-        .model
-        .clone()
+    // A relative model path is relative to where the server starts.
+    let model_path = server.model.clone().map(|m| {
+        let relative = std::path::Path::new(&m);
+        match &server.dir {
+            Some(d) if relative.is_relative() && relative.components().count() > 1 => {
+                d.join(relative).display().to_string()
+            }
+            _ => m,
+        }
+    });
+    let check = model_path
         .zip(server.ctx)
-        .zip(server.cache_type.clone());
+        .zip(server.cache_type.clone())
+        .map(|((m, c), t)| crate::fit::start_check(format!("[{}]", server.port), m, c, t));
     let make = Box::new(move || {
-        if let Some(((model, ctx), cache)) = &declared {
-            crate::fit::fits_device(model, *ctx, cache)?;
+        if let Some(check) = &check {
+            check()?;
         }
         let (program, args) = command.split_first().ok_or("no command")?;
         // A relative path is relative to where the server starts.
