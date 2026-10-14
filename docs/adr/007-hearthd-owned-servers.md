@@ -44,7 +44,10 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
 - **Socket.** The socket is created 0600.
 - **Bounds.** One JSON request and one JSON answer per line, each at most `control.max_message_bytes`, the exchange within `control.timeout_ms`. Each client gets its own handler, up to `control.max_clients` at once. A client beyond that is answered "busy" straight away, so stalled clients can occupy handlers for at most the timeout, but never memory or threads without bound. (A first version answered clients one at a time; on CI a stalled client then held the next one past its own deadline.) A malformed or oversized request gets an error answer. Text printed by `hearth status` is stripped of control characters.
 
-- `status`: each server's name, address, expected model, program, state (`starting`, `ready`, `waiting`, `gave_up`), pid, restart count and last event.
+- `status`: each server's name, address, expected model, program, state (`starting`, `ready`, `waiting`, `stopped`, `gave_up`, `unsupervised`), restart count and last event.
+  - `pid`: the tether's pid.
+  - `server_pid`: the process listening on the server's port inside the tether's process group, which is the server however it was wrapped. The lowest pid wins for pre-forking servers. It is never another process using the same port. It is learned when the server becomes ready and forgotten when it goes, so a reused pid is never measured.
+  - `footprint_bytes`: that process's footprint, measured per request, or `footprint_error` when it cannot be measured.
 - `restart NAME`: stop and start again at once, without charging the restart budget, because a person asking is not a crash. It also revives a server hearthd gave up on. Unknown names are refused. Orders do not queue: the latest one for a server replaces any not yet acted on, so `stop` then `start` means start, and repeated requests cannot hold a server down.
 
 - `stop NAME`: stop the server and keep it down, to free its memory, until `start NAME`. A stop is not a failure: nothing is restarted, charged or notified, and status shows `stopped`.
@@ -59,7 +62,10 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
   - changed ones are stopped and, once the old process is gone (it holds the port until then), started with the new definition;
   - every other server keeps running, with the same process.
 
-  A configuration that does not load changes nothing. Other sections take effect when hearthd restarts. The answer lists what is added, removed and changed; the stopping and starting happen after it, since a stop can take the grace.
+  A configuration that does not load changes nothing.
+  - One reload runs at a time; another is refused until the first has started its last server.
+  - Planning and taking servers out of service happen under one lock, and every leaving server is told to stop at once, so stops overlap.
+  - During a reload, orders for a server being replaced are refused with "try again" rather than lost. Other sections take effect when hearthd restarts. The answer lists what is added, removed and changed; the stopping and starting happen after it, since a stop can take the grace.
 
 `hearth status`, `hearth restart|stop|start|logs NAME`, `hearth reload` and the MCP tools of the same names are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
 
@@ -67,7 +73,7 @@ A socket path longer than the platform allows (about a hundred bytes) is reporte
 
 ### Metrics
 
-With `metrics.listen` set (off by default), hearthd serves Prometheus metrics at `GET /metrics`, one scrape at a time, within the control socket's size and time limits:
+With `metrics.listen` set (off by default), hearthd serves Prometheus metrics at `GET /metrics`. Each scrape gets its own handler, up to `control.max_clients`, and its request is read within the control socket's size limit and total deadline, so a stalled scraper cannot hold the others up. The metrics are:
 - `hearth_server_state{server,state}`: one series per server and possible state, 1 for the current one;
 - `hearth_server_restarts_total{server}`;
 - memory total, available and swap used; kernel pressure (0 normal, 1 warn, 2 critical);

@@ -19,7 +19,7 @@ use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
 use std::sync::Condvar;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -43,6 +43,8 @@ struct Status {
     server_pid: Option<i32>,
     /// That process's memory footprint, measured when status is asked.
     footprint_bytes: Option<u64>,
+    /// Why the footprint could not be measured.
+    footprint_error: Option<String>,
     restarts: u64,
     last_event: Option<Value>,
     last_event_at_ms: Option<u64>,
@@ -66,13 +68,16 @@ struct Mailbox {
 }
 
 impl Mailbox {
-    fn post(&self, order: Order) {
+    /// Leaves `order` for the server; false when its supervision is
+    /// ending, which nothing overrides.
+    fn post(&self, order: Order) -> bool {
         let mut pending = self.order.lock().unwrap_or_else(PoisonError::into_inner);
-        // Nothing overrides the end of supervision.
-        if !matches!(*pending, Some(Order::Quit)) {
-            *pending = Some(order);
+        if matches!(*pending, Some(Order::Quit)) {
+            return false;
         }
+        *pending = Some(order);
         self.arrived.notify_one();
+        true
     }
 
     /// The pending order, waiting at most `timeout` for one.
@@ -99,6 +104,8 @@ struct Kept {
 /// changes, and the board they report to.
 struct Desk {
     kept: Mutex<BTreeMap<String, Kept>>,
+    /// A reload is being applied; orders wait until it is done.
+    reloading: AtomicBool,
     board: Board,
     max_message_bytes: u64,
 }
@@ -122,6 +129,7 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
             pid: None,
             server_pid: None,
             footprint_bytes: None,
+            footprint_error: None,
             restarts: 0,
             last_event: None,
             last_event_at_ms: None,
@@ -141,7 +149,11 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
             .name(format!("supervise {name}"))
             .spawn(move || supervise(&name, &server, &config, &board, &mailbox, output))
     }
-    .map_err(|e| format!("cannot start supervising {name}: {e}"))?;
+    .map_err(|e| {
+        // Nothing supervises it: it must not look as if something did.
+        lock(board).remove(name);
+        format!("cannot start supervising {name}: {e}")
+    })?;
     Ok(Kept {
         server: server.clone(),
         mailbox,
@@ -178,53 +190,83 @@ fn plan_reload(
 /// started anew once the old one is gone (it holds the port until then),
 /// new ones start, and the rest keep running untouched.
 fn reload(desk: &Arc<Desk>) -> Value {
+    // One reload at a time, from planning to the last server started.
+    if desk
+        .reloading
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return json!({ "error": "a reload is already in progress; try again when hearth status settles" });
+    }
+    let done = |answer: Value| {
+        desk.reloading.store(false, Ordering::SeqCst);
+        answer
+    };
     let config = match hearth_core::config::load() {
         Ok(c) => c,
         Err(e) => {
-            return json!({ "error": format!("not reloaded, the configuration does not load: {e}") });
+            return done(
+                json!({ "error": format!("not reloaded, the configuration does not load: {e}") }),
+            );
         }
     };
-    let current: BTreeMap<String, Server> = desk
-        .kept()
-        .iter()
-        .map(|(n, k)| (n.clone(), k.server.clone()))
-        .collect();
-    let (added, removed, changed) = plan_reload(&current, &config.servers);
-    let leaving: Vec<(String, Kept)> = {
+    // Planned and taken out of service under one lock, so nothing else can
+    // see a half-applied plan.
+    let (added, removed, changed, leaving) = {
         let mut kept = desk.kept();
-        removed
+        let current: BTreeMap<String, Server> = kept
+            .iter()
+            .map(|(n, k)| (n.clone(), k.server.clone()))
+            .collect();
+        let (added, removed, changed) = plan_reload(&current, &config.servers);
+        let leaving: Vec<(String, Kept)> = removed
             .iter()
             .chain(&changed)
             .filter_map(|n| kept.remove(n).map(|k| (n.clone(), k)))
-            .collect()
+            .collect();
+        (added, removed, changed, leaving)
     };
+    // Every leaving server is told at once, so their stops overlap.
+    for (_, k) in &leaving {
+        // False only when it was already leaving; either way it goes.
+        let _ = k.mailbox.post(Order::Quit);
+    }
     let answer = json!({ "added": added, "removed": removed, "changed": changed });
-    let desk = desk.clone();
     let starting: Vec<String> = added.into_iter().chain(changed).collect();
-    // The rest happens off the control handler: stopping can take the grace.
-    let _ = std::thread::Builder::new()
+    let worker = desk.clone();
+    // Joining a stopping server can take its grace: the rest happens off
+    // the control handler, and orders for these names are refused until it
+    // is done (see `reloading`).
+    let spawned = std::thread::Builder::new()
         .name("reload".into())
         .spawn(move || {
             for (name, k) in leaving {
-                k.mailbox.post(Order::Quit);
-                let _ = k.thread.join();
-                lock(&desk.board).remove(&name);
+                if k.thread.join().is_err() {
+                    log(&format!("[{name}] its supervising thread had failed"));
+                }
+                lock(&worker.board).remove(&name);
                 log(&format!("[{name}] left supervision"));
             }
             for name in starting {
                 let Some(server) = config.servers.get(&name) else {
                     continue;
                 };
-                match keep(&name, server, &config, &desk.board) {
+                match keep(&name, server, &config, &worker.board) {
                     Ok(k) => {
-                        desk.kept().insert(name.clone(), k);
+                        worker.kept().insert(name.clone(), k);
                         log(&format!("[{name}] supervised"));
                     }
                     Err(e) => log(&e),
                 }
             }
+            worker.reloading.store(false, Ordering::SeqCst);
         });
-    answer
+    match spawned {
+        Ok(_) => answer,
+        Err(e) => done(json!({
+            "error": format!("the reload could not run ({e}); the servers taken out were told to stop; run hearth reload again"),
+        })),
+    }
 }
 
 type Board = Arc<Mutex<BTreeMap<String, Status>>>;
@@ -266,6 +308,7 @@ impl Drop for Watchman<'_> {
             update(self.board, self.name, |s| {
                 s.state = "unsupervised".into();
                 s.pid = None;
+                s.server_pid = None;
             });
         }
     }
@@ -294,11 +337,25 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
 }
 
 /// The process listening on `port`, found among this user's processes.
-fn listener_of(port: u16) -> Option<i32> {
-    hearth_sense::list_processes()
-        .ok()?
+/// The process listening on `port` that belongs to `tether`'s process
+/// group: the server, under its tether and any wrapper script, and never a
+/// process someone else runs on the same port. The lowest such pid, so a
+/// pre-forking server is named by its first process.
+fn listener_of(port: u16, tether: u32) -> Option<i32> {
+    let group = i32::try_from(tether).ok()?;
+    let processes = match hearth_sense::list_processes() {
+        Ok(p) => p,
+        Err(e) => {
+            log(&format!(
+                "cannot list processes to find the server's pid: {e}"
+            ));
+            return None;
+        }
+    };
+    processes
         .into_iter()
-        .find(|p| {
+        .filter(|p| hearth_sense::process_group(p.pid).is_ok_and(|g| g == group))
+        .filter(|p| {
             hearth_sense::tcp_sockets(p.pid).is_ok_and(|sockets| {
                 sockets
                     .iter()
@@ -306,6 +363,7 @@ fn listener_of(port: u16) -> Option<i32> {
             })
         })
         .map(|p| p.pid)
+        .min()
 }
 
 fn address(server: &Server) -> SocketAddr {
@@ -361,11 +419,12 @@ fn supervise(
             Err(()) => events.extend(supervised.poll()),
         }
         for event in events {
+            use hearth_runtime::supervise::Event as E;
+            // The server's pid is learned when it is ready and forgotten as
+            // soon as it is gone, so nothing measures a pid since reused.
             let listening = match &event {
-                hearth_runtime::supervise::Event::Ready { .. } => {
-                    Some(listener_of(address(server).port()))
-                }
-                hearth_runtime::supervise::Event::Started { .. } => None,
+                E::Ready { pid, .. } => Some(listener_of(address(server).port(), *pid)),
+                E::Started { .. } | E::Noticed { .. } => None,
                 _ => Some(None),
             };
             if let Some(server_pid) = listening {
@@ -412,10 +471,11 @@ fn answer(request: &str, board: &Board, desk: &Arc<Desk>) -> Value {
         Some("status") => {
             let mut servers: Vec<Status> = lock(board).values().cloned().collect();
             for s in &mut servers {
-                s.footprint_bytes = s
-                    .server_pid
-                    .and_then(|p| hearth_sense::process_footprint(p).ok())
-                    .map(|f| f.footprint_bytes);
+                match s.server_pid.map(hearth_sense::process_footprint) {
+                    Some(Ok(f)) => s.footprint_bytes = Some(f.footprint_bytes),
+                    Some(Err(e)) => s.footprint_error = Some(e.to_string()),
+                    None => {}
+                }
             }
             json!({ "servers": servers })
         }
@@ -434,10 +494,13 @@ fn answer(request: &str, board: &Board, desk: &Arc<Desk>) -> Value {
                 Some(_) if unsupervised => {
                     json!({ "error": format!("{name} is no longer supervised") })
                 }
-                Some(mailbox) => {
-                    mailbox.post(order);
+                Some(mailbox) if mailbox.post(order) => {
                     json!({ "requested": op, "server": name })
                 }
+                Some(_) => json!({ "error": format!("{name} is leaving supervision (reload)") }),
+                None if desk.reloading.load(Ordering::SeqCst) => json!({
+                    "error": format!("{name} is being reloaded; try again in a moment"),
+                }),
                 None => unknown(name),
             }
         }
@@ -634,12 +697,12 @@ pub fn run() -> Result<(), String> {
         std::thread::Builder::new()
             .name("metrics".into())
             .spawn(move || {
-                let servers = || -> Vec<Value> {
+                let servers: Arc<dyn Fn() -> Vec<Value> + Send + Sync> = Arc::new(move || {
                     lock(&board)
                         .values()
                         .filter_map(|s| serde_json::to_value(s).ok())
                         .collect()
-                };
+                });
                 crate::metrics::serve(&listener, &control, &servers);
             })
             .map_err(|e| format!("cannot start serving metrics: {e}"))?;
@@ -653,6 +716,7 @@ pub fn run() -> Result<(), String> {
     let pause = Duration::from_millis(config.control.timeout_ms);
     let desk = Arc::new(Desk {
         kept: Mutex::new(kept),
+        reloading: AtomicBool::new(false),
         board: board.clone(),
         max_message_bytes: config.control.max_message_bytes,
     });

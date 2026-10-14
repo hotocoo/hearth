@@ -286,6 +286,23 @@ pub fn tcp_sockets(pid: i32) -> Result<Vec<TcpSocket>> {
         .collect())
 }
 
+/// The process group `pid` belongs to: the fifth field of `/proc/PID/stat`,
+/// counted after the command name, which is in parentheses and may itself
+/// contain spaces and parentheses.
+pub fn process_group(pid: i32) -> Result<i32> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|e| SenseError::Os {
+        call: "read /proc/PID/stat",
+        detail: e.to_string(),
+    })?;
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().nth(2))
+        .and_then(|g| g.parse().ok())
+        .ok_or_else(|| SenseError::Os {
+            call: "parse /proc/PID/stat",
+            detail: format!("no process group in {stat:?}"),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

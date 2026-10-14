@@ -470,6 +470,20 @@ fn metal_limits() -> Option<(String, bool, u64)> {
     ))
 }
 
+/// The process group `pid` belongs to.
+pub fn process_group(pid: i32) -> Result<i32> {
+    use libproc::libproc::bsd_info::BSDInfo;
+    use libproc::libproc::proc_pid::pidinfo;
+    let info = pidinfo::<BSDInfo>(pid, 0).map_err(|detail| SenseError::Os {
+        call: "proc_pidinfo PROC_PIDTBSDINFO",
+        detail,
+    })?;
+    i32::try_from(info.pbi_pgid).map_err(|e| SenseError::Os {
+        call: "proc_pidinfo PROC_PIDTBSDINFO",
+        detail: e.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

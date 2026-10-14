@@ -276,6 +276,12 @@ fn check_reload(dir: &Path) {
     let plan = hearth(dir, &["reload"]).unwrap();
     assert_eq!(plan["added"], serde_json::json!(["extra"]), "{plan}");
     wait_until("the added server", || listening(second));
+    // The reload is done when status lists it; only then is a second one
+    // accepted.
+    wait_until("status to list it", || {
+        hearth(dir, &["status"])
+            .is_ok_and(|v| v["servers"].as_array().is_some_and(|a| a.len() == 2))
+    });
     std::fs::write(dir.join("hearth.toml"), toml).unwrap();
     assert_eq!(
         hearth(dir, &["reload"]).unwrap()["removed"],

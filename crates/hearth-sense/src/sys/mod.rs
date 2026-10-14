@@ -7,16 +7,16 @@ pub use unix::effective_uid;
 mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
-    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
-    tcp_sockets,
+    accelerators, host_memory, list_processes, process_counts, process_footprint, process_group,
+    system_limits, tcp_sockets,
 };
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
-    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
-    tcp_sockets,
+    accelerators, host_memory, list_processes, process_counts, process_footprint, process_group,
+    system_limits, tcp_sockets,
 };
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -47,9 +47,12 @@ mod unsupported {
     pub fn tcp_sockets(_pid: i32) -> Result<Vec<TcpSocket>> {
         Err(SenseError::Unsupported("tcp sockets"))
     }
+    pub fn process_group(_pid: i32) -> Result<i32> {
+        Err(SenseError::Unsupported("process groups"))
+    }
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub use unsupported::{
-    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
-    tcp_sockets,
+    accelerators, host_memory, list_processes, process_counts, process_footprint, process_group,
+    system_limits, tcp_sockets,
 };

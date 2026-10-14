@@ -15,8 +15,8 @@ use serde::Serialize;
 #[cfg(unix)]
 pub use sys::effective_uid;
 pub use sys::{
-    accelerators, host_memory, list_processes, process_counts, process_footprint, system_limits,
-    tcp_sockets,
+    accelerators, host_memory, list_processes, process_counts, process_footprint, process_group,
+    system_limits, tcp_sockets,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -268,4 +268,13 @@ pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+#[cfg(test)]
+mod group_tests {
+    #[test]
+    fn this_process_has_a_group() {
+        let pid = i32::try_from(std::process::id()).unwrap();
+        assert!(super::process_group(pid).unwrap() > 0);
+    }
 }
