@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:54 time references
+
+- A snapshot reference can be `@AGE` (`@30m`, `@2h`, `@1d`): the latest snapshot at least that old, accepted wherever an id, `~N` or a tag is.
+- `hearth log --since AGE` lists only recent snapshots. MCP `log` takes `since`.
+
 ### 2026-10-15 02:46 release workflow
 
 - `.github/workflows/release.yml` builds `hearth` and `hearthd` for aarch64-apple-darwin and for x86_64 and aarch64 Linux (static musl). Each archive is packaged with its SHA-256.
