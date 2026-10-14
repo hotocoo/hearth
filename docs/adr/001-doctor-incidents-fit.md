@@ -203,3 +203,7 @@ A fit used to leave out the runtime's compute buffers, because no file states th
 
 Only the compute lines are read, and only a start that logged a non-zero amount counts as measured. Lines still unread when the port first answers are not counted; llama.cpp logs them before it serves, so this is rare and errs low. Finding the event reads run events newest first until one matches, so a fit costs up to `state.max_snapshots_per_kind` small reads when none does; `ports` runs one fit per llama.cpp server each round. Run events are few (one per start, exit or wedge), so this is accepted as a known cost rather than indexed. The value is that start's: compute buffers also depend on the batch sizes and flash attention, and without flash attention they grow with the context, which the note says.
 
+## Addendum (2026-10-15): `hearth models`
+
+`hearth models` lists every model the stores that `fit` reads hold: Hugging Face cache repos (each GGUF weights file, or the repo when it is a safetensors model), LM Studio's directories, and Ollama's manifests. Each line gives a name `fit` accepts, the store, the architecture, the weights, the trained context, and the largest context the device holds it at. That context is computed by the same geometry and device ceiling as `fit`, with `--cache-type`, or the model's own dtype for MLX. A GGUF without a cache type is listed unsized, because llama.cpp's f16 default is a runtime's choice and not the model's. A store that is absent lists nothing; one that cannot be read is reported, never skipped silently. Only files are read.
+

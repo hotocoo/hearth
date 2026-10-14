@@ -89,6 +89,28 @@
     }
   },
   {
+    "name": "models",
+    "description": "Every model on this machine's disks, from the Hugging Face cache, LM Studio and Ollama's store: its name (what fit takes), store, architecture, weights, trained context, and the largest context the device holds it at. Answers 'what can I run here' without loading anything. Without cache_type, GGUF contexts are not sized; MLX and safetensors models use their own dtype.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "description": "Only models whose name contains this, case ignored."
+        },
+        "cache_type": {
+          "type": "string",
+          "description": "KV cache type to size contexts with: f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0 iq4_nl."
+        }
+      }
+    },
+    "cli": {
+      "positional": [
+        "filter"
+      ]
+    }
+  },
+  {
     "name": "ports",
     "description": "Every listening TCP port with its process, and which model runtime answers there: Ollama (models, loaded models with sizes), llama.cpp (model path, n_ctx, slots, health), ComfyUI, LM Studio, OpenAI-compatible. Ports that accept connections but never answer are flagged (a wedged server looks like that). Probes are read-only GETs. Each port says owned_by: the hearthd server name when hearthd started it (only those may be restarted, stopped or started), or null when someone else runs it and hearth only observes. A llama.cpp server configured past the device (its model at its context and cache types exceed the accelerator ceiling) is a warn finding with the largest context that fits and the cache types that would keep the context. An Ollama model loaded only partly onto the accelerator (size_vram below size: the rest runs on the CPU) is a warn finding.",
     "inputSchema": {

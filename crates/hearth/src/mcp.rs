@@ -63,7 +63,7 @@ fn handle(msg: &Value) -> Option<Value> {
                     "instructions": instructions("hearth inspects a machine that runs local models and keeps the servers hearthd owns alive. \
                         Start with a workflow from prompts/list when one fits (diagnose-slow-machine, server-died, can-i-load, right-size-a-server, what-changed, find-a-leak, when-did-it-start). \
                         Otherwise: doctor for memory, files and threads; ports for what runs where (owned_by says what hearthd owns); \
-                        incidents for crashes and kills; fit before loading a model; \
+                        incidents for crashes and kills; models for what is on disk and the context each fits at; fit before loading a model; \
                         log, diff, show, follow and tag for history (references: ~N, @2h, ids, tag names; log grep finds when something appeared); \
                         note after you change something or advise a change, so the history says what was done and why; \
                         status, logs, restart, stop, start and reload for hearthd's servers (only those: never act on a process hearth did not start); \

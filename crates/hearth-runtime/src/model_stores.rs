@@ -16,7 +16,8 @@ pub enum Store {
 }
 
 impl Store {
-    fn name(self) -> &'static str {
+    #[must_use]
+    pub fn name(self) -> &'static str {
         match self {
             Self::HuggingFace => "hugging face cache",
             Self::LmStudio => "lm studio models directory",
@@ -24,13 +25,13 @@ impl Store {
     }
 }
 
-/// `(store, repo directory for org/repo)`, for every store this machine
-/// may have, in the locations those tools themselves use: the Hugging Face
-/// cache (`HF_HUB_CACHE`, `HUGGINGFACE_HUB_CACHE`, `HF_HOME/hub`, else
+/// The download stores this machine may have, each with its base
+/// directory, in the locations those tools themselves use: the Hugging
+/// Face cache (`HF_HUB_CACHE`, `HUGGINGFACE_HUB_CACHE`, `HF_HOME/hub`, else
 /// `XDG_CACHE_HOME` or `~/.cache`, then `huggingface/hub`), and LM Studio's
 /// models directory (`~/.lmstudio/models`, and the older
 /// `~/.cache/lm-studio/models`).
-fn repo_dirs(org: &str, repo: &str) -> Vec<(Store, PathBuf)> {
+fn bases() -> Vec<(Store, PathBuf)> {
     let env = |k: &str| {
         std::env::var_os(k)
             .filter(|v| !v.is_empty())
@@ -47,17 +48,103 @@ fn repo_dirs(org: &str, repo: &str) -> Vec<(Store, PathBuf)> {
         });
     let mut out = Vec::new();
     if let Some(hub) = hf_hub {
-        out.push((
-            Store::HuggingFace,
-            hub.join(format!("models--{org}--{repo}")),
-        ));
+        out.push((Store::HuggingFace, hub));
     }
     if let Some(h) = &home {
         for base in [".lmstudio/models", ".cache/lm-studio/models"] {
-            out.push((Store::LmStudio, h.join(base).join(org).join(repo)));
+            out.push((Store::LmStudio, h.join(base)));
         }
     }
     out
+}
+
+/// `(store, repo directory for org/repo)` in every store.
+fn repo_dirs(org: &str, repo: &str) -> Vec<(Store, PathBuf)> {
+    bases()
+        .into_iter()
+        .map(|(store, base)| {
+            let dir = match store {
+                Store::HuggingFace => base.join(format!("models--{org}--{repo}")),
+                Store::LmStudio => base.join(org).join(repo),
+            };
+            (store, dir)
+        })
+        .collect()
+}
+
+/// Every `org/repo` each store has, sorted, for listing what is on this
+/// machine. A store that is absent lists nothing; one that cannot be read
+/// is an error.
+pub fn list() -> Result<Vec<(Store, String)>, String> {
+    let dirs = |d: &Path| -> Result<Vec<String>, String> {
+        match std::fs::read_dir(d) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(format!("{}: {e}", d.display())),
+            Ok(entries) => entries
+                .map(|e| {
+                    let e = e.map_err(|e| format!("{}: {e}", d.display()))?;
+                    Ok(e.path()
+                        .is_dir()
+                        .then(|| e.file_name().to_string_lossy().into_owned()))
+                })
+                .filter_map(Result::transpose)
+                .collect(),
+        }
+    };
+    let mut out = Vec::new();
+    for (store, base) in bases() {
+        match store {
+            Store::HuggingFace => {
+                for name in dirs(&base)? {
+                    if let Some((org, repo)) = name
+                        .strip_prefix("models--")
+                        .and_then(|r| r.split_once("--"))
+                    {
+                        out.push((store, format!("{org}/{repo}")));
+                    }
+                }
+            }
+            Store::LmStudio => {
+                for org in dirs(&base)? {
+                    for repo in dirs(&base.join(&org))? {
+                        out.push((store, format!("{org}/{repo}")));
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    out.dedup_by(|a, b| a == b);
+    Ok(out)
+}
+
+/// The weight files of repo `org/repo` in `store`, each as a name
+/// [`find_in`] resolves (`org/repo/FILE`), or the repo itself when it is a
+/// safetensors model. Empty when the store has none.
+pub fn weights_of(name: &str, store: Store) -> Result<Vec<String>, String> {
+    let Some((org, repo, None, None)) = parse(name) else {
+        return Err(format!("{name:?} is not org/repo"));
+    };
+    let Some((_, dir)) = repo_dirs(&org, &repo)
+        .into_iter()
+        .find(|(s, d)| *s == store && d.is_dir())
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(files) = files_dir(store, &dir)? else {
+        return Ok(Vec::new());
+    };
+    let ggufs = weights_in(&files);
+    if ggufs.is_empty() {
+        return Ok(match find_in(name, store) {
+            Some(Ok(p)) if p.is_dir() => vec![name.to_string()],
+            _ => Vec::new(),
+        });
+    }
+    Ok(ggufs
+        .iter()
+        .filter_map(|p| p.file_name()?.to_str().map(|f| format!("{org}/{repo}/{f}")))
+        .collect())
 }
 
 /// The directory holding a cached repo's files: for the Hugging Face cache,

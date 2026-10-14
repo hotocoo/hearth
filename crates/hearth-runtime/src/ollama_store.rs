@@ -103,6 +103,61 @@ pub fn weights_in(store: &Path, name: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// Every model name the stores have manifests for, in the short form
+/// Ollama shows (`qwen3:8b`, `user/model:tag`, `host/ns/model:tag`),
+/// sorted. An absent store lists nothing; one that cannot be read is an
+/// error.
+pub fn list() -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for store in stores() {
+        out.extend(list_in(&store)?);
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// [`list`] for one store.
+pub fn list_in(store: &Path) -> Result<Vec<String>, String> {
+    let dirs = |d: &Path| -> Result<Vec<String>, String> {
+        match std::fs::read_dir(d) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(format!("{}: {e}", d.display())),
+            Ok(entries) => entries
+                .map(|e| {
+                    e.map(|e| e.file_name().to_string_lossy().into_owned())
+                        .map_err(|e| format!("{}: {e}", d.display()))
+                })
+                .collect(),
+        }
+    };
+    let manifests = store.join("manifests");
+    let mut out = Vec::new();
+    for registry in dirs(&manifests)? {
+        for namespace in dirs(&manifests.join(&registry))? {
+            let models = manifests.join(&registry).join(&namespace);
+            for model in dirs(&models)? {
+                let tags = models.join(&model);
+                for tag in dirs(&tags)? {
+                    if !tags.join(&tag).is_file() {
+                        continue;
+                    }
+                    let name = match (registry.as_str(), namespace.as_str()) {
+                        (DEFAULT_REGISTRY, DEFAULT_NAMESPACE) => format!("{model}:{tag}"),
+                        (DEFAULT_REGISTRY, ns) => format!("{ns}/{model}:{tag}"),
+                        (r, ns) => format!("{r}/{ns}/{model}:{tag}"),
+                    };
+                    if parse_name(&name).is_some() {
+                        out.push(name);
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// The weights file of model `name`, from the first store that has it.
 pub fn weights(name: &str) -> Result<PathBuf, String> {
     let mut tried = Vec::new();
@@ -163,6 +218,11 @@ mod tests {
             store.join("blobs/sha256-beef")
         );
         assert!(weights_in(&store, "qwen3:14b").is_err());
+        let other = store.join("manifests/registry.ollama.ai/user/m");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("q4"), "{}").unwrap();
+        assert_eq!(list_in(&store).unwrap(), ["qwen3:8b", "user/m:q4"]);
+        assert!(list_in(&store.join("absent")).unwrap().is_empty());
         std::fs::remove_dir_all(store).unwrap();
     }
 }

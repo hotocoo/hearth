@@ -18,6 +18,7 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 | Why is the machine slow or unstable? | `doctor` (with `watch_seconds` for growth), then `diff` with kind `doctor` |
 | What runs where, and is it alive? | `ports` (with `runtimes_only` for model servers only) |
 | Did the machine crash, or kill something? | `incidents` |
+| What models are on this machine, and what context does each fit at? | `models` (with `cache_type` to size GGUF contexts) |
 | Will this model fit? | `fit`: a `.gguf` path, an MLX or safetensors directory, `org/repo:QUANT` (Hugging Face cache, LM Studio), an Ollama name (`qwen3:8b`), or the `port` of a running server (without `ctx`, its own context) |
 | What changed since earlier? | `diff` (kind `ports` or `doctor`, `from` set to `~N`, `@2h` or a tag) |
 | How much history is there? | `log` with `stats` |

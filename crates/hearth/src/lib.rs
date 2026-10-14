@@ -19,6 +19,7 @@ mod incidents;
 mod mcp;
 #[cfg(unix)]
 mod metrics;
+mod models;
 mod note;
 mod notify;
 mod ports;
@@ -52,6 +53,10 @@ enum Command {
     /// Whether a model (GGUF, MLX or safetensors) at a given context fits on
     /// this machine, now and at all.
     Fit(fit::Args),
+    /// Every model on this machine's disks (Hugging Face cache, LM Studio,
+    /// Ollama), with its weights and the largest context the device holds
+    /// it at. Names are what `fit` takes.
+    Models(models::Args),
     /// Every listening port, the process behind it, and which model runtime
     /// answers there (Ollama, llama.cpp, ComfyUI, LM Studio, OpenAI-compatible).
     Ports(ports::Args),
@@ -132,6 +137,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Doctor(args) => doctor::run(args, cli.json),
         Command::Incidents(args) => incidents::run(args, cli.json),
         Command::Fit(args) => fit::run(args, cli.json),
+        Command::Models(args) => models::run(args, cli.json),
         Command::Ports(args) => ports::run(args, cli.json),
         Command::Log(args) => history::log(args, cli.json),
         Command::Diff(args) => history::diff(args, cli.json),

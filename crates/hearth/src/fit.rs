@@ -102,9 +102,9 @@ struct Report {
 }
 
 #[derive(Serialize)]
-struct Ceiling {
-    bytes: u64,
-    source: String,
+pub(crate) struct Ceiling {
+    pub(crate) bytes: u64,
+    pub(crate) source: String,
     /// Free on that device now, when it is a discrete GPU whose driver
     /// reports usage: what "fits right now" is checked against there.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,7 +305,7 @@ fn from_server(
 }
 
 /// The path given, or the Ollama model of that name.
-fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
+pub(crate) fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
     if model.exists() {
         return Ok(model.to_path_buf());
     }
@@ -443,7 +443,7 @@ fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), Stri
 /// The cache type of a model directory whose runtime caches keys and
 /// values in the model's own dtype (MLX, Transformers): `torch_dtype`, or
 /// `dtype` in newer configs, of the language model.
-fn dtype_cache_type(model: &Path) -> Option<CacheType> {
+pub(crate) fn dtype_cache_type(model: &Path) -> Option<CacheType> {
     let text = std::fs::read_to_string(model.join("config.json")).ok()?;
     let config: serde_json::Value = serde_json::from_str(&text).ok()?;
     [&config["text_config"], &config]
@@ -461,7 +461,9 @@ fn dtype_cache_type(model: &Path) -> Option<CacheType> {
 /// The model's files, their total size, and its cache geometry: from the
 /// GGUF header, or for a directory with `config.json` (MLX, safetensors)
 /// from that config and the `.safetensors` files beside it.
-fn weights_and_geometry(model: &std::path::Path) -> Result<(Vec<PathBuf>, u64, Geometry), String> {
+pub(crate) fn weights_and_geometry(
+    model: &std::path::Path,
+) -> Result<(Vec<PathBuf>, u64, Geometry), String> {
     let size = |files: &[PathBuf]| {
         files
             .iter()
@@ -649,7 +651,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
 
 /// The most one process may place on the accelerator: Metal's recommended
 /// working set, or the iogpu wired limit when an override is set and lower.
-fn device_ceiling() -> Result<Option<Ceiling>, String> {
+pub(crate) fn device_ceiling() -> Result<Option<Ceiling>, String> {
     let accelerators = crate::pressure::accelerators()?;
     Ok(accelerators
         .iter()
