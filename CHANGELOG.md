@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:51 tag --at
+
+- `hearth tag NAME --at REF` names one earlier snapshot (an id, `~N`, `@AGE` or another tag, of `--kind`), like `git tag NAME COMMIT`, so a moment found with `log --grep` is kept past retention. MCP's `tag` takes `at` and `kind`.
+
 ### 2026-10-15 05:48 MLX cache type from the config
 
 - `fit` on an MLX or safetensors model needs no `--cache-type`: it uses the config's `torch_dtype` (or `dtype`), which is what MLX caches in. This also covers `fit --port` on `mlx_lm.server`.
