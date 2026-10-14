@@ -329,7 +329,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
 fn record(report: &mut Report) {
     let journal = hearth_core::config::load()
         .map_err(|e| e.to_string())
-        .and_then(|c| Journal::open(c.state.max_snapshots_per_kind).map_err(|e| e.to_string()));
+        .and_then(|c| Journal::open(&c.state).map_err(|e| e.to_string()));
     match journal.and_then(|j| j.record(KIND, &*report).map_err(|e| e.to_string())) {
         Ok(r) => {
             report.snapshot = Some(r.snapshot.id);

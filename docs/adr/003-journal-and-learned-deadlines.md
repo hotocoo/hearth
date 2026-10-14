@@ -126,3 +126,16 @@ The `what-changed` workflow accepts a tag.
 
 A snapshot can also be named `@AGE`, as in `@90s`, `@30m`, `@2h` or `@1d`: the latest snapshot taken at least that long ago, which is how things were then. This is git's `HEAD@{2.hours.ago}`. `hearth log --since AGE` lists only what was recorded within that time. The time comes from snapshot ids, which begin with their nanosecond timestamp, so no file is read to find it.
 
+## Addendum (2026-10-15): retention by age
+
+Retention by count alone kept 200 snapshots. At hearthd's 10-second doctor interval that is about 33 minutes, so `@1d` had nothing to point at. Snapshots of kinds listed in `state.thinned_kinds` (ports, doctor) are now thinned by `state.tiers`. Each tier is a window back from now in which one snapshot is kept per `every_ms` (all of them when 0): the newest snapshot of each interval. Past the last window, snapshots are deleted.
+
+The defaults keep:
+- everything for an hour;
+- one per 10 minutes for a day;
+- one per hour for a week.
+
+That is about 700 doctor snapshots, some 45 MB at tens of KB each. `max_snapshots_per_kind` (now 1000) stays a hard cap over everything.
+
+Kinds not listed, such as `run` events, are only capped, because every event matters. Tagged snapshots are exempt as before. Configuration rejects tiers whose windows do not grow.
+

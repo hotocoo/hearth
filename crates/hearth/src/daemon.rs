@@ -396,7 +396,7 @@ fn supervise(
     let _watchman = Watchman { board, name };
     let mut supervised = supervised(server, config).sharing_output(output);
     let mut halted = false;
-    let journal = Journal::open(config.state.max_snapshots_per_kind)
+    let journal = Journal::open(&config.state)
         .map_err(|e| log(&format!("[{name}] events will not be recorded: {e}")))
         .ok();
     let mut sending = Vec::new();

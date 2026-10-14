@@ -307,7 +307,7 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
     let discovery = &config.discovery;
     let max_bytes = discovery.max_probe_response_bytes;
     let mut state_errors = Vec::new();
-    let journal = Journal::open(config.state.max_snapshots_per_kind)
+    let journal = Journal::open(&config.state)
         .map_err(|e| state_errors.push(e.to_string()))
         .ok();
     let learned = journal

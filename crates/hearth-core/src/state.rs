@@ -125,6 +125,35 @@ fn valid_id(id: &str) -> bool {
     digits(parts.next()) && digits(parts.next()) && parts.next().is_some_and(valid_kind)
 }
 
+/// Splits `ids` (oldest first) into those `tiers` keep and those they drop,
+/// at time `now` (ns). Within a tier's window, the newest snapshot of each
+/// `every_ms` interval is kept; past the last window nothing is. No tiers
+/// keeps everything.
+fn thin(ids: &[String], tiers: &[crate::config::Tier], now: u64) -> (Vec<String>, Vec<String>) {
+    if tiers.is_empty() {
+        return (ids.to_vec(), Vec::new());
+    }
+    let ms = |ns: u64| ns / u64::try_from(Duration::from_millis(1).as_nanos()).unwrap_or(1);
+    let mut seen = std::collections::BTreeSet::new();
+    let (mut keep, mut drop) = (Vec::new(), Vec::new());
+    for id in ids.iter().rev() {
+        let at = nanos_of(id).unwrap_or(now);
+        let age = ms(now.saturating_sub(at));
+        let kept = tiers
+            .iter()
+            .enumerate()
+            .find(|(_, t)| age <= t.within_ms)
+            .is_some_and(|(i, t)| t.every_ms == 0 || seen.insert((i, ms(at) / t.every_ms)));
+        if kept {
+            keep.push(id.clone());
+        } else {
+            drop.push(id.clone());
+        }
+    }
+    keep.reverse();
+    (keep, drop)
+}
+
 /// `90s`, `30m`, `2h`, `1d`: a length of time back from now. Units are the
 /// clock's, not policy.
 #[must_use]
@@ -170,17 +199,32 @@ fn kind_of(id: &str) -> Option<&str> {
 pub struct Journal {
     dir: PathBuf,
     keep: usize,
+    thinned: Vec<String>,
+    tiers: Vec<crate::config::Tier>,
 }
 
 impl Journal {
     /// The journal in [`dir`], keeping `keep` snapshots of each kind.
-    pub fn open(keep: usize) -> Result<Self, StateError> {
-        Self::at(dir()?, keep)
+    pub fn open(state: &crate::config::State) -> Result<Self, StateError> {
+        Ok(Self::at(dir()?, state.max_snapshots_per_kind)?.thinning(state))
+    }
+
+    /// Thins the kinds `state` names by its age tiers.
+    #[must_use]
+    pub fn thinning(mut self, state: &crate::config::State) -> Self {
+        self.thinned.clone_from(&state.thinned_kinds);
+        self.tiers.clone_from(&state.tiers);
+        self
     }
 
     pub fn at(dir: PathBuf, keep: usize) -> Result<Self, StateError> {
         ensure_dir(&dir)?;
-        Ok(Self { dir, keep })
+        Ok(Self {
+            dir,
+            keep,
+            thinned: Vec::new(),
+            tiers: Vec::new(),
+        })
     }
 
     #[must_use]
@@ -364,6 +408,16 @@ impl Journal {
             .collect())
     }
 
+    fn remove(&self, id: &str) -> Result<(), StateError> {
+        let path = self.file(id);
+        match std::fs::remove_file(&path) {
+            // Another process pruning at the same time got there first.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(StateError::Io { path, source }),
+            Ok(()) => Ok(()),
+        }
+    }
+
     fn tags_dir(&self) -> PathBuf {
         self.dir.join("tags")
     }
@@ -493,20 +547,21 @@ impl Journal {
             .flat_map(std::collections::BTreeMap::into_values)
             .collect();
         // Tagged snapshots are kept and do not count against retention.
-        let ids: Vec<String> = self
+        let mut ids: Vec<String> = self
             .ids(kind)?
             .into_iter()
             .filter(|id| !tagged.contains(id))
             .collect();
+        if self.thinned.iter().any(|k| k == kind) {
+            let (keep, drop) = thin(&ids, &self.tiers, now_nanos());
+            for id in &drop {
+                self.remove(id)?;
+            }
+            ids = keep;
+        }
         let excess = ids.len().saturating_sub(self.keep);
         for id in &ids[..excess] {
-            let path = self.file(id);
-            match std::fs::remove_file(&path) {
-                // Another process pruning at the same time got there first.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(source) => return Err(StateError::Io { path, source }),
-                Ok(()) => {}
-            }
+            self.remove(id)?;
         }
         match bad.pop() {
             Some(e) => Err(e),
@@ -621,6 +676,37 @@ mod tests {
             "pruned again once untagged"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tiers_thin_old_snapshots_and_drop_the_oldest() {
+        use crate::config::Tier;
+        let minute = 60_000_000_000_u64;
+        let now = 1_000 * minute;
+        let id = |ago: u64| format!("{:020}-1-doctor", now - ago * minute);
+        // Every minute for the last 200 minutes, oldest first.
+        let ids: Vec<String> = (0..200).rev().map(id).collect();
+        let tiers = [
+            Tier {
+                within_ms: 10 * 60_000,
+                every_ms: 0,
+            },
+            Tier {
+                within_ms: 100 * 60_000,
+                every_ms: 30 * 60_000,
+            },
+        ];
+        let (keep, drop) = thin(&ids, &tiers, now);
+        assert_eq!(keep.len() + drop.len(), 200);
+        // All of the last ten minutes, then about one per half hour.
+        assert!(keep.contains(&id(0)) && keep.contains(&id(10)));
+        let thinned = keep
+            .iter()
+            .filter(|k| !(0..=10).any(|a| **k == id(a)))
+            .count();
+        assert!((3..=4).contains(&thinned), "{thinned}");
+        assert!(drop.contains(&id(150)), "past the last window");
+        assert_eq!(thin(&ids, &[], now).0.len(), 200);
     }
 
     #[test]

@@ -37,11 +37,33 @@ learned_min_samples = 3
 learned_deadline_floor_ms = 50
 
 [state]
-# Snapshots kept per kind (ports, doctor) in the state directory:
+# Snapshots kept per kind (ports, doctor, run) in the state directory:
 # $HEARTH_STATE, or $XDG_STATE_HOME/hearth (default ~/.local/state/hearth).
-# The oldest are deleted first. `hearth log` lists them, `hearth diff`
-# compares two.
-max_snapshots_per_kind = 200
+# A hard cap: past it the oldest are deleted, whatever the tiers say.
+# `hearth log` lists them, `hearth diff` compares two. Tagged snapshots are
+# kept and not counted. A doctor snapshot is some tens of KB.
+max_snapshots_per_kind = 1000
+
+# Kinds that are states of the machine, thinned with age by the tiers below.
+# Others (run events) are only capped: every event matters.
+thinned_kinds = ["ports", "doctor"]
+
+# How thinned kinds age: within each window from now, one snapshot is kept
+# per interval (every one when every_ms is 0); past the last window they are
+# deleted. Defaults: every snapshot for an hour, one per 10 minutes for a
+# day, one per hour for a week, so `hearth diff --from @1d` has a
+# yesterday to compare with.
+[[state.tiers]]
+within_ms = 3600000
+every_ms = 0
+
+[[state.tiers]]
+within_ms = 86400000
+every_ms = 600000
+
+[[state.tiers]]
+within_ms = 604800000
+every_ms = 3600000
 
 [supervise]
 # `hearth run` keeps one model server alive. These bound how hard it tries.
@@ -98,8 +120,7 @@ timeout_ms = 5000
 
 [watch]
 # `hearth watch` observes on these intervals. Every observation is recorded,
-# so state.max_snapshots_per_kind times the interval is how far back
-# `hearth diff` can reach for that kind.
+# and state.tiers decides how much of it is kept as it ages.
 doctor_interval_ms = 10000
 ports_interval_ms = 60000
 

@@ -285,7 +285,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     // the journal and to webhooks.
     let program_name = program.to_string_lossy().into_owned();
     let (program, rest) = (program.clone(), rest.to_vec());
-    let journal = Journal::open(config.state.max_snapshots_per_kind);
+    let journal = Journal::open(&config.state);
     if let Err(e) = &journal {
         eprintln!("hearth: run events will not be recorded: {e}");
     }

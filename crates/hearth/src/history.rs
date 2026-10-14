@@ -196,7 +196,7 @@ pub fn footer(snapshot: Option<&str>, errors: &[String]) -> String {
 
 fn journal() -> Result<Journal, String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
-    Journal::open(config.state.max_snapshots_per_kind).map_err(|e| e.to_string())
+    Journal::open(&config.state).map_err(|e| e.to_string())
 }
 
 fn now_ms() -> u64 {

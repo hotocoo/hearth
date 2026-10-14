@@ -102,6 +102,19 @@ pub struct Supervise {
 #[serde(deny_unknown_fields)]
 pub struct State {
     pub max_snapshots_per_kind: usize,
+    /// Kinds whose snapshots are states of the machine, and so can be
+    /// thinned with age; the others (events) are only capped by count.
+    pub thinned_kinds: Vec<String>,
+    pub tiers: Vec<Tier>,
+}
+
+/// Within `within_ms` of now, keep one snapshot per `every_ms` (all of
+/// them when 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tier {
+    pub within_ms: u64,
+    pub every_ms: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -270,6 +283,14 @@ impl Config {
 
     /// Values that only mean something relative to each other.
     fn relations(&self) -> Result<(), ConfigError> {
+        let tiers = &self.state.tiers;
+        if tiers.windows(2).any(|w| w[0].within_ms >= w[1].within_ms) {
+            invalid(
+                "state.tiers",
+                &format!("{tiers:?}"),
+                "within_ms must grow from one tier to the next",
+            )?;
+        }
         let (d, v) = (&self.discovery, &self.supervise);
         if !(d.learned_deadline_multiplier.is_finite() && d.learned_deadline_multiplier >= 1.0) {
             return invalid(
@@ -418,6 +439,7 @@ mod tests {
             "[supervise]\nbackoff_max_ms = 60001\n",
             "[supervise]\nbackoff_factor = 0\n",
             "[notify]\nwebhook_url = \"file:///etc/passwd\"\n",
+            "[[state.tiers]]\nwithin_ms = 2\nevery_ms = 0\n[[state.tiers]]\nwithin_ms = 1\nevery_ms = 0\n",
             "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
         ] {
             assert!(
@@ -498,6 +520,15 @@ fn docs() -> std::collections::BTreeMap<String, String> {
     for line in BASE.lines().map(str::trim) {
         if line.is_empty() {
             comment.clear();
+        } else if let Some(name) = line.strip_prefix("[[").and_then(|l| l.strip_suffix("]]")) {
+            // An array of tables is one setting; its comment documents it,
+            // and the keys inside its entries are not settings of their own.
+            if !comment.is_empty() {
+                out.entry(name.to_string())
+                    .or_insert_with(|| comment.join(" "));
+            }
+            section.clear();
+            comment.clear();
         } else if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             section = name.to_string();
             comment.clear();
@@ -509,7 +540,9 @@ fn docs() -> std::collections::BTreeMap<String, String> {
                 }
                 _ => comment.push(text),
             }
-        } else if let Some(key) = key_of(line) {
+        } else if let Some(key) = key_of(line)
+            && !section.is_empty()
+        {
             out.insert(format!("{section}.{key}"), comment.join(" "));
         }
     }
