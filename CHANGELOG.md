@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:54 review fixes for grep, workflows and fit
+
+- **log --grep.** Matches what a snapshot says, not its escaped JSON. Text matches as a substring with case ignored; a number matches only when equal, so pid 123 no longer matches 1234. Reading stops once `--limit` matches are found.
+- **when-did-it-start.** Refers to snapshots by id, because new recordings shift `~N`. It compares matches across kinds by time. Run events go through `show` and `follow`.
+- **Offload.** `ports` again flags a model wholly on the CPU when the machine has an accelerator, the case where nothing fit.
+- **fit configs.** Gemma 2 and top-level Gemma 3 defaults are filled in. A zero `kv_lora_rank` means plain attention. A layer count that cannot be allocated is an error instead of an abort.
+
 ### 2026-10-15 05:51 tag --at
 
 - `hearth tag NAME --at REF` names one earlier snapshot (an id, `~N`, `@AGE` or another tag, of `--kind`), like `git tag NAME COMMIT`, so a moment found with `log --grep` is kept past retention. MCP's `tag` takes `at` and `kind`.
