@@ -19,6 +19,8 @@ mod mcp;
 mod notify;
 mod ports;
 mod run;
+#[cfg(unix)]
+mod service;
 mod units;
 mod watch;
 
@@ -70,6 +72,10 @@ enum Command {
     /// not charged).
     #[cfg(unix)]
     Restart(control::RestartArgs),
+    /// Run hearthd at login under launchd (macOS) or a systemd user unit
+    /// (Linux): install, uninstall, or show the unit.
+    #[cfg(unix)]
+    Service(service::Args),
     /// Every setting in effect: its value, whether it is built in or comes
     /// from your file, and what it means.
     Config(config_cmd::Args),
@@ -90,6 +96,8 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),
         #[cfg(unix)]
+        Command::Service(args) => service::run(args, cli.json),
+        #[cfg(unix)]
         Command::Status(args) => control::status(args, cli.json),
         #[cfg(unix)]
         Command::Restart(args) => control::restart(args, cli.json),
@@ -105,6 +113,10 @@ pub(crate) fn dispatch(argv: &[String]) -> Result<String, String> {
         Command::Mcp | Command::Run(_) | Command::Watch(_)
     ) {
         return Err("long-running commands cannot be called as tools".into());
+    }
+    #[cfg(unix)]
+    if matches!(cli.command, Command::Service(_)) {
+        return Err("installing a login service is for a person to decide, not a tool".into());
     }
     execute(&cli)
 }

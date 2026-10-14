@@ -52,6 +52,17 @@ hearthd has no shutdown handler, and needs none. However hearthd ends, SIGKILL i
 - **Stale socket.** A socket left behind does not answer, so the next hearthd replaces it.
 - **Second instance.** A socket that answers means hearthd already runs, and a second instance refuses to start.
 
+### Running at login
+
+`hearth service install|uninstall|show` puts hearthd under the platform's own service manager, as the user:
+- **macOS:** a LaunchAgent with `RunAtLoad` and `KeepAlive`, logging to the state directory.
+- **Linux:** a systemd user unit with `Restart=on-failure` and `KillMode=process`. Only hearthd is signalled; its servers stop through their tethers.
+
+The rules:
+- The unit names the `hearthd` beside the running `hearth`, and carries this shell's `HEARTH_CONFIG` and `HEARTH_STATE`, quoted for the unit's syntax.
+- `install` refuses when no servers are configured. The service manager would otherwise restart a hearthd with nothing to keep, forever.
+- `service` is not an MCP tool: installing something that runs at every login is for a person to decide.
+
 ## Consequences
 
 - The end-to-end test:

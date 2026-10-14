@@ -66,6 +66,7 @@ cargo build --release -p hearth
 ./target/release/hearthd                    # keeps every [servers.NAME] in your config alive, like hearth run each
 ./target/release/hearth status              # what hearthd keeps: state, pid, restarts, last event
 ./target/release/hearth restart vision      # restart one now (owned servers only)
+./target/release/hearth service install     # run hearthd at login: launchd on macOS, systemd user unit on Linux
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.
