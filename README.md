@@ -45,6 +45,8 @@ The P0 gate checks, on real llama-server loads, that these signals predict what 
 
 ## hearth CLI
 
+Release archives (macOS arm64, Linux x86_64 and aarch64, static) are built by `.github/workflows/release.yml` and attached to each `v*` GitHub release. Until the first release, build from source:
+
 ```sh
 cargo build --release -p hearth
 ./target/release/hearth doctor              # memory, open files, threads vs kernel limits; who holds them

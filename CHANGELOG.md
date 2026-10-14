@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:46 release workflow
+
+- `.github/workflows/release.yml` builds `hearth` and `hearthd` for aarch64-apple-darwin and for x86_64 and aarch64 Linux (static musl). Each archive is packaged with its SHA-256.
+- A pushed `v*` tag publishes a GitHub release. Run by hand, the workflow only builds. Its first run built all three platforms.
+
 ### 2026-10-15 02:44 review fixes: reload, server pid, metrics
 
 - **reload.** Only one reload runs at a time. Leaving servers stop in parallel. Orders during a reload are refused with "try again", not dropped.
