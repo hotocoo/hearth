@@ -18,13 +18,14 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 | Why is the machine slow or unstable? | `doctor` (with `watch_seconds` for growth), then `diff` with kind `doctor` |
 | What runs where, and is it alive? | `ports` (with `runtimes_only` for model servers only) |
 | Did the machine crash, or kill something? | `incidents` |
-| Will this model fit? | `fit`: a `.gguf` path, an Ollama name (`qwen3:8b`), or the `port` of a running server |
-| What changed since earlier? | `diff` (kind `ports` or `doctor`, `from` set to `~N` or a tag) |
+| Will this model fit? | `fit`: a `.gguf` path, `org/repo:QUANT` (Hugging Face cache, LM Studio), an Ollama name (`qwen3:8b`), or the `port` of a running server (without `ctx`, its own context) |
+| What changed since earlier? | `diff` (kind `ports` or `doctor`, `from` set to `~N`, `@2h` or a tag) |
+| How much history is there? | `log` with `stats` |
 | When did this process start leaking or restarting? | `follow` with a name, kind `doctor`, `ports` or `run` |
 | Everything recorded at one moment | `show` |
 | Mark a known-good state to compare with later | `tag` |
 | Servers hearth keeps alive | `status`, `logs`, and `restart`, `stop`, `start` (owned servers only) |
-| Why hearth waited, retried or reported something | `config` |
+| Why hearth waited, retried or reported something | `config`; `doctor` with `explain` for where each number comes from |
 | The whole picture in one call | `bundle` |
 
 ## Workflows
