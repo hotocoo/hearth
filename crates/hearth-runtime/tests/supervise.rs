@@ -47,12 +47,20 @@ HTTPServer(("127.0.0.1", port), H).serve_forever()
 /// what they wait for.
 const LIMIT: Duration = Duration::from_secs(60);
 
+/// A port nothing listens on right now. A port the system just handed out
+/// can be taken again by another test before it is used, so it is checked
+/// to refuse connections, and another is picked when it does not.
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    loop {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        if matches!(preflight(&probe(port), None), Preflight::Free) {
+            return port;
+        }
+    }
 }
 
 fn trigger(test: &str) -> PathBuf {
