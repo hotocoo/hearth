@@ -19,6 +19,7 @@ mod incidents;
 mod mcp;
 #[cfg(unix)]
 mod metrics;
+mod note;
 mod notify;
 mod ports;
 mod pressure;
@@ -69,6 +70,10 @@ enum Command {
     /// Name this moment (the latest snapshot of each kind), like `git tag`:
     /// kept past retention, and usable wherever a snapshot is asked for.
     Tag(history::TagArgs),
+    /// Record what was done or seen in the journal, beside what hearth
+    /// observed, like a commit message: "restarted llama-server with -c
+    /// 131072". `hearth log --kind note` lists notes.
+    Note(note::Args),
     /// Start a model server and keep it alive: restart it when it exits or
     /// stops answering, give up on a crash loop, and stop it when hearth
     /// stops. Refuses a port another server already holds.
@@ -104,7 +109,7 @@ enum Command {
     #[cfg(unix)]
     Service(service::Args),
     /// Everything hearth can say about this machine in one JSON document:
-    /// doctor, ports, incidents, hearthd, recent run events, tags and
+    /// doctor, ports, incidents, hearthd, recent run events and notes, tags and
     /// settings, with secrets redacted. For bug reports and agents.
     Bundle(bundle::Args),
     /// Workflows: which tools to call, in which order, for a recurring
@@ -133,6 +138,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Show(args) => history::show(args, cli.json),
         Command::Follow(args) => history::follow(args, cli.json),
         Command::Tag(args) => history::tag(args, cli.json),
+        Command::Note(args) => note::run(args, cli.json),
         Command::Run(args) => run::run(args, cli.json),
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),

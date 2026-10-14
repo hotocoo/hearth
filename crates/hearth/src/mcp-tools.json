@@ -117,9 +117,10 @@
           "enum": [
             "ports",
             "doctor",
-            "run"
+            "run",
+            "note"
           ],
-          "description": "Which command's snapshots (default ports). run lists every event of hearth run: starts, readiness, exits, wedges, poisoned backends, give-ups."
+          "description": "Which command's snapshots (default ports). run lists every event of hearth run: starts, readiness, exits, wedges, poisoned backends, give-ups. note lists what people and agents recorded with note."
         },
         "limit": {
           "type": "integer",
@@ -184,7 +185,8 @@
           "enum": [
             "ports",
             "doctor",
-            "run"
+            "run",
+            "note"
           ],
           "description": "Which command's snapshots (default ports)."
         },
@@ -218,7 +220,8 @@
           "enum": [
             "ports",
             "doctor",
-            "run"
+            "run",
+            "note"
           ],
           "description": "Which snapshots to follow it through (default ports)."
         },
@@ -257,7 +260,8 @@
           "enum": [
             "ports",
             "doctor",
-            "run"
+            "run",
+            "note"
           ],
           "description": "Whose snapshot at names (default ports)."
         }
@@ -266,6 +270,31 @@
     "cli": {
       "positional": [
         "name"
+      ]
+    }
+  },
+  {
+    "name": "note",
+    "description": "Record in hearth's journal what you did or saw on this machine, like a commit message: \"restarted llama-server with -c 131072 after memory pressure\". It sits beside hearth's own snapshots, so later diffs and the log explain themselves. Call it after any change you make or advise, with by set to who you are. log with kind note lists notes; grep finds them.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "What was done or seen, and why."
+        },
+        "by": {
+          "type": "string",
+          "description": "Who wrote it: the person, or the agent acting for them."
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "cli": {
+      "positional": [
+        "message"
       ]
     }
   },

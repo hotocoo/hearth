@@ -25,6 +25,13 @@ pub struct Config {
     pub metrics: Metrics,
     pub pressure: Pressure,
     pub accelerators: Accelerators,
+    pub bundle: Bundle,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bundle {
+    pub recent_events: u64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -293,6 +300,11 @@ impl Config {
             (
                 "accelerators.query_timeout_ms",
                 self.accelerators.query_timeout_ms,
+                AT_LEAST_ONE,
+            ),
+            (
+                "bundle.recent_events",
+                self.bundle.recent_events,
                 AT_LEAST_ONE,
             ),
             (

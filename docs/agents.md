@@ -25,6 +25,7 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 | When did this process start leaking or restarting? | `follow` with a name, kind `doctor`, `ports` or `run` |
 | Everything recorded at one moment | `show` |
 | Mark a known-good state to compare with later | `tag` |
+| Record what you changed or advised, and why | `note` with `by`; `log` with kind `note` reads them back |
 | Servers hearth keeps alive | `status`, `logs`, and `restart`, `stop`, `start` (owned servers only) |
 | Why hearth waited, retried or reported something | `config`; `doctor` with `explain` for where each number comes from |
 | The whole picture in one call | `bundle` |

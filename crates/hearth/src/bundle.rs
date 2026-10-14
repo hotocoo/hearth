@@ -74,6 +74,11 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
     if let Some(s) = &args.since {
         incidents.extend(["--since", s.as_str()]);
     }
+    // A broken user file still gets a bundle, with the built-in count.
+    let recent = hearth_core::config::load()
+        .or_else(|_| hearth_core::config::from_layers(None))
+        .map(|c| c.bundle.recent_events.to_string())
+        .map_err(|e| e.to_string())?;
     let broken = config_error();
     let c = broken.as_deref();
     let mut config = part(&["config"], c);
@@ -86,7 +91,8 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
         "ports": part(&["ports"], c),
         "incidents": part(&incidents, c),
         "hearthd": part(&["status"], c),
-        "run_events": part(&["log", "--kind", "run", "--limit", "50"], c),
+        "run_events": part(&["log", "--kind", "run", "--limit", &recent], c),
+        "notes": part(&["log", "--kind", "note", "--limit", &recent], c),
         "tags": part(&["tag"], c),
         "config": config,
     });

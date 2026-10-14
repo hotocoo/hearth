@@ -24,6 +24,8 @@ pub enum Kind {
     /// Every event of every `hearth run`: starts, readiness, exits, wedges,
     /// poisonings, give-ups.
     Run,
+    /// Recorded by `hearth note`: what someone did or saw.
+    Note,
 }
 
 impl Kind {
@@ -32,6 +34,7 @@ impl Kind {
             Self::Ports => crate::ports::KIND,
             Self::Doctor => crate::doctor::KIND,
             Self::Run => crate::run::KIND,
+            Self::Note => crate::note::KIND,
         }
     }
 
@@ -40,6 +43,7 @@ impl Kind {
             Self::Ports => crate::ports::summary(body),
             Self::Doctor => crate::doctor::summary(body),
             Self::Run => crate::run::summary(body),
+            Self::Note => crate::note::summary(body),
         }
     }
 
@@ -48,6 +52,7 @@ impl Kind {
             Self::Ports => crate::ports::entries(body),
             Self::Doctor => crate::doctor::entries(body),
             Self::Run => crate::run::entries(body),
+            Self::Note => crate::note::entries(body),
         }
     }
 
@@ -59,6 +64,9 @@ impl Kind {
                 "run snapshots are single events, not states; hearth log --kind run lists them"
                     .into(),
             ),
+            Self::Note => {
+                Err("notes are messages, not states; hearth log --kind note lists them".into())
+            }
         }
     }
 }
@@ -607,7 +615,12 @@ pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
 /// `diff --from NAME` can compare with that moment for as long as needed.
 pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
-    let kinds = [Kind::Ports.name(), Kind::Doctor.name(), Kind::Run.name()];
+    let kinds = [
+        Kind::Ports.name(),
+        Kind::Doctor.name(),
+        Kind::Run.name(),
+        Kind::Note.name(),
+    ];
     let value = match (&args.name, args.delete) {
         (Some(name), true) => {
             journal.delete_tag(name).map_err(|e| e.to_string())?;

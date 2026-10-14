@@ -143,3 +143,11 @@ Kinds not listed, such as `run` events, are only capped, because every event mat
 
 `hearth mcp` declares the `resources` capability. Each snapshot is `hearth://KIND/REFERENCE`, where KIND is ports, doctor or run and REFERENCE is an id, `~N`, `@AGE` or a tag. The reference goes through the journal's own resolution, so it is validated before it touches the file system. `resources/list` offers the latest snapshot of each kind and each tag.
 
+## Addendum (2026-10-15): grep, tags on one snapshot, notes
+
+`hearth log --grep TEXT` lists the snapshots that mention TEXT, newest first, read lazily until `--limit` matches. Matching follows the recorded values, not their escaped JSON text: keys and strings match as substrings with case ignored, and numbers match only when equal, so pid 123 does not match 1234. Each match keeps its `~N` within its kind. A workflow that keeps working while snapshots are recorded refers to them by id, because a new recording shifts every `~N`.
+
+`hearth tag NAME --at REF` names one snapshot, like `git tag NAME COMMIT`. It is how a moment found by grep is kept past retention. A snapshot pruned before the tag protected it is an error, and the tag is removed.
+
+`hearth note` records a fourth kind, `note`: a message and an optional author, the journal's commit messages. Notes are capped like run events, not thinned. Snapshots record what the machine was; notes record what someone did to it and why. `what-changed` reads them, and the MCP instructions ask agents to write one after any change they make or advise. `hearth bundle` includes the latest `bundle.recent_events` notes and run events.
+

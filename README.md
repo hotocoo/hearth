@@ -73,6 +73,7 @@ cargo build --release -p hearth
 ./target/release/hearth log --stats         # how much history each kind keeps, how far back it reaches
 ./target/release/hearth log --grep oom      # only snapshots that mention it, each with its ~N, like git log -S
 ./target/release/hearth tag oom-start --at "~4"   # name one earlier snapshot, like git tag NAME COMMIT
+./target/release/hearth note --by me lowered -c to 131072 after the pressure   # what you did, in the journal
 ./target/release/hearth run --port 8081 --expect qwen3 --model qwen3.gguf --ctx 32768 --cache-type q8_0 \
     -- llama-server -m qwen3.gguf -c 32768 -ctk q8_0 -ctv q8_0 --port 8081   # --model/--ctx/--cache-type: refuse what cannot fit
 #   keeps the server alive: restarts on exit, wedge, or a poisoned backend in its log (the latched
@@ -101,7 +102,7 @@ Set `[notify] desktop = true` or `webhook_url` in your config to be told when `h
 
 Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
 
-For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `show`, `follow`, `tag`, `status`, `restart`, `stop`, `start`, `logs`, `reload`, `config`, `bundle` and `process_memory`. `restart`, `stop` and `start` reach only servers hearthd started. It also serves six workflows as MCP prompts: `diagnose-slow-machine`, `server-died`, `can-i-load`, `what-changed`, `find-a-leak` and `when-did-it-start`. Each says which tools to call, in which order, and how to answer. [docs/agents.md](docs/agents.md) maps questions to tools. For Claude Code:
+For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `show`, `follow`, `tag`, `note`, `status`, `restart`, `stop`, `start`, `logs`, `reload`, `config`, `bundle` and `process_memory`. `restart`, `stop` and `start` reach only servers hearthd started. It also serves six workflows as MCP prompts: `diagnose-slow-machine`, `server-died`, `can-i-load`, `what-changed`, `find-a-leak` and `when-did-it-start`. Each says which tools to call, in which order, and how to answer. [docs/agents.md](docs/agents.md) maps questions to tools. For Claude Code:
 
 ```sh
 claude mcp add hearth -- /path/to/hearth mcp
