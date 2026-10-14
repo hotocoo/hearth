@@ -70,6 +70,27 @@ pub enum Cause {
 }
 
 impl Cause {
+    /// Every cause, for consumers that list them all (metrics).
+    pub const ALL: [Self; 5] = [
+        Self::ModelMissing,
+        Self::LoadFailed,
+        Self::OutOfMemory,
+        Self::PortInUse,
+        Self::BadArgument,
+    ];
+
+    /// The name events carry it by.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ModelMissing => "model_missing",
+            Self::LoadFailed => "load_failed",
+            Self::OutOfMemory => "out_of_memory",
+            Self::PortInUse => "port_in_use",
+            Self::BadArgument => "bad_argument",
+        }
+    }
+
     /// Whether starting the same command again can only fail the same way.
     /// A taken port may free up, memory may be released by others, and a
     /// missing file may be on a volume not mounted yet or still arriving:

@@ -75,6 +75,28 @@ pub fn render(servers: &[Value]) -> String {
     }
     family(
         &mut out,
+        "hearth_server_exit_cause",
+        "gauge",
+        "1 for why each server last exited, when its log said: model_missing, load_failed, out_of_memory, port_in_use or bad_argument. All 0 while its last event is not such an exit.",
+    );
+    for s in servers {
+        let last = &s["last_event"];
+        let cause = (last["event"] == "exited")
+            .then(|| last["cause"].as_str())
+            .flatten();
+        for candidate in
+            hearth_runtime::signals::Cause::ALL.map(hearth_runtime::signals::Cause::name)
+        {
+            let _ = writeln!(
+                out,
+                "hearth_server_exit_cause{{server=\"{}\",cause=\"{candidate}\"}} {}",
+                name_of(s),
+                u8::from(cause == Some(candidate))
+            );
+        }
+    }
+    family(
+        &mut out,
         "hearth_server_footprint_bytes",
         "gauge",
         "Memory footprint of each server's process, as the kernel charges it.",
@@ -299,6 +321,13 @@ mod tests {
         assert!(text.contains("hearth_server_state{server=\"chat\\\"x\",state=\"ready\"} 1"));
         assert!(text.contains("hearth_server_state{server=\"chat\\\"x\",state=\"stopped\"} 0"));
         assert!(text.contains("hearth_server_restarts_total{server=\"chat\\\"x\"} 2"));
+        let died = [
+            serde_json::json!({ "name": "v", "state": "gave_up", "restarts": 0,
+            "last_event": { "event": "exited", "cause": "bad_argument", "decision": "futile" } }),
+        ];
+        let text = render(&died);
+        assert!(text.contains("hearth_server_exit_cause{server=\"v\",cause=\"bad_argument\"} 1"));
+        assert!(text.contains("hearth_server_exit_cause{server=\"v\",cause=\"out_of_memory\"} 0"));
         assert!(text.contains("# TYPE hearth_memory_available_bytes gauge"));
         // Each family is declared once.
         assert_eq!(text.matches("# TYPE hearth_server_state ").count(), 1);
