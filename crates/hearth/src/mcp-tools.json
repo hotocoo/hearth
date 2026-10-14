@@ -42,7 +42,7 @@
   },
   {
     "name": "fit",
-    "description": "Whether a GGUF model (a path or an Ollama model name) at a total KV context fits this machine's accelerator and fits right now, with weights and KV bytes from the model's own metadata and the largest context that would fit. Excludes runtime compute buffers.",
+    "description": "Whether a GGUF model (a path or an Ollama model name) at a total KV context fits this machine's accelerator and fits right now, with weights and KV bytes from the model's own metadata and the largest context that would fit. Excludes runtime compute buffers. When the context does not fit the device, fits_device_with lists the KV cache types that would make it fit.",
     "inputSchema": {
       "type": "object",
       "required": [

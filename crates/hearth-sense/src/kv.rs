@@ -287,6 +287,35 @@ impl CacheType {
         elements.div_ceil(per) * bytes
     }
 
+    /// Every cache type, largest per element first.
+    pub const ALL: [CacheType; 9] = [
+        CacheType::F32,
+        CacheType::F16,
+        CacheType::Bf16,
+        CacheType::Q8_0,
+        CacheType::Q5_1,
+        CacheType::Q5_0,
+        CacheType::Q4_1,
+        CacheType::Q4_0,
+        CacheType::Iq4Nl,
+    ];
+
+    /// The name runtimes accept for it on their command lines.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            CacheType::F32 => "f32",
+            CacheType::F16 => "f16",
+            CacheType::Bf16 => "bf16",
+            CacheType::Q8_0 => "q8_0",
+            CacheType::Q5_1 => "q5_1",
+            CacheType::Q5_0 => "q5_0",
+            CacheType::Q4_1 => "q4_1",
+            CacheType::Q4_0 => "q4_0",
+            CacheType::Iq4Nl => "iq4_nl",
+        }
+    }
+
     /// Parses the names runtimes accept on their command lines.
     #[must_use]
     pub fn parse(name: &str) -> Option<Self> {

@@ -72,6 +72,11 @@ struct Report {
     /// reclaimable file cache before they are wired).
     fits_now_provisional: bool,
     max_ctx_device: Option<u64>,
+    /// When the requested context does not fit the device: the KV cache
+    /// types (same for keys and values) with which it would, each with its
+    /// total. Empty when it fits, or when no cache type makes it fit.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fits_device_with: Vec<(String, u64)>,
     max_ctx_now: Option<u64>,
     notes: Vec<String>,
 }
@@ -210,6 +215,24 @@ fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
     })
 }
 
+/// The cache types that would bring the total under the device ceiling,
+/// when the requested one does not.
+fn alternatives(
+    ceiling: Option<&Ceiling>,
+    total: u64,
+    weights: u64,
+    kv: impl Fn(CacheType) -> u64,
+) -> Vec<(String, u64)> {
+    let Some(c) = ceiling.filter(|c| total > c.bytes) else {
+        return Vec::new();
+    };
+    CacheType::ALL
+        .iter()
+        .map(|t| (t.name().to_string(), weights + kv(*t)))
+        .filter(|(_, total)| *total <= c.bytes)
+        .collect()
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
@@ -292,6 +315,9 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         excludes: "runtime compute buffers (known after the model's first load)",
         fits_device: ceiling.as_ref().map(|c| total_bytes <= c.bytes),
         max_ctx_device: ceiling.as_ref().and_then(|c| max_ctx(c.bytes)),
+        fits_device_with: alternatives(ceiling.as_ref(), total_bytes, weights_bytes, |t| {
+            geometry.kv_bytes(ctx, t, t, swa)
+        }),
         max_ctx_now: if under_pressure {
             None
         } else {
@@ -379,6 +405,18 @@ fn render(r: &Report) -> String {
         _ => {
             let _ = writeln!(out, "fits the device:  no accelerator limit known");
         }
+    }
+    if !r.fits_device_with.is_empty() {
+        let options: Vec<String> = r
+            .fits_device_with
+            .iter()
+            .map(|(t, total)| format!("{t} ({})", bytes(*total)))
+            .collect();
+        let _ = writeln!(
+            out,
+            "would fit with KV cache type: {} (llama.cpp -ctk/-ctv, Ollama OLLAMA_KV_CACHE_TYPE)",
+            options.join(", ")
+        );
     }
     let _ = writeln!(
         out,
@@ -481,6 +519,33 @@ pub(crate) fn start_check(
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod alternative_tests {
+    use super::*;
+
+    #[test]
+    fn only_cache_types_under_the_ceiling_are_offered() {
+        let ceiling = Ceiling {
+            bytes: 100,
+            source: "test".into(),
+            free_bytes: None,
+        };
+        // KV in bytes per element times 10; weights 50.
+        let kv = |t: CacheType| match t {
+            CacheType::F32 => 80,
+            CacheType::F16 | CacheType::Bf16 => 60,
+            _ => 30,
+        };
+        let offered = alternatives(Some(&ceiling), 130, 50, kv);
+        assert!(offered.iter().all(|(_, total)| *total <= 100));
+        assert!(!offered.iter().any(|(t, _)| t == "f32" || t == "f16"));
+        assert!(
+            alternatives(Some(&ceiling), 90, 50, kv).is_empty(),
+            "already fits"
+        );
     }
 }
 
