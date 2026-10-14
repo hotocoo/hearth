@@ -22,6 +22,13 @@ pub struct Config {
     pub watch: Watch,
     pub servers: std::collections::BTreeMap<String, Server>,
     pub control: Control,
+    pub metrics: Metrics,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Metrics {
+    pub listen: Option<std::net::SocketAddr>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

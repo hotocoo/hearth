@@ -78,6 +78,7 @@ cargo build --release -p hearth
 ./target/release/hearth stop vision         # free its memory; it stays down until `hearth start vision`
 ./target/release/hearth logs vision         # its last lines of output, across restarts
 ./target/release/hearth service install     # run hearthd at login: launchd on macOS, systemd user unit on Linux
+#   [metrics] listen = "127.0.0.1:9469" in your config: hearthd serves Prometheus metrics at /metrics
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.

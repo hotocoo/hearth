@@ -17,6 +17,8 @@ mod fit;
 mod history;
 mod incidents;
 mod mcp;
+#[cfg(unix)]
+mod metrics;
 mod notify;
 mod ports;
 mod run;

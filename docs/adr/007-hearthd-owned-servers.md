@@ -57,6 +57,16 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
 
 A socket path longer than the platform allows (about a hundred bytes) is reported with its length and the fix (`HEARTH_STATE`), not the kernel's bare `SUN_LEN`.
 
+### Metrics
+
+With `metrics.listen` set (off by default), hearthd serves Prometheus metrics at `GET /metrics`, one scrape at a time, within the control socket's size and time limits:
+- `hearth_server_state{server,state}`: one series per server and possible state, 1 for the current one;
+- `hearth_server_restarts_total{server}`;
+- memory total, available and swap used; kernel pressure (0 normal, 1 warn, 2 critical);
+- open files and threads, with the kernel's limits.
+
+Machine values are measured at each scrape. Labels are bounded: server names from the configuration and a fixed set of states. The endpoint is read-only and says nothing `hearth status` and `hearth doctor` do not, but it names the servers, so the documented example listens on loopback.
+
 ### Robustness
 
 - hearthd writes its log without panicking when stdout is closed.

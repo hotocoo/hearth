@@ -135,6 +135,13 @@ timeout_ms = 2000
 # busy rather than queued.
 max_clients = 8
 
+[metrics]
+# Where hearthd serves Prometheus metrics (GET /metrics): each server's state
+# and restarts, the machine's memory, pressure, open files and threads.
+# Unset means off. Keep it on loopback unless the scraper is elsewhere: the
+# metrics name the servers this machine runs.
+# listen = "127.0.0.1:9469"
+
 # Servers hearthd starts and keeps alive, one table each, named
 # [servers.NAME] in your own file: port (where it listens), command (the
 # program and its arguments, as a list), and optionally host (the address to

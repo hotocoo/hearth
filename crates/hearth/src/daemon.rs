@@ -465,6 +465,24 @@ pub fn run() -> Result<(), String> {
             .spawn(move || crate::watch::forever(&config))
             .map_err(|e| format!("cannot start watching: {e}"))?;
     }
+    if let Some(addr) = config.metrics.listen {
+        let listener =
+            std::net::TcpListener::bind(addr).map_err(|e| format!("metrics.listen {addr}: {e}"))?;
+        let (board, control) = (board.clone(), config.control.clone());
+        std::thread::Builder::new()
+            .name("metrics".into())
+            .spawn(move || {
+                let servers = || -> Vec<Value> {
+                    lock(&board)
+                        .values()
+                        .filter_map(|s| serde_json::to_value(s).ok())
+                        .collect()
+                };
+                crate::metrics::serve(&listener, &control, &servers);
+            })
+            .map_err(|e| format!("cannot start serving metrics: {e}"))?;
+        log(&format!("hearthd: metrics on http://{addr}/metrics"));
+    }
     log(&format!(
         "hearthd: keeping {} server(s); control socket {}",
         orders.len(),
