@@ -93,6 +93,10 @@ enum Command {
     /// The last lines one of hearthd's servers printed.
     #[cfg(unix)]
     Logs(control::LogsArgs),
+    /// Apply the configuration's [servers] to hearthd now: new servers
+    /// start, removed ones stop, changed ones restart, the rest keep running.
+    #[cfg(unix)]
+    Reload(control::ReloadArgs),
     /// Run hearthd at login under launchd (macOS) or a systemd user unit
     /// (Linux): install, uninstall, or show the unit.
     #[cfg(unix)]
@@ -149,6 +153,8 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Start(args) => control::order("start", args, cli.json),
         #[cfg(unix)]
         Command::Logs(args) => control::logs(args, cli.json),
+        #[cfg(unix)]
+        Command::Reload(args) => control::reload(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }

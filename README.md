@@ -77,6 +77,7 @@ cargo build --release -p hearth
 ./target/release/hearth restart vision      # restart one now (owned servers only)
 ./target/release/hearth stop vision         # free its memory; it stays down until `hearth start vision`
 ./target/release/hearth logs vision         # its last lines of output, across restarts
+./target/release/hearth reload              # apply [servers] edits: new start, removed stop, the rest keep running
 ./target/release/hearth service install     # run hearthd at login: launchd on macOS, systemd user unit on Linux
 #   [metrics] listen = "127.0.0.1:9469" in your config: hearthd serves Prometheus metrics at /metrics
 ```
@@ -87,7 +88,7 @@ Set `[notify] desktop = true` or `webhook_url` in your config to be told when `h
 
 Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
 
-For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `show`, `follow`, `tag`, `status`, `restart`, `stop`, `start`, `logs`, `config`, `bundle` and `process_memory`. `restart`, `stop` and `start` reach only servers hearthd started. It also serves five workflows as MCP prompts: `diagnose-slow-machine`, `server-died`, `can-i-load`, `what-changed` and `find-a-leak`. Each says which tools to call, in which order, and how to answer. [docs/agents.md](docs/agents.md) maps questions to tools. For Claude Code:
+For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `show`, `follow`, `tag`, `status`, `restart`, `stop`, `start`, `logs`, `reload`, `config`, `bundle` and `process_memory`. `restart`, `stop` and `start` reach only servers hearthd started. It also serves five workflows as MCP prompts: `diagnose-slow-machine`, `server-died`, `can-i-load`, `what-changed` and `find-a-leak`. Each says which tools to call, in which order, and how to answer. [docs/agents.md](docs/agents.md) maps questions to tools. For Claude Code:
 
 ```sh
 claude mcp add hearth -- /path/to/hearth mcp

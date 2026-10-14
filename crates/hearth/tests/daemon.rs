@@ -178,6 +178,8 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         .count();
     assert!(starts >= 2, "{logs}");
 
+    check_reload(&dir);
+
     // hearthd watches the machine too, so a second watcher is refused.
     assert!(
         hearth(&dir, &["watch", "--for-seconds", "1"])
@@ -254,4 +256,35 @@ fn hearthd_refuses_a_state_directory_others_can_enter() {
     let out = hearthd(&dir).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("open to other users"));
+}
+
+/// A server added to the configuration starts on reload, and one taken out
+/// stops; the server already running keeps its process throughout.
+fn check_reload(dir: &Path) {
+    let second = free_port();
+    let toml = std::fs::read_to_string(dir.join("hearth.toml")).unwrap();
+    let script = dir.join("server.py");
+    std::fs::write(
+        dir.join("hearth.toml"),
+        format!(
+            "{toml}[servers.extra]\nport = {second}\ncommand = [\"python3\", \"{}\", \"{second}\"]\n",
+            script.display()
+        ),
+    )
+    .unwrap();
+    let (_, before) = state(dir).unwrap();
+    let plan = hearth(dir, &["reload"]).unwrap();
+    assert_eq!(plan["added"], serde_json::json!(["extra"]), "{plan}");
+    wait_until("the added server", || listening(second));
+    std::fs::write(dir.join("hearth.toml"), toml).unwrap();
+    assert_eq!(
+        hearth(dir, &["reload"]).unwrap()["removed"],
+        serde_json::json!(["extra"])
+    );
+    wait_until("the removed server to stop", || !listening(second));
+    assert_eq!(
+        state(dir).unwrap().1,
+        before,
+        "untouched server kept its process"
+    );
 }

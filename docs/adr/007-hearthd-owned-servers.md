@@ -53,7 +53,15 @@ hearthd proxies no inference and admits nothing: that stays behind the gate.
   - Each line is cut at `supervise.output_line_bytes`, and output without newlines is taken in pieces, so memory stays bounded.
   - An answer that would exceed `control.max_message_bytes` drops its oldest lines and says how many (`left_out`). These are what explain a load failure, and agents should not have to hunt for log files to find them.
 
-`hearth status`, `hearth restart|stop|start|logs NAME` and the MCP tools of the same names are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
+- `reload`: re-read the configuration and make the kept servers match its `[servers]`, without restarting hearthd:
+  - servers added to the file start;
+  - removed ones stop;
+  - changed ones are stopped and, once the old process is gone (it holds the port until then), started with the new definition;
+  - every other server keeps running, with the same process.
+
+  A configuration that does not load changes nothing. Other sections take effect when hearthd restarts. The answer lists what is added, removed and changed; the stopping and starting happen after it, since a stop can take the grace.
+
+`hearth status`, `hearth restart|stop|start|logs NAME`, `hearth reload` and the MCP tools of the same names are clients of this socket. The answer comes from hearthd's memory, so the wait is bounded by `discovery.first_contact_timeout_ms`.
 
 A socket path longer than the platform allows (about a hundred bytes) is reported with its length and the fix (`HEARTH_STATE`), not the kernel's bare `SUN_LEN`.
 

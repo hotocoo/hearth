@@ -337,6 +337,15 @@
     }
   },
   {
+    "name": "reload",
+    "description": "Apply the configuration's [servers] to hearthd without restarting it: servers added to the file start, removed ones stop, changed ones restart with their new definition, and every other server keeps running untouched. Other sections ([supervise], [notify], [watch], [metrics]) take effect when hearthd restarts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "cli": {}
+  },
+  {
     "name": "bundle",
     "description": "Everything hearth can say about this machine in one document: doctor, ports, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port). Like ports and doctor, it records fresh snapshots of both.",
     "inputSchema": {

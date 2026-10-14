@@ -232,3 +232,33 @@ pub fn logs(args: &LogsArgs, json: bool) -> Result<String, String> {
     }
     Ok(out)
 }
+
+#[derive(clap::Args)]
+pub struct ReloadArgs {}
+
+/// Asks hearthd to apply the configuration's `[servers]` now.
+pub fn reload(_: &ReloadArgs, json: bool) -> Result<String, String> {
+    let answer = call(&json!({ "op": "reload" }))?;
+    if json {
+        return crate::to_json(&answer);
+    }
+    let list = |k: &str| {
+        let names: Vec<String> = answer[k]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(printable)
+            .collect();
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
+        }
+    };
+    Ok(format!(
+        "reloading: added {}; removed {}; changed {}. The rest keep running; hearth status shows the result\n",
+        list("added"),
+        list("removed"),
+        list("changed")
+    ))
+}

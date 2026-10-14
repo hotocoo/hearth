@@ -40,7 +40,7 @@ pub struct Control {
 }
 
 /// A model server hearthd owns.
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Server {
     pub port: u16,
