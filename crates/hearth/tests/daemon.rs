@@ -225,8 +225,12 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     daemon.0.kill().unwrap();
     daemon.0.wait().unwrap();
     wait_until("the server to stop", || !listening(port));
-    // What it did is in the journal.
-    let log = hearth(&dir, &["log", "--kind", "run"]).unwrap();
+    journal_has_the_run(&dir);
+}
+
+/// What hearthd did is in the journal, and `--grep` finds it with its `~N`.
+fn journal_has_the_run(dir: &Path) {
+    let log = hearth(dir, &["log", "--kind", "run"]).unwrap();
     let events: Vec<&str> = log["snapshots"]
         .as_array()
         .unwrap()
@@ -234,6 +238,25 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         .filter_map(|s| s["summary"].as_str())
         .collect();
     assert!(events.iter().any(|s| s.contains("requested")), "{events:?}");
+    // --grep keeps each match's ~N, and --limit counts matches.
+    let found = hearth(
+        dir,
+        &[
+            "log",
+            "--kind",
+            "run",
+            "--grep",
+            "REQUESTED",
+            "--limit",
+            "1",
+        ],
+    )
+    .unwrap();
+    let found = found["snapshots"].as_array().unwrap();
+    assert_eq!(found.len(), 1);
+    let back = usize::try_from(found[0]["back"].as_u64().unwrap()).unwrap();
+    assert!(found[0]["summary"].as_str().unwrap().contains("requested"));
+    assert_eq!(log["snapshots"][back]["id"], found[0]["id"]);
 }
 
 #[test]

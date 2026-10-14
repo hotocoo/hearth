@@ -133,6 +133,10 @@
         "stats": {
           "type": "boolean",
           "description": "Instead of listing: how much history of each kind is kept (count, oldest and newest time, bytes), i.e. how far back references like @1d can reach."
+        },
+        "grep": {
+          "type": "string",
+          "description": "Only snapshots whose recorded JSON contains this text, case ignored: a pid, model name, port, error text or finding code. Finds when something first or last appeared; limit then counts matches."
         }
       }
     },

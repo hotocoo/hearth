@@ -75,8 +75,13 @@ pub struct LogArgs {
     since: Option<std::time::Duration>,
     /// Instead of listing: how much history of every kind is kept (count,
     /// time span, bytes), i.e. how far back references can reach.
-    #[arg(long, conflicts_with_all = ["limit", "since"])]
+    #[arg(long, conflicts_with_all = ["limit", "since", "grep"])]
     stats: bool,
+    /// Only snapshots whose recorded JSON contains this text, case ignored,
+    /// like `git log -S`: a pid, model name, port, error or code. `--limit`
+    /// then counts matches.
+    #[arg(long)]
+    grep: Option<String>,
 }
 
 fn parse_age(text: &str) -> Result<std::time::Duration, String> {
@@ -225,6 +230,8 @@ fn age(taken_at_ms: u64) -> String {
 
 #[derive(Serialize)]
 struct LogEntry {
+    /// How far before the latest snapshot of its kind: `~back` refers to it.
+    back: usize,
     id: String,
     taken_at_ms: u64,
     hearth_version: String,
@@ -296,12 +303,19 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
         unreadable: Vec::new(),
     };
     let limit = args.limit.map_or(usize::MAX, NonZeroUsize::get);
+    // With --grep the limit counts matches, so every snapshot is read.
+    let read = if args.grep.is_some() {
+        usize::MAX
+    } else {
+        limit
+    };
+    let needle = args.grep.as_deref().map(str::to_lowercase);
     let recent = match args.since {
         Some(age) => {
             let ids = journal
                 .ids_since(kind.name(), age)
                 .map_err(|e| e.to_string())?;
-            let start = ids.len().saturating_sub(limit);
+            let start = ids.len().saturating_sub(read);
             // A snapshot thinned away between listing and reading is not an
             // error: it is just gone.
             ids[start..]
@@ -314,12 +328,20 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
                 .collect()
         }
         None => journal
-            .recent(kind.name(), limit)
+            .recent(kind.name(), read)
             .map_err(|e| e.to_string())?,
     };
-    for snapshot in recent.into_iter().rev() {
+    for (back, snapshot) in recent.into_iter().rev().enumerate() {
+        if report.snapshots.len() == limit {
+            break;
+        }
         match snapshot {
+            Ok(s)
+                if needle
+                    .as_ref()
+                    .is_some_and(|n| !s.body.to_string().to_lowercase().contains(n)) => {}
             Ok(s) => report.snapshots.push(LogEntry {
+                back,
                 summary: kind.summary(&s.body),
                 id: s.id,
                 taken_at_ms: s.taken_at_ms,
@@ -333,16 +355,20 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     }
     let mut out = String::new();
     if report.snapshots.is_empty() {
-        let _ = writeln!(
-            out,
-            "no {} snapshots in {} yet: run hearth {}",
-            report.kind, report.directory, report.kind
-        );
+        let _ = match &args.grep {
+            Some(g) => writeln!(out, "no {} snapshot mentions {g:?}", report.kind),
+            None => writeln!(
+                out,
+                "no {} snapshots in {} yet: run hearth {}",
+                report.kind, report.directory, report.kind
+            ),
+        };
     }
-    for (back, s) in report.snapshots.iter().enumerate() {
+    for s in &report.snapshots {
         let _ = writeln!(
             out,
-            "~{back:<3} {}  {:>11}  {}",
+            "~{:<3} {}  {:>11}  {}",
+            s.back,
             s.id,
             age(s.taken_at_ms),
             s.summary
