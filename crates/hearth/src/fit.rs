@@ -465,10 +465,19 @@ pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Verdict {
     if report["fits_device"] != false {
         return Verdict::Fits;
     }
-    let advice = report["max_ctx_device"].as_u64().map_or_else(
+    let mut advice = report["max_ctx_device"].as_u64().map_or_else(
         || "the weights alone do not fit: use a smaller model or quantization".to_string(),
         |n| format!("the largest context that fits is {n}: lower ctx"),
     );
+    let kinds: Vec<&str> = report["fits_device_with"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|o| o[0].as_str())
+        .collect();
+    if !kinds.is_empty() {
+        let _ = write!(advice, ", or keep it with cache_type {}", kinds.join(" / "));
+    }
     Verdict::TooBig(format!(
         "{model} at {ctx} tokens needs {} but the device holds {} ({}); {advice}",
         crate::units::bytes(report["total_bytes"].as_u64().unwrap_or_default()),
