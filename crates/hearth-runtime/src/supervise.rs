@@ -668,7 +668,9 @@ impl Supervised {
                 .unzip()
         };
         // A cause no restart can cure is not charged to the restart budget.
-        let decision = if cause.is_some_and(Cause::is_permanent) {
+        // Only a start that never served can have one: a server that ran
+        // and then died is restarted whatever it logged on the way.
+        let decision = if ready_since.is_none() && cause.is_some_and(Cause::is_permanent) {
             self.signals = None;
             self.state = State::GaveUp;
             Decision::Futile

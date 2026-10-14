@@ -71,13 +71,12 @@ pub enum Cause {
 
 impl Cause {
     /// Whether starting the same command again can only fail the same way.
-    /// A taken port may free up, and memory may be released by others.
+    /// A taken port may free up, memory may be released by others, and a
+    /// missing file may be on a volume not mounted yet or still arriving:
+    /// those restart with backoff until the crash-loop limit.
     #[must_use]
     pub const fn is_permanent(self) -> bool {
-        matches!(
-            self,
-            Self::ModelMissing | Self::LoadFailed | Self::BadArgument
-        )
+        matches!(self, Self::LoadFailed | Self::BadArgument)
     }
 }
 
@@ -89,6 +88,8 @@ const CAUSES: &[(&str, Cause)] = &[
     // allocate %s buffer", CUDA's "cudaMalloc failed: out of memory".
     // Before the load failures: a load that failed to allocate is memory.
     ("failed to allocate", Cause::OutOfMemory),
+    // llama-model.cpp: "unable to allocate %s buffer", thrown inside a load.
+    ("unable to allocate", Cause::OutOfMemory),
     ("out of memory", Cause::OutOfMemory),
     (
         "kiogpucommandbuffercallbackerroroutofmemory",

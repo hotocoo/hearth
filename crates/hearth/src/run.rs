@@ -6,7 +6,6 @@
 //! however hearth stops.
 
 use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::io::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
@@ -360,10 +359,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     // Written, not printed: a reader that goes away (`| head`) must end the
     // run with an error, which stops the server, rather than a panic.
     let mut out = std::io::stdout().lock();
+    let mut last = None;
     let result = (|| -> Result<(), String> {
         while !supervised.gave_up() {
             let polled = Instant::now();
             if let Some(event) = supervised.poll() {
+                last = Some(describe(&event));
                 let t_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let record = serde_json::json!({
                     "addr": probe.addr,
@@ -383,9 +384,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
                     v["t_ms"] = t_ms.into();
                     v.to_string()
                 } else {
-                    let mut s = String::new();
-                    let _ = write!(s, "[{}] {}", probe.addr, describe(&event));
-                    s
+                    format!("[{}] {}", probe.addr, last.as_deref().unwrap_or_default())
                 };
                 writeln!(out, "{line}")
                     .and_then(|()| out.flush())
@@ -401,9 +400,10 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     }
     result?;
     Err(format!(
-        "gave up on the server at {} after {} restarts",
+        "gave up on the server at {} after {} restarts: {}",
         probe.addr,
-        supervised.restarts()
+        supervised.restarts(),
+        last.as_deref().unwrap_or("no event")
     ))
 }
 

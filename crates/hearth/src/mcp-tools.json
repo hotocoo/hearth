@@ -390,7 +390,7 @@
   },
   {
     "name": "start",
-    "description": "Ask hearthd to start a server it stopped, or one it gave up on after a crash loop. The crash-loop budget starts afresh.",
+    "description": "Ask hearthd to start a server it stopped, or one it gave up on: after a crash loop, or at once because its model would not load or its arguments were refused (decision futile; fix the command first). The crash-loop budget starts afresh.",
     "inputSchema": {
       "type": "object",
       "required": [
