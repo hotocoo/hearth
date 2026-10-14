@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:46 when-did-it-start workflow
+
+- A sixth built-in workflow (and MCP prompt), `when-did-it-start`, finds the first snapshot that mentions an error, finding code, model, port or pid, and diffs it against the one before.
+
 ### 2026-10-15 05:44 log --grep
 
 - `hearth log --grep TEXT` lists only the snapshots whose recorded JSON mentions TEXT (case ignored), like `git log -S`. Each keeps its `~N`, and `--limit` counts matches. MCP's `log` takes `grep`.
