@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:24 Ollama model names in fit
+
+- `hearth fit qwen3:8b …` and MCP `fit` with `model: "qwen3:8b"` find the weights in Ollama's store, read from `OLLAMA_MODELS` or Ollama's defaults. Only files are read: Ollama need not run, and nothing is loaded.
+- MCP tool descriptions for `fit` and `incidents` now cover Ollama names and Linux.
+
 ### 2026-10-15 01:20 Linux incidents
 
 - `hearth incidents` on Linux reads the kernel log with `journalctl -k`. It reports:
