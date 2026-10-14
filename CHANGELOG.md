@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:23 futile restarts
+
+- A supervised server that exits because its model is missing or does not load, or because its arguments are refused, is not restarted. The decision is `futile`, the restart budget is not charged, and you are notified. `hearth start` revives it once the command is fixed.
+
 ### 2026-10-15 07:19 exit cause and meanwhile fixes
 
 - **Exit causes.** An exit's cause must come from the server's last lines: an old allocation warning no longer explains a later, unrelated exit. A failed allocation is reported as out of memory even when it made the load fail.
