@@ -42,3 +42,12 @@ The intervals and the horizon are `[watch]` keys, validated non-zero and represe
   - reported a test runtime as vanished within one ports round of its death.
 - `watch` is the daemon's observation loop without the daemon. When `hearthd` exists it will run the same rounds, and `watch` stays as the way to run them by hand.
 - A watch that measures nothing new costs one doctor sample per interval (proc and sysctl reads) and one ports round (one HTTP GET per listener, with learned deadlines).
+
+## Addendum (2026-10-15): servers configured past the device
+
+`ports` checks every llama.cpp server it finds, with the same computation as `hearth fit --port`. That uses the server's `/props` context times its slots, and the cache types on its command line. A server whose model at that context exceeds the device ceiling is a **warn** finding. The remediation gives the largest context that fits and the cache types that would keep the current one.
+
+`watch` (and hearthd) report warn findings from `ports` as problems, once when they appear and once when they clear, keyed by finding code and pid. Silent ports are left out, because they are already reported as runtime changes.
+
+On the development machine, the first watch round flagged the user's llama-server: 262,144 tokens of q8_0 cache need 56.9 GiB against Metal's 51.8 GiB. This is the configuration behind the memory pressure every earlier `doctor` showed.
+

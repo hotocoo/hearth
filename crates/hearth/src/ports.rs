@@ -93,6 +93,10 @@ struct Report {
 #[derive(Serialize)]
 struct Finding {
     severity: &'static str,
+    /// What kind of finding, stable across runs; with `pid`, how `hearth
+    /// watch` tells a new problem from one it already reported.
+    code: &'static str,
+    pid: i32,
     message: String,
     remediation: String,
 }
@@ -350,7 +354,8 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
             })
         })
         .collect();
-    let findings = findings(&ports);
+    let mut findings = findings(&ports);
+    findings.extend(oversized(&ports));
     let mut report = Report {
         ports,
         uninspectable_processes: uninspectable,
@@ -447,6 +452,60 @@ fn is_runtime(identity: &Identity) -> bool {
     identity.is_runtime()
 }
 
+/// llama.cpp servers configured past what the device holds: their model
+/// at their context and cache types, as `hearth fit --port` computes it
+/// from the server's own `/props` and command line. Such a server runs
+/// until its context fills, then runs out of accelerator memory.
+fn oversized(ports: &[Port]) -> Vec<Finding> {
+    let mut seen = std::collections::BTreeSet::new();
+    ports
+        .iter()
+        .filter(|p| matches!(p.fingerprint.identity, Identity::LlamaCpp { model: Some(_), .. }))
+        .filter(|p| seen.insert(p.pid))
+        .filter_map(|p| {
+            let port = p.fingerprint.addr.port().to_string();
+            let line: Vec<String> = ["hearth", "--json", "fit", "--port", &port]
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
+            // A server whose fit cannot be computed is not a finding.
+            let r: Value = serde_json::from_str(&crate::dispatch(&line).ok()?).ok()?;
+            if r["fits_device"] != false {
+                return None;
+            }
+            let kinds: Vec<&str> = r["fits_device_with"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|o| o[0].as_str())
+                .collect();
+            Some(Finding {
+                code: "oversized",
+                pid: p.pid,
+                severity: "warn",
+                message: format!(
+                    "{} (pid {}) on {} is configured past the device: its context needs {} of {} ({})",
+                    p.process,
+                    p.pid,
+                    p.fingerprint.addr,
+                    bytes(r["total_bytes"].as_u64().unwrap_or_default()),
+                    bytes(r["ceiling"]["bytes"].as_u64().unwrap_or_default()),
+                    r["ceiling"]["source"].as_str().unwrap_or("device")
+                ),
+                remediation: format!(
+                    "it will run out of accelerator memory as its context fills; restart it with -c at most {}{}",
+                    r["max_ctx_device"],
+                    if kinds.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", or keep the context with -ctk/-ctv {}", kinds.join(" / "))
+                    }
+                ),
+            })
+        })
+        .collect()
+}
+
 fn findings(ports: &[Port]) -> Vec<Finding> {
     // Silence from a process that serves a model on another port is a likely
     // wedge; silence from anything else may just be a non-HTTP protocol.
@@ -459,6 +518,8 @@ fn findings(ports: &[Port]) -> Vec<Finding> {
     for p in ports {
         if let Identity::Unresponsive { waited_ms } = &p.fingerprint.identity {
             out.push(Finding {
+                code: "unresponsive",
+                pid: p.pid,
                 severity: if runtime_pids.contains(&p.pid) {
                     "warn"
                 } else {
@@ -476,6 +537,8 @@ fn findings(ports: &[Port]) -> Vec<Finding> {
         }
         if p.slow {
             out.push(Finding {
+                code: "slow",
+                pid: p.pid,
                 severity: "warn",
                 message: format!(
                     "{} (pid {}) on {} answered only after its learned deadline ({})",
@@ -492,6 +555,8 @@ fn findings(ports: &[Port]) -> Vec<Finding> {
         }
         match &p.fingerprint.identity {
             Identity::LlamaCpp { health, .. } if health != "ok" => out.push(Finding {
+                code: "not_ready",
+                pid: p.pid,
                 severity: "info",
                 message: format!(
                     "llama-server on {} is not ready: {health}",

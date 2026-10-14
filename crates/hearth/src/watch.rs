@@ -184,10 +184,31 @@ fn ports_round(
             out.notify("hearth: runtime", &text, &event);
         }
     }
-    let problems = errors
-        .iter()
-        .map(|e| (format!("history:{e}"), format!("history: {e}"), 1))
+    // Warnings about how a server runs (configured past the device, slow,
+    // silent) are states: reported once when they appear and when they clear.
+    let mut problems: Seen = report["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        // A runtime going silent is already reported as a change.
+        .filter(|f| f["severity"] == "warn" && f["code"] != "unresponsive")
+        .map(|f| {
+            (
+                format!("{}:{}", f["code"].as_str().unwrap_or("finding"), f["pid"]),
+                format!(
+                    "{}; {}",
+                    f["message"].as_str().unwrap_or_default(),
+                    f["remediation"].as_str().unwrap_or_default()
+                ),
+                1,
+            )
+        })
         .collect();
+    problems.extend(
+        errors
+            .iter()
+            .map(|e| (format!("history:{e}"), format!("history: {e}"), 1)),
+    );
     Ok((report, problems))
 }
 
