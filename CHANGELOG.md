@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:13 login service PATH and control handler fixes
+
+- `hearth service install` carries `PATH` into the unit. Service managers start agents with a minimal one, in which `llama-server` would not be found.
+- hearthd serves each control client on its own handler, up to `control.max_clients`; a stalled client no longer holds the next one past its deadline. A handler that panics gives its slot back.
+- `hearth_core::state::ensure_dir` creates the state directory owner-only.
+
 ### 2026-10-15 01:06 hearthd control socket hardening
 
 - **Lock.** One hearthd per state directory, enforced with an exclusive lock on `hearthd.lock`. A stale socket is replaced only when it is a socket. The socket is 0600. MSRV is now 1.89, for `File::try_lock`.
