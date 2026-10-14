@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:30 fit check before start
+
+- `[servers.NAME]` can declare `model`, `ctx` and `cache_type`, together. hearthd checks before every start that the model at that context fits the device, and refuses one that cannot. The refusal reports the sizes and the largest context that fits.
+- `ports` shows each loaded Ollama model's context.
+
 ### 2026-10-15 04:24 fit the server as it runs
 
 - `hearth fit --port P --cache-type T` with no `--ctx` uses the context the server reports: llama.cpp's `n_ctx`, or Ollama's `context_length` from `/api/ps`, now recorded by `ports`.
