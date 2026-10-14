@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:35 fit --port
+
+- `hearth fit --port P --ctx N` (MCP `fit` with `port`) fits the model a running server serves: llama.cpp's file, or Ollama's loaded model. It answers whether that server could take a different context, without touching it.
+
 ### 2026-10-15 01:32 Linux incidents across reboots; prompts/list per spec
 
 - `hearth incidents` on Linux reads the kernel log of every boot the journal kept (`journalctl _TRANSPORT=kernel`). It used `-k`, which implies the current boot only, so the OOM kill before a reboot was missed. On the Linux CI runner the difference is 542 kernel lines against 536.
