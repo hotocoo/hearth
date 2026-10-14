@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:36 show --pointer
+
+- `hearth show --pointer /body/health/memory` prints one part of a snapshot, like `git show REF:PATH`. A wrong path names the deepest part that exists and what it holds. MCP's `show` takes `pointer`.
+
 ### 2026-10-15 06:30 compute buffer fixes
 
 - **Ready events.** A `ready` event carries `compute_bytes` only when llama.cpp logged some. `fit` never treats zero as a measurement.
