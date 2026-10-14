@@ -114,9 +114,13 @@ confirm_rounds = 2
 max_message_bytes = 65536
 
 # How long one exchange on the socket may take, from connecting to the last
-# byte of the answer. hearthd serves one client at a time from memory, so a
-# client that stalls holds the others up for at most this long.
+# byte of the answer. A client that stalls holds its handler this long.
 timeout_ms = 2000
+
+# Clients answered at once. Answers come from memory and take microseconds,
+# so this only matters when clients stall; one beyond it is told hearthd is
+# busy rather than queued.
+max_clients = 8
 
 # Servers hearthd starts and keeps alive, one table each, named
 # [servers.NAME] in your own file: port (where it listens), command (the

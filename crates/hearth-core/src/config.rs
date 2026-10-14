@@ -29,6 +29,7 @@ pub struct Config {
 pub struct Control {
     pub max_message_bytes: u64,
     pub timeout_ms: u64,
+    pub max_clients: u64,
 }
 
 /// A model server hearthd owns.

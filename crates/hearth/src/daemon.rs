@@ -18,6 +18,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -202,8 +203,8 @@ fn answer(request: &str, board: &Board, orders: &BTreeMap<String, SyncSender<Ord
     }
 }
 
-/// Answers one client, inline: answers come from memory, and the deadline
-/// bounds how long a stalled client can hold the next one up.
+/// Answers one client. The deadline bounds how long a stalled client can
+/// hold its handler.
 fn serve(
     stream: &UnixStream,
     config: &Config,
@@ -218,6 +219,42 @@ fn serve(
     };
     if let Err(e) = crate::control::write_line(stream, &reply.to_string(), deadline) {
         log(&format!("control socket: could not answer a client: {e}"));
+    }
+}
+
+/// Gives `stream` its own handler, up to `control.max_clients` at once; a
+/// client beyond that is told hearthd is busy, so stalled clients can take
+/// up handlers but never memory or threads without bound.
+fn handle(
+    stream: UnixStream,
+    config: &Arc<Config>,
+    board: &Board,
+    orders: &Arc<BTreeMap<String, SyncSender<Order>>>,
+    busy: &Arc<AtomicU64>,
+) {
+    let deadline = Instant::now() + Duration::from_millis(config.control.timeout_ms);
+    let refuse = |why: &str| {
+        let reply = json!({ "error": format!("hearthd is busy: {why}; try again") });
+        if let Err(e) = crate::control::write_line(&stream, &reply.to_string(), deadline) {
+            log(&format!("control socket: could not answer a client: {e}"));
+        }
+    };
+    if busy.fetch_add(1, Ordering::SeqCst) >= config.control.max_clients {
+        busy.fetch_sub(1, Ordering::SeqCst);
+        refuse(&format!("{} clients at once", config.control.max_clients));
+        return;
+    }
+    let (config, board, orders, done) =
+        (config.clone(), board.clone(), orders.clone(), busy.clone());
+    let spawned = std::thread::Builder::new()
+        .name("control".into())
+        .spawn(move || {
+            serve(&stream, &config, &board, &orders);
+            done.fetch_sub(1, Ordering::SeqCst);
+        });
+    if let Err(e) = spawned {
+        busy.fetch_sub(1, Ordering::SeqCst);
+        log(&format!("control socket: no thread for a client: {e}"));
     }
 }
 
@@ -312,9 +349,11 @@ pub fn run() -> Result<(), String> {
         crate::control::socket_path()?.display()
     ));
     let pause = Duration::from_millis(config.control.timeout_ms);
+    let (config, orders) = (Arc::new(config), Arc::new(orders));
+    let busy = Arc::new(AtomicU64::new(0));
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => serve(&stream, &config, &board, &orders),
+            Ok(stream) => handle(stream, &config, &board, &orders, &busy),
             Err(e) => {
                 // Out of descriptors, typically: say so, and do not spin.
                 log(&format!("control socket: {e}"));
