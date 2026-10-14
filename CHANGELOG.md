@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:38 footprint at ready
+
+- **Ready events.** Supervised servers' `ready` events record the server's memory footprint once it serves.
+- **`fit`.** It mentions that footprint for the same model and context. It is recorded evidence only: the P0 gate has not yet shown how memory-mapped weights count in it.
+
 ### 2026-10-15 07:30 futile restart fixes
 
 - **When restarts stop.** Only a start that never served can be judged futile. A missing model file is retried, because it may be on a volume that is not mounted yet. An allocation failed during a load counts as out of memory.
