@@ -36,6 +36,14 @@ Configuration rejects:
 
 hearthd proxies no inference and admits nothing: that stays behind the gate.
 
+### Fit before start
+
+A server may declare `model`, `ctx` and `cache_type`, all three or none. hearthd then runs the same computation as `hearth fit` before every start, reading only the GGUF header. It refuses to start a configuration whose model at that context exceeds the device ceiling. The refusal is a failed start: it is logged, recorded and notified with the sizes and the largest context that fits, and the crash-loop budget ends it.
+
+Only the device ceiling is checked. It does not move, unlike memory free now, which stays provisional until the P0 gate (ADR-000).
+
+This is the failure the user's notes record most often: a server configured past what Metal can hold runs out of accelerator memory, its backend latches, and every request fails until someone notices. On the development machine, the user's own llama-server configuration (262,144 tokens, q8_0) is exactly such a case: 56.9 GiB against a 51.8 GiB ceiling.
+
 ### Control socket
 
 `hearthd.sock` lives in hearth's state directory. Who may talk to hearthd is decided by ownership and permissions, checked on both ends. There is no TCP port to expose and no key to leak.

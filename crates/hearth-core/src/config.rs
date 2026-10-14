@@ -67,6 +67,12 @@ pub struct Server {
     pub env: std::collections::BTreeMap<String, String>,
     /// Working directory the server starts in.
     pub dir: Option<std::path::PathBuf>,
+    /// What the server loads, for the fit check before every start: the
+    /// model (a path or a name `hearth fit` takes), the context it is given,
+    /// and its KV cache type. All three or none.
+    pub model: Option<String>,
+    pub ctx: Option<u64>,
+    pub cache_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,6 +223,18 @@ impl Config {
             }
             if server.env.values().any(|v| v.contains('\0')) {
                 invalid("servers.*.env", name, "values cannot contain NUL")?;
+            }
+            let fit_parts = [
+                server.model.is_some(),
+                server.ctx.is_some(),
+                server.cache_type.is_some(),
+            ];
+            if fit_parts.iter().any(|&p| p) && !fit_parts.iter().all(|&p| p) {
+                invalid(
+                    "servers.*.model",
+                    name,
+                    "model, ctx and cache_type go together: the fit check needs all three",
+                )?;
             }
             if server.dir.as_ref().is_some_and(|d| !d.is_absolute()) {
                 invalid("servers.*.dir", name, "must be an absolute path")?;
@@ -530,6 +548,7 @@ mod tests {
             "[servers.qwen]\nport = 8081\ncommand = []\n",
             "[servers.\"a b\"]\nport = 8081\ncommand = [\"x\"]\n",
             "[servers.a]\nport = 1\ncommand = [\"x\"]\n[servers.b]\nport = 1\ncommand = [\"y\"]\n",
+            "[servers.a]\nport = 1\ncommand = [\"x\"]\nmodel = \"m.gguf\"\n",
         ] {
             assert!(
                 matches!(

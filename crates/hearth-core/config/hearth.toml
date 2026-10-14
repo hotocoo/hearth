@@ -191,5 +191,9 @@ max_clients = 8
 # absolute path avoids the question.
 # Optional per server: env, a table of variables set for it on top of
 # hearthd's own (GGML_METAL_*, CUDA_VISIBLE_DEVICES, HF_HOME), and dir, the
-# absolute working directory it starts in.
+# absolute working directory it starts in. And optionally model, ctx and
+# cache_type together (the model as `hearth fit` takes it: a path, org/repo
+# or an Ollama name): hearthd then checks before every start that the model
+# at that context fits the device at all, and refuses to start one that
+# never can, instead of letting it run out of accelerator memory.
 [servers]
