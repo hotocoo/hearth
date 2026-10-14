@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:48 MLX cache type from the config
+
+- `fit` on an MLX or safetensors model needs no `--cache-type`: it uses the config's `torch_dtype` (or `dtype`), which is what MLX caches in. This also covers `fit --port` on `mlx_lm.server`.
+
 ### 2026-10-15 05:46 when-did-it-start workflow
 
 - A sixth built-in workflow (and MCP prompt), `when-did-it-start`, finds the first snapshot that mentions an error, finding code, model, port or pid, and diffs it against the one before.
