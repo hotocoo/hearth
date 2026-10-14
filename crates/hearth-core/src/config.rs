@@ -24,6 +24,13 @@ pub struct Config {
     pub control: Control,
     pub metrics: Metrics,
     pub pressure: Pressure,
+    pub accelerators: Accelerators,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Accelerators {
+    pub query_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -247,6 +254,22 @@ impl Config {
                 gone,
             ),
             ("notify.timeout_ms", self.notify.timeout_ms, AT_LEAST_ONE),
+            (
+                "control.max_message_bytes",
+                self.control.max_message_bytes,
+                AT_LEAST_ONE,
+            ),
+            ("control.timeout_ms", self.control.timeout_ms, AT_LEAST_ONE),
+            (
+                "control.max_clients",
+                self.control.max_clients,
+                AT_LEAST_ONE,
+            ),
+            (
+                "accelerators.query_timeout_ms",
+                self.accelerators.query_timeout_ms,
+                AT_LEAST_ONE,
+            ),
             (
                 "watch.doctor_interval_ms",
                 w.doctor_interval_ms,
@@ -473,6 +496,8 @@ mod tests {
             "[notify]\nwebhook_url = \"file:///etc/passwd\"\n",
             "[[state.tiers]]\nwithin_ms = 2\nevery_ms = 0\n[[state.tiers]]\nwithin_ms = 1\nevery_ms = 0\n",
             "[state]\nthinned_kinds = [\"doctr\"]\n",
+            "[control]\nmax_clients = 0\n",
+            "[accelerators]\nquery_timeout_ms = 0\n",
             "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
         ] {
             assert!(

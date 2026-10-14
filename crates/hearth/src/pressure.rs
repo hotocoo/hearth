@@ -8,16 +8,19 @@
 use hearth_core::config::Pressure;
 use hearth_sense::{HostMemory, PressureLevel, RawHost};
 
-/// Sets `m.pressure` from PSI when the kernel declared no level. Returns
-/// how the level was derived, for `doctor --explain`, when it was.
-pub fn fill(m: &mut HostMemory, p: &Pressure) -> Option<String> {
+/// Sets `m.pressure` from PSI when the kernel declared no level.
+/// `doctor --explain` describes the derivation.
+pub fn fill(m: &mut HostMemory, p: &Pressure) {
     if m.pressure.is_some() {
-        return None;
+        return;
     }
     let RawHost::Linux(l) = &m.raw else {
-        return None;
+        return;
     };
-    let (some, full) = (l.psi_some_avg10?, l.psi_full_avg10.unwrap_or(0.0));
+    let Some(some) = l.psi_some_avg10 else {
+        return;
+    };
+    let full = l.psi_full_avg10.unwrap_or(0.0);
     let level = if full >= p.psi_full_critical {
         PressureLevel::Critical
     } else if some >= p.psi_some_warn {
@@ -26,32 +29,33 @@ pub fn fill(m: &mut HostMemory, p: &Pressure) -> Option<String> {
         PressureLevel::Normal
     };
     m.pressure = Some(level);
-    Some(format!(
-        "derived from PSI: some avg10 {some} (warn at {}), full avg10 {full} (critical at {}), pressure.psi_* in the config",
-        p.psi_some_warn, p.psi_full_critical
-    ))
 }
 
-fn thresholds() -> Option<Pressure> {
-    hearth_core::config::load().ok().map(|c| c.pressure)
+fn config() -> Result<hearth_core::config::Config, String> {
+    hearth_core::config::load().map_err(|e| e.to_string())
 }
 
 /// `hearth_sense::host_memory`, with the pressure level filled in.
 pub fn host_memory() -> Result<HostMemory, String> {
+    let p = config()?.pressure;
     let mut m = hearth_sense::host_memory().map_err(|e| e.to_string())?;
-    if let Some(p) = thresholds() {
-        fill(&mut m, &p);
-    }
+    fill(&mut m, &p);
     Ok(m)
 }
 
 /// `hearth_sense::box_health`, with the pressure level filled in.
 pub fn box_health() -> Result<hearth_sense::BoxHealth, String> {
+    let p = config()?.pressure;
     let mut h = hearth_sense::box_health().map_err(|e| e.to_string())?;
-    if let Some(p) = thresholds() {
-        fill(&mut h.memory, &p);
-    }
+    fill(&mut h.memory, &p);
     Ok(h)
+}
+
+/// `hearth_sense::accelerators`, with driver queries bounded by
+/// `accelerators.query_timeout_ms`.
+pub fn accelerators() -> Result<Vec<hearth_sense::Accelerator>, String> {
+    let timeout = std::time::Duration::from_millis(config()?.accelerators.query_timeout_ms);
+    hearth_sense::accelerators(timeout).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -72,8 +76,10 @@ mod tests {
                 cached: 0,
                 psi_some_avg10: Some(some),
                 psi_full_avg10: Some(full),
+                psi_from: "/proc/pressure/memory".into(),
                 cgroup_max_bytes: None,
                 cgroup_current_bytes: None,
+                cgroup_available_bytes: None,
             }),
         }
     }
@@ -90,13 +96,15 @@ mod tests {
             (40.0, 25.0, PressureLevel::Critical),
         ] {
             let mut m = linux(some, full);
-            assert!(fill(&mut m, &p).is_some());
+            fill(&mut m, &p);
             assert_eq!(m.pressure, Some(want));
         }
         let mut declared = linux(50.0, 50.0);
         declared.pressure = Some(PressureLevel::Normal);
-        assert!(
-            fill(&mut declared, &p).is_none(),
+        fill(&mut declared, &p);
+        assert_eq!(
+            declared.pressure,
+            Some(PressureLevel::Normal),
             "a declared level is kept"
         );
     }

@@ -8,11 +8,29 @@
 
 use std::path::{Path, PathBuf};
 
+/// The download stores searched, in this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Store {
+    HuggingFace,
+    LmStudio,
+}
+
+impl Store {
+    fn name(self) -> &'static str {
+        match self {
+            Self::HuggingFace => "hugging face cache",
+            Self::LmStudio => "lm studio models directory",
+        }
+    }
+}
+
 /// `(store, repo directory for org/repo)`, for every store this machine
-/// may have: the Hugging Face cache (`HF_HUB_CACHE`, else `HF_HOME/hub`,
-/// else `~/.cache/huggingface/hub`), and LM Studio's models directory
-/// (`~/.lmstudio/models`, and the older `~/.cache/lm-studio/models`).
-fn repo_dirs(org: &str, repo: &str) -> Vec<(&'static str, PathBuf)> {
+/// may have, in the locations those tools themselves use: the Hugging Face
+/// cache (`HF_HUB_CACHE`, `HUGGINGFACE_HUB_CACHE`, `HF_HOME/hub`, else
+/// `XDG_CACHE_HOME` or `~/.cache`, then `huggingface/hub`), and LM Studio's
+/// models directory (`~/.lmstudio/models`, and the older
+/// `~/.cache/lm-studio/models`).
+fn repo_dirs(org: &str, repo: &str) -> Vec<(Store, PathBuf)> {
     let env = |k: &str| {
         std::env::var_os(k)
             .filter(|v| !v.is_empty())
@@ -20,18 +38,23 @@ fn repo_dirs(org: &str, repo: &str) -> Vec<(&'static str, PathBuf)> {
     };
     let home = env("HOME");
     let hf_hub = env("HF_HUB_CACHE")
+        .or_else(|| env("HUGGINGFACE_HUB_CACHE"))
         .or_else(|| env("HF_HOME").map(|h| h.join("hub")))
-        .or_else(|| home.as_ref().map(|h| h.join(".cache/huggingface/hub")));
+        .or_else(|| {
+            env("XDG_CACHE_HOME")
+                .or_else(|| home.as_ref().map(|h| h.join(".cache")))
+                .map(|c| c.join("huggingface").join("hub"))
+        });
     let mut out = Vec::new();
     if let Some(hub) = hf_hub {
         out.push((
-            "hugging face cache",
+            Store::HuggingFace,
             hub.join(format!("models--{org}--{repo}")),
         ));
     }
     if let Some(h) = &home {
         for base in [".lmstudio/models", ".cache/lm-studio/models"] {
-            out.push(("lm studio", h.join(base).join(org).join(repo)));
+            out.push((Store::LmStudio, h.join(base).join(org).join(repo)));
         }
     }
     out
@@ -39,25 +62,54 @@ fn repo_dirs(org: &str, repo: &str) -> Vec<(&'static str, PathBuf)> {
 
 /// The directory holding a cached repo's files: for the Hugging Face cache,
 /// the snapshot `refs/main` names, else the only snapshot; for LM Studio,
-/// the repo directory itself.
-fn files_dir(store: &str, dir: &Path) -> Option<PathBuf> {
-    if store != "hugging face cache" {
-        return dir.is_dir().then(|| dir.to_path_buf());
+/// the repo directory itself. `Ok(None)` when the store does not have the
+/// repo; an error when it does but which snapshot to use is unclear.
+fn files_dir(store: Store, dir: &Path) -> Result<Option<PathBuf>, String> {
+    if store == Store::LmStudio {
+        return Ok(dir.is_dir().then(|| dir.to_path_buf()));
+    }
+    if !dir.is_dir() {
+        return Ok(None);
     }
     let snapshots = dir.join("snapshots");
     if let Ok(rev) = std::fs::read_to_string(dir.join("refs").join("main")) {
-        let at = snapshots.join(rev.trim());
-        if at.is_dir() {
-            return Some(at);
+        let rev = rev.trim();
+        // A revision is a commit hash, never a path.
+        let valid = !rev.is_empty() && rev.bytes().all(|b| b.is_ascii_alphanumeric());
+        if valid && snapshots.join(rev).is_dir() {
+            return Ok(Some(snapshots.join(rev)));
         }
     }
     let mut all: Vec<PathBuf> = std::fs::read_dir(&snapshots)
-        .ok()?
+        .map_err(|e| format!("{}: {e}", snapshots.display()))?
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();
-    (all.len() == 1).then(|| all.remove(0))
+    match all.len() {
+        1 => Ok(Some(all.remove(0))),
+        0 => Ok(None),
+        n => Err(format!(
+            "{} has {n} snapshots and no usable refs/main; name the file with its snapshot path",
+            dir.display()
+        )),
+    }
+}
+
+/// Whether `name` is a later shard of a split model: `-NNNNN-of-NNNNN.gguf`
+/// with an index above 1, the naming llama.cpp's split tool uses.
+fn later_shard(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".gguf") else {
+        return false;
+    };
+    let Some((head, total)) = stem.rsplit_once("-of-") else {
+        return false;
+    };
+    let Some((_, index)) = head.rsplit_once('-') else {
+        return false;
+    };
+    let digits = |s: &str| s.len() == 5 && s.bytes().all(|b| b.is_ascii_digit());
+    digits(index) && digits(total) && index != "00001"
 }
 
 /// Model weights in `dir`: `.gguf` files that are not a multimodal
@@ -73,8 +125,8 @@ fn weights_in(dir: &Path) -> Vec<PathBuf> {
             let lower = name.to_ascii_lowercase();
             p.extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
-                && !lower.starts_with("mmproj")
-                && (!lower.contains("-of-") || lower.contains("-00001-of-"))
+                && !lower.contains("mmproj")
+                && !later_shard(&lower)
         })
         .collect();
     files.sort();
@@ -112,10 +164,25 @@ pub fn parse(name: &str) -> Option<(String, String, Option<String>, Option<Strin
 /// an error when one does but the file is not clear.
 #[must_use]
 pub fn find(name: &str) -> Option<Result<PathBuf, String>> {
+    search(name, None)
+}
+
+/// [`find`] in one store only.
+#[must_use]
+pub fn find_in(name: &str, store: Store) -> Option<Result<PathBuf, String>> {
+    search(name, Some(store))
+}
+
+fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
     let (org, repo, quant, file) = parse(name)?;
     for (store, dir) in repo_dirs(&org, &repo) {
-        let Some(files) = files_dir(store, &dir) else {
+        if only.is_some_and(|o| o != store) {
             continue;
+        }
+        let files = match files_dir(store, &dir) {
+            Ok(Some(f)) => f,
+            Ok(None) => continue,
+            Err(e) => return Some(Err(e)),
         };
         if let Some(f) = &file {
             let path = files.join(f);
@@ -135,6 +202,7 @@ pub fn find(name: &str) -> Option<Result<PathBuf, String>> {
                 })
             })
             .collect();
+        let store = store.name();
         return Some(match candidates.as_slice() {
             [one] => Ok(one.clone()),
             [] => Err(format!(
@@ -183,6 +251,8 @@ mod tests {
             "m-Q8_0-00001-of-00002.gguf",
             "m-Q8_0-00002-of-00002.gguf",
             "mmproj-BF16.gguf",
+            "m-mmproj-F16.gguf",
+            "Lord-of-the-Rings-7B.gguf",
             "README.md",
         ] {
             std::fs::write(dir.join(f), "").unwrap();
@@ -191,7 +261,14 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["m-Q4_K.gguf", "m-Q8_0-00001-of-00002.gguf"]);
+        assert_eq!(
+            names,
+            [
+                "Lord-of-the-Rings-7B.gguf",
+                "m-Q4_K.gguf",
+                "m-Q8_0-00001-of-00002.gguf"
+            ]
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

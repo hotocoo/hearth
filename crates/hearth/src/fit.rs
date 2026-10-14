@@ -80,6 +80,10 @@ struct Report {
 struct Ceiling {
     bytes: u64,
     source: String,
+    /// Free on that device now, when it is a discrete GPU whose driver
+    /// reports usage: what "fits right now" is checked against there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    free_bytes: Option<u64>,
 }
 
 /// The model's file: from the server on `port` when given, else the path
@@ -147,9 +151,12 @@ fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, St
                     ));
                 }
             };
-            hearth_runtime::model_stores::find(&name).unwrap_or_else(|| {
-                Err(format!("{name}: not found in LM Studio's models directory"))
-            })
+            hearth_runtime::model_stores::find_in(&name, hearth_runtime::model_stores::Store::LmStudio)
+                .unwrap_or_else(|| {
+                    Err(format!(
+                        "{name}: not found in LM Studio's models directory; the id LM Studio reports may differ from its folder: pass the file with --model"
+                    ))
+                })
         }
         Identity::LlamaCpp { .. } if model.is_some() => Err(
             "--model and --port name the model twice: a llama.cpp server reports its own".into(),
@@ -213,7 +220,13 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         host.pressure,
         Some(PressureLevel::Warn | PressureLevel::Critical)
     );
-    let fits_now = !under_pressure && total_bytes <= host.available_bytes;
+    // On a discrete GPU the model goes into the device's own memory, so
+    // what is free there decides; otherwise it is the host's memory.
+    let available_now = ceiling
+        .as_ref()
+        .and_then(|c| c.free_bytes)
+        .unwrap_or(host.available_bytes);
+    let fits_now = !under_pressure && total_bytes <= available_now;
     // Beyond the trained context a model is not expected to work, so the
     // largest useful context is capped there even when memory allows more.
     let max_ctx = |budget: u64| {
@@ -259,10 +272,10 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         max_ctx_now: if under_pressure {
             None
         } else {
-            max_ctx(host.available_bytes)
+            max_ctx(available_now)
         },
         ceiling,
-        available_bytes: host.available_bytes,
+        available_bytes: available_now,
         pressure: host.pressure,
         fits_now,
         fits_now_provisional: true,
@@ -279,7 +292,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
 /// The most one process may place on the accelerator: Metal's recommended
 /// working set, or the iogpu wired limit when an override is set and lower.
 fn device_ceiling() -> Result<Option<Ceiling>, String> {
-    let accelerators = hearth_sense::accelerators().map_err(|e| e.to_string())?;
+    let accelerators = crate::pressure::accelerators()?;
     Ok(accelerators
         .iter()
         .flat_map(|a| {
@@ -287,10 +300,12 @@ fn device_ceiling() -> Result<Option<Ceiling>, String> {
                 a.recommended_working_set_bytes.map(|b| Ceiling {
                     bytes: b,
                     source: format!("{} recommended working set", a.name),
+                    free_bytes: None,
                 }),
                 a.wired_limit_bytes.map(|b| Ceiling {
                     bytes: b,
                     source: "iogpu.wired_limit_mb".into(),
+                    free_bytes: None,
                 }),
                 // A discrete GPU holds the model in its own memory. With
                 // several, the smallest is the one a model must fit to be
@@ -300,6 +315,7 @@ fn device_ceiling() -> Result<Option<Ceiling>, String> {
                     .map(|b| Ceiling {
                         bytes: b,
                         source: format!("{} memory", a.name),
+                        free_bytes: a.used_bytes.map(|u| b.saturating_sub(u)),
                     }),
             ]
         })

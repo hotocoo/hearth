@@ -154,3 +154,14 @@ How they are used:
 
 Tests read a fixture sysfs tree and recorded `nvidia-smi` output. CI has no GPU.
 
+## Addendum (2026-10-15): review corrections
+
+- **GPU queries.** `nvidia-smi` is killed after `accelerators.query_timeout_ms`, because a wedged driver leaves it stuck in the kernel. "No nvidia-smi" means no NVIDIA GPU; any other failure is reported, not hidden. `doctor` prints it, and the metrics page carries it as a comment line.
+- **AMD APUs.** When GTT is larger than the VRAM carve-out, the GPU is treated as unified memory with GTT as its size, so `fit` does not take the firmware's small carve-out as the device ceiling.
+- **Metric labels.** GPU series carry an `index` label, so two identical cards are two series.
+- **cgroups.** The total is the smallest limit over every level. Availability is the least room left at any level.
+- **PSI.** It is read from the binding cgroup's `memory.pressure` when there is a limit. `doctor --explain` names the file.
+- **Discrete GPU fits.** "Fits right now" is checked against the device's free memory (total - used) when the driver reports usage.
+- **Model stores.** `fit --port` on LM Studio looks only in LM Studio's directory. In both stores, projectors (`*mmproj*`) and later shards (`-NNNNN-of-NNNNN`, index above 1) are not candidates. A Hugging Face revision must be a plain hash. Several snapshots without `refs/main` is an error, not "not found". `HUGGINGFACE_HUB_CACHE` and `XDG_CACHE_HOME` are honoured.
+- **Configuration errors.** A configuration that does not load is an error for the commands that derive a pressure level, not a silent "no level".
+

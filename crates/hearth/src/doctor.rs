@@ -41,17 +41,16 @@ struct Derivation {
 
 /// Where a Linux pressure level comes from: PSI, against the thresholds.
 fn linux_pressure_source(l: &hearth_sense::LinuxMem) -> String {
+    let pct = |v: Option<f64>| v.map_or("unreadable".into(), |v| format!("{v}%"));
+    let (some, full) = (pct(l.psi_some_avg10), pct(l.psi_full_avg10));
     match hearth_core::config::load() {
         Ok(c) => format!(
-            "/proc/pressure/memory: some avg10 {:?} (warn at pressure.psi_some_warn = {}), full avg10 {:?} (critical at pressure.psi_full_critical = {})",
-            l.psi_some_avg10,
-            c.pressure.psi_some_warn,
-            l.psi_full_avg10,
-            c.pressure.psi_full_critical
+            "{}: some avg10 {some} (warn at pressure.psi_some_warn = {}), full avg10 {full} (critical at pressure.psi_full_critical = {})",
+            l.psi_from, c.pressure.psi_some_warn, c.pressure.psi_full_critical
         ),
-        Err(_) => format!(
-            "/proc/pressure/memory: some avg10 {:?}, full avg10 {:?}",
-            l.psi_some_avg10, l.psi_full_avg10
+        Err(e) => format!(
+            "{}: some avg10 {some}, full avg10 {full}; no level, since the configuration does not load: {e}",
+            l.psi_from
         ),
     }
 }
@@ -107,11 +106,11 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
             out.push(d(
                 "memory.available",
                 bytes(m.available_bytes),
-                match (l.cgroup_max_bytes, l.cgroup_current_bytes) {
-                    (Some(max), Some(current)) => format!(
-                        "the smaller of /proc/meminfo MemAvailable and the binding cgroup's limit {} - usage {} + reclaimable page cache",
-                        bytes(max),
-                        bytes(current)
+                match (l.cgroup_available_bytes, l.cgroup_max_bytes) {
+                    (Some(room), Some(max)) => format!(
+                        "the smaller of /proc/meminfo MemAvailable and the room left under the cgroup limits: {} (limit - usage + reclaimable page cache at the tightest level; smallest limit {})",
+                        bytes(room),
+                        bytes(max)
                     ),
                     _ => "/proc/meminfo MemAvailable (no cgroup memory limit)".into(),
                 },
@@ -160,6 +159,8 @@ struct Report {
     health: BoxHealth,
     /// GPUs and their memory, as the drivers report it.
     accelerators: Vec<hearth_sense::Accelerator>,
+    /// Why GPUs could not be read (a driver tool that failed or hung).
+    accelerator_error: Option<String>,
     /// Fewest processes that together hold at least half of all open files.
     file_majority: Vec<Holder>,
     /// Fewest processes that together hold at least half of all threads.
@@ -575,7 +576,7 @@ fn pressure(level: Option<PressureLevel>) -> Option<Finding> {
             pid: None,
             message: "memory pressure: critical".into(),
             remediation:
-                "free memory now: stop the largest idle model server; jetsam kills are imminent"
+                "free memory now: stop the largest idle model server; the kernel will start killing processes (jetsam on macOS, the OOM killer on Linux)"
                     .into(),
         }),
         Some(PressureLevel::Normal) | None => None,
@@ -656,10 +657,15 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
             }
         }
     }
+    let mut gpu_error = None;
     Report {
         health,
         // A machine without a GPU the drivers report has none: not an error.
-        accelerators: hearth_sense::accelerators().unwrap_or_default(),
+        accelerators: crate::pressure::accelerators().unwrap_or_else(|e| {
+            gpu_error = Some(e);
+            Vec::new()
+        }),
+        accelerator_error: gpu_error,
         file_majority,
         thread_majority,
         close_wait,
@@ -728,6 +734,9 @@ fn render(r: &Report) -> String {
         bytes(m.swap_total_bytes),
     );
     out.push_str(&gpu_lines(&r.accelerators));
+    if let Some(e) = &r.accelerator_error {
+        let _ = writeln!(out, "gpu      could not be read: {e}");
+    }
     if let (Some(open), Some(max)) = (l.files_open, l.files_max) {
         let _ = writeln!(
             out,

@@ -119,7 +119,8 @@ fn sample(opts: &SampleOpts) -> Result<(), String> {
     let interval = opts.interval.ok_or("--interval-ms is required")?;
     let mut out = open_out(opts.out.as_deref())?;
     let host = hearth_sense::host_memory().map_err(|e| e.to_string())?;
-    let accelerators = hearth_sense::accelerators().map_err(|e| e.to_string())?;
+    // One sampling interval bounds a driver query.
+    let accelerators = hearth_sense::accelerators(interval).map_err(|e| e.to_string())?;
     emit(
         out.as_mut(),
         &json!({

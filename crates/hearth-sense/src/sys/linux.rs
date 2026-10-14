@@ -46,25 +46,37 @@ fn psi_avg10(text: &str, kind: &str) -> Option<f64> {
         .ok()
 }
 
-/// The tightest cgroup v2 memory limit over this process: its own cgroup's
-/// and every ancestor's, since a limit on a parent slice binds too. Returns
-/// `(limit, usage, reclaimable)` of the binding level, where reclaimable is
-/// that cgroup's `inactive_file` page cache, which the kernel takes back
-/// before it fails an allocation. `max` (no limit) everywhere is `None`.
-fn cgroup_memory() -> (Option<u64>, Option<u64>, Option<u64>) {
+/// The cgroup v2 memory limits over this process: its own cgroup's and
+/// every ancestor's, since a limit on a parent slice binds too.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Cgroup {
+    /// The smallest `memory.max` of any level: the most this process's
+    /// cgroup tree can ever hold.
+    max: Option<u64>,
+    /// Usage of the level with the least room left.
+    current: Option<u64>,
+    /// Room left at that level: limit - usage + its reclaimable
+    /// `inactive_file` page cache, which the kernel takes back before it
+    /// fails an allocation.
+    available: Option<u64>,
+    /// That level's `memory.pressure` (PSI of the tasks in it), when present.
+    pressure: Option<std::path::PathBuf>,
+}
+
+fn cgroup_memory() -> Cgroup {
     let Ok(cgroup) = fs::read_to_string("/proc/self/cgroup") else {
-        return (None, None, None);
+        return Cgroup::default();
     };
     let Some(rel) = cgroup.lines().find_map(|l| l.strip_prefix("0::")) else {
-        return (None, None, None);
+        return Cgroup::default();
     };
     cgroup_memory_at(std::path::Path::new("/sys/fs/cgroup"), rel)
 }
 
 /// [`cgroup_memory`] for the cgroup `rel` under the hierarchy mounted at
 /// `root`.
-fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
-    let mut best: Option<(u64, u64, u64)> = None;
+fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> Cgroup {
+    let mut out = Cgroup::default();
     let mut path = root.join(rel.trim_start_matches('/').trim_end_matches('/'));
     loop {
         let num = |file: &str| {
@@ -72,6 +84,7 @@ fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> (Option<u64>, Option<u
                 .ok()
                 .and_then(|s| s.trim().parse::<u64>().ok())
         };
+        // `max` means no limit and does not parse: that level is skipped.
         if let (Some(max), Some(current)) = (num("memory.max"), num("memory.current")) {
             let inactive = fs::read_to_string(path.join("memory.stat"))
                 .ok()
@@ -81,29 +94,35 @@ fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> (Option<u64>, Option<u
                         .and_then(|v| v.trim().parse().ok())
                 })
                 .unwrap_or(0);
-            let headroom = max
+            let room = max
                 .saturating_sub(current)
                 .saturating_add(inactive)
                 .min(max);
-            if best.is_none_or(|(m, c, i)| headroom < m.saturating_sub(c).saturating_add(i).min(m))
-            {
-                best = Some((max, current, inactive));
+            out.max = Some(out.max.map_or(max, |m| m.min(max)));
+            if out.available.is_none_or(|a| room < a) {
+                out.available = Some(room);
+                out.current = Some(current);
+                let psi = path.join("memory.pressure");
+                out.pressure = psi.is_file().then_some(psi);
             }
         }
         if path == root || !path.pop() {
             break;
         }
     }
-    match best {
-        Some((max, current, inactive)) => (Some(max), Some(current), Some(inactive)),
-        None => (None, None, None),
-    }
+    out
 }
 
 pub fn host_memory() -> Result<HostMemory> {
     let meminfo = read("/proc/meminfo", "read meminfo")?;
-    let psi = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
-    let (cgroup_max, cgroup_current, cgroup_reclaimable) = cgroup_memory();
+    let cg = cgroup_memory();
+    // Stalls of the tasks under the binding limit, when there is one: the
+    // host can be idle while this cgroup thrashes against its own limit.
+    let psi_path = cg
+        .pressure
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("/proc/pressure/memory"));
+    let psi = fs::read_to_string(&psi_path).unwrap_or_default();
     let swap_total = required(&meminfo, "SwapTotal")?;
     let raw = LinuxMem {
         mem_free: required(&meminfo, "MemFree")?,
@@ -111,8 +130,10 @@ pub fn host_memory() -> Result<HostMemory> {
         cached: required(&meminfo, "Cached")?,
         psi_some_avg10: psi_avg10(&psi, "some"),
         psi_full_avg10: psi_avg10(&psi, "full"),
-        cgroup_max_bytes: cgroup_max,
-        cgroup_current_bytes: cgroup_current,
+        psi_from: psi_path.display().to_string(),
+        cgroup_max_bytes: cg.max,
+        cgroup_current_bytes: cg.current,
+        cgroup_available_bytes: cg.available,
     };
     // Inside a memory-limited cgroup the limit is the machine as far as
     // this process is concerned: both totals and availability are the
@@ -121,17 +142,10 @@ pub fn host_memory() -> Result<HostMemory> {
         required(&meminfo, "MemTotal")?,
         required(&meminfo, "MemAvailable")?,
     );
-    let (total, available) = match (cgroup_max, cgroup_current) {
-        (Some(max), Some(current)) => (
-            host_total.min(max),
-            host_available.min(
-                max.saturating_sub(current)
-                    .saturating_add(cgroup_reclaimable.unwrap_or(0))
-                    .min(max),
-            ),
-        ),
-        _ => (host_total, host_available),
-    };
+    let total = cg.max.map_or(host_total, |m| host_total.min(m));
+    let available = cg
+        .available
+        .map_or(host_available, |a| host_available.min(a));
     Ok(HostMemory {
         taken_at_ms: now_ms(),
         total_bytes: total,
@@ -200,16 +214,24 @@ pub fn list_processes() -> Result<Vec<ProcessEntry>> {
 /// user: AMD through amdgpu's sysfs files, NVIDIA through `nvidia-smi`
 /// (the NVML library behind it is NVIDIA's; hearth runs the tool rather
 /// than linking it). A machine with neither reports none.
-pub fn accelerators() -> Result<Vec<Accelerator>> {
-    let mut out = amd_gpus(std::path::Path::new("/sys/class/drm"));
-    out.extend(nvidia_gpus());
+pub fn accelerators(query_timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
+    let mut out = amd_gpus(std::path::Path::new("/sys/class/drm"))?;
+    out.extend(nvidia_gpus(query_timeout)?);
     Ok(out)
 }
 
-fn amd_gpus(drm: &std::path::Path) -> Vec<Accelerator> {
-    let mut cards: Vec<std::path::PathBuf> = fs::read_dir(drm)
-        .into_iter()
-        .flatten()
+fn amd_gpus(drm: &std::path::Path) -> Result<Vec<Accelerator>> {
+    let entries = match fs::read_dir(drm) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(SenseError::Os {
+                call: "read_dir /sys/class/drm",
+                detail: e.to_string(),
+            });
+        }
+    };
+    let mut cards: Vec<std::path::PathBuf> = entries
         .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         // card0, card1: not their connectors (card0-DP-1).
@@ -221,7 +243,7 @@ fn amd_gpus(drm: &std::path::Path) -> Vec<Accelerator> {
         })
         .collect();
     cards.sort();
-    cards
+    Ok(cards
         .into_iter()
         .filter_map(|card| {
             let dev = card.join("device");
@@ -230,38 +252,73 @@ fn amd_gpus(drm: &std::path::Path) -> Vec<Accelerator> {
                     .ok()
                     .and_then(|s| s.trim().parse::<u64>().ok())
             };
-            let total = num("mem_info_vram_total")?;
+            let vram = num("mem_info_vram_total")?;
+            let card_name = card.file_name().map(|n| n.to_string_lossy().into_owned());
             let name = fs::read_to_string(dev.join("product_name"))
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| format!("AMD GPU {}", card.display()));
+                .unwrap_or_else(|| format!("AMD GPU {}", card_name.unwrap_or_default()));
+            // An APU's VRAM is only the firmware's carve-out; it can use far
+            // more system memory through GTT, so it is unified memory.
+            let gtt = num("mem_info_gtt_total").filter(|&g| g > vram);
             Some(Accelerator {
                 name,
-                unified_memory: false,
-                total_bytes: Some(total),
+                unified_memory: gtt.is_some(),
+                total_bytes: Some(gtt.unwrap_or(vram)),
                 recommended_working_set_bytes: None,
                 wired_limit_bytes: None,
                 used_bytes: num("mem_info_vram_used"),
             })
         })
-        .collect()
+        .collect())
 }
 
-fn nvidia_gpus() -> Vec<Accelerator> {
-    let Ok(out) = std::process::Command::new("nvidia-smi")
+/// NVIDIA GPUs from `nvidia-smi`, which is killed if it has not answered
+/// within `timeout`: a wedged driver leaves it stuck in the kernel, and the
+/// commands asking must not wait with it. No `nvidia-smi` means no NVIDIA
+/// GPU; any other failure (a driver and library mismatch) is an error.
+fn nvidia_gpus(timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
+    use std::io::Read as _;
+    let fail = |detail: String| SenseError::Os {
+        call: "nvidia-smi",
+        detail,
+    };
+    let mut child = match std::process::Command::new("nvidia-smi")
         .args([
             "--query-gpu=name,memory.total,memory.used",
             "--format=csv,noheader,nounits",
         ])
-        .output()
-    else {
-        return Vec::new();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(fail(e.to_string())),
     };
-    if !out.status.success() {
-        return Vec::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Some(mut out) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = out.read_to_string(&mut text);
+            let _ = tx.send(text);
+        });
     }
-    parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout))
+    let Ok(text) = rx.recv_timeout(timeout) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(fail(format!("did not answer within {timeout:?}; killed")));
+    };
+    let status = child.wait().map_err(|e| fail(e.to_string()))?;
+    if !status.success() {
+        let mut err = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut err);
+        }
+        return Err(fail(format!("{status}: {}", err.trim())));
+    }
+    Ok(parse_nvidia_smi(&text))
 }
 
 /// `name, total MiB, used MiB` per line, as nvidia-smi prints them.
@@ -472,9 +529,17 @@ mod tests {
         fs::write(dev.join("mem_info_vram_total"), "25753026560\n").unwrap();
         fs::write(dev.join("mem_info_vram_used"), "1073741824\n").unwrap();
         fs::write(dev.join("product_name"), "Radeon RX 7900 XTX\n").unwrap();
-        let amd = amd_gpus(&drm);
-        assert_eq!(amd.len(), 1);
+        // An APU: a small carve-out, a large GTT.
+        let apu = drm.join("card2/device");
+        fs::create_dir_all(&apu).unwrap();
+        fs::write(apu.join("mem_info_vram_total"), "536870912").unwrap();
+        fs::write(apu.join("mem_info_gtt_total"), "68719476736").unwrap();
+        let amd = amd_gpus(&drm).unwrap();
+        assert_eq!(amd.len(), 2);
         assert_eq!(amd[0].name, "Radeon RX 7900 XTX");
+        assert!(!amd[0].unified_memory);
+        assert!(amd[1].unified_memory && amd[1].total_bytes == Some(68_719_476_736));
+        assert_eq!(amd[1].name, "AMD GPU card2");
         assert_eq!(amd[0].used_bytes, Some(1_073_741_824));
         fs::remove_dir_all(drm).unwrap();
         let nv = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564, 1234\nbroken line\n");
@@ -500,11 +565,16 @@ mod tests {
         w(&leaf, "max", "100", 0);
         w(&root.join("slice"), "1000", "900", 50);
         // The leaf has no limit; its parent slice does, with 150 left.
+        let cg = cgroup_memory_at(&root, "/slice/app");
         assert_eq!(
-            cgroup_memory_at(&root, "/slice/app"),
-            (Some(1000), Some(900), Some(50))
+            (cg.max, cg.current, cg.available),
+            (Some(1000), Some(900), Some(150))
         );
-        assert_eq!(cgroup_memory_at(&root, "/nowhere"), (None, None, None));
+        // A smaller limit with more room still bounds the total.
+        w(&leaf, "500", "10", 0);
+        let cg = cgroup_memory_at(&root, "/slice/app");
+        assert_eq!((cg.max, cg.available), (Some(500), Some(150)));
+        assert_eq!(cgroup_memory_at(&root, "/nowhere"), Cgroup::default());
         fs::remove_dir_all(root).unwrap();
     }
 

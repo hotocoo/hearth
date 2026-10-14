@@ -35,7 +35,7 @@ mod unsupported {
     pub fn list_processes() -> Result<Vec<ProcessEntry>> {
         Err(SenseError::Unsupported("process list"))
     }
-    pub fn accelerators() -> Result<Vec<Accelerator>> {
+    pub fn accelerators(_query_timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
         Err(SenseError::Unsupported("accelerators"))
     }
     pub fn system_limits() -> Result<SystemLimits> {

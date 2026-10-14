@@ -65,6 +65,12 @@ every_ms = 600000
 within_ms = 604800000
 every_ms = 3600000
 
+[accelerators]
+# How long a GPU driver tool (nvidia-smi) may take to answer before it is
+# killed and the query reported as failed. A wedged driver can leave it
+# stuck in the kernel; doctor, fit and the metrics must not wait with it.
+query_timeout_ms = 5000
+
 [pressure]
 # Linux publishes no memory pressure level, only how much of the last ten
 # seconds tasks stalled waiting for memory (PSI, /proc/pressure/memory). These

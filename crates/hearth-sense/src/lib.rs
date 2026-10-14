@@ -102,9 +102,15 @@ pub struct LinuxMem {
     pub cached: u64,
     pub psi_some_avg10: Option<f64>,
     pub psi_full_avg10: Option<f64>,
-    /// The binding cgroup memory limit (own cgroup or an ancestor's).
+    /// Where `psi_*` were read: the binding cgroup's `memory.pressure`, or
+    /// the host's `/proc/pressure/memory`.
+    pub psi_from: String,
+    /// The smallest cgroup memory limit over this process (own cgroup or an
+    /// ancestor's).
     pub cgroup_max_bytes: Option<u64>,
+    /// Usage, and room left, of the cgroup with the least room.
     pub cgroup_current_bytes: Option<u64>,
+    pub cgroup_available_bytes: Option<u64>,
 }
 
 /// Memory charged to one process.

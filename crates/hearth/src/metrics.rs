@@ -130,11 +130,14 @@ fn machine(out: &mut String) {
             let _ = writeln!(out, "hearth_memory_pressure {level}");
         }
     }
-    let gpus: Vec<hearth_sense::Accelerator> = hearth_sense::accelerators()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|a| !a.unified_memory)
-        .collect();
+    let gpus: Vec<hearth_sense::Accelerator> = match crate::pressure::accelerators() {
+        Ok(all) => all.into_iter().filter(|a| !a.unified_memory).collect(),
+        Err(e) => {
+            // A comment line: scrapers ignore it, a person reading sees why.
+            let _ = writeln!(out, "# gpu memory not read: {}", e.replace('\n', " "));
+            Vec::new()
+        }
+    };
     for (name, help, pick) in [
         (
             "hearth_gpu_memory_total_bytes",
@@ -150,9 +153,15 @@ fn machine(out: &mut String) {
     ] {
         if gpus.iter().any(|a| pick(a).is_some()) {
             family(out, name, "gauge", help);
-            for a in &gpus {
+            // Indexed: two identical cards would otherwise be two series
+            // with one label set, and the scraper would reject the page.
+            for (index, a) in gpus.iter().enumerate() {
                 if let Some(v) = pick(a) {
-                    let _ = writeln!(out, "{name}{{gpu=\"{}\"}} {v}", label(&a.name));
+                    let _ = writeln!(
+                        out,
+                        "{name}{{gpu=\"{}\",index=\"{index}\"}} {v}",
+                        label(&a.name)
+                    );
                 }
             }
         }

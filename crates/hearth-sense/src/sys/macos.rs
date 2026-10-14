@@ -255,7 +255,9 @@ fn pid_path(pid: i32) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
-pub fn accelerators() -> Result<Vec<Accelerator>> {
+/// `_query_timeout` bounds driver queries on platforms that run a tool;
+/// Metal answers in-process.
+pub fn accelerators(_query_timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
     // Creating a Metal device allocates driver state; the limits never change
     // while the machine is up, so read them once.
     static METAL: OnceLock<Option<(String, bool, u64)>> = OnceLock::new();
