@@ -21,6 +21,9 @@ pub enum Kind {
     Ports,
     /// Recorded by `hearth doctor`.
     Doctor,
+    /// Every event of every `hearth run`: starts, readiness, exits, wedges,
+    /// poisonings, give-ups.
+    Run,
 }
 
 impl Kind {
@@ -28,6 +31,7 @@ impl Kind {
         match self {
             Self::Ports => crate::ports::KIND,
             Self::Doctor => crate::doctor::KIND,
+            Self::Run => crate::run::KIND,
         }
     }
 
@@ -35,13 +39,18 @@ impl Kind {
         match self {
             Self::Ports => crate::ports::summary(body),
             Self::Doctor => crate::doctor::summary(body),
+            Self::Run => crate::run::summary(body),
         }
     }
 
-    fn diff(self, before: &Value, after: &Value) -> (Vec<Change>, Vec<Delta>) {
+    fn diff(self, before: &Value, after: &Value) -> Result<(Vec<Change>, Vec<Delta>), String> {
         match self {
-            Self::Ports => crate::ports::diff(before, after),
-            Self::Doctor => crate::doctor::diff(before, after),
+            Self::Ports => Ok(crate::ports::diff(before, after)),
+            Self::Doctor => Ok(crate::doctor::diff(before, after)),
+            Self::Run => Err(
+                "run snapshots are single events, not states; hearth log --kind run lists them"
+                    .into(),
+            ),
         }
     }
 }
@@ -260,7 +269,7 @@ pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
     let kind = args.kind;
     let resolve = |r: &str| journal.resolve(kind.name(), r).map_err(|e| e.to_string());
     let (from, to) = (resolve(&args.from)?, resolve(&args.to)?);
-    let (changes, mut deltas) = kind.diff(&from.body, &to.body);
+    let (changes, mut deltas) = kind.diff(&from.body, &to.body)?;
     deltas.retain(|d| d.by != 0);
     deltas.sort_by_key(|d| (d.unit, std::cmp::Reverse(d.by.unsigned_abs())));
     if let Some(limit) = args.limit {

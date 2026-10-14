@@ -18,6 +18,15 @@ pub struct Config {
     pub discovery: Discovery,
     pub state: State,
     pub supervise: Supervise,
+    pub notify: Notify,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Notify {
+    pub desktop: bool,
+    pub webhook_url: Option<String>,
+    pub timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +120,19 @@ impl Config {
                 &0,
                 "must be at least 1, or a snapshot would be deleted as it is written",
             );
+        }
+        let n = &self.notify;
+        if let Some(url) = &n.webhook_url
+            && !(url.starts_with("http://") || url.starts_with("https://"))
+        {
+            return invalid(
+                "notify.webhook_url",
+                url,
+                "must be an http:// or https:// URL",
+            );
+        }
+        if n.timeout_ms == 0 {
+            return invalid("notify.timeout_ms", &0, "must be at least 1");
         }
         let v = &self.supervise;
         for (key, value) in [
@@ -256,6 +278,7 @@ mod tests {
             "[supervise]\nbackoff_start_ms = 9\nbackoff_max_ms = 8\n",
             "[supervise]\nbackoff_max_ms = 60001\n",
             "[supervise]\nbackoff_factor = 0\n",
+            "[notify]\nwebhook_url = \"file:///etc/passwd\"\n",
             "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
         ] {
             assert!(

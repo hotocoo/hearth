@@ -151,7 +151,7 @@ fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": { "type": "string", "enum": ["ports", "doctor"], "description": "Which command's snapshots (default ports)." },
+                    "kind": { "type": "string", "enum": ["ports", "doctor", "run"], "description": "Which command's snapshots (default ports). run lists every event of hearth run: starts, readiness, exits, wedges, poisoned backends, give-ups." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Only the most recent N." }
                 }
             }

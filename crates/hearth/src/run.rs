@@ -12,9 +12,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use hearth_core::state::Journal;
 use hearth_runtime::supervise::{
     Decision, Event, Preflight, Probe, RestartPolicy, Settings, Supervised, preflight,
 };
+
+/// The journal kind `run` records its events under.
+pub const KIND: &str = "run";
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -47,6 +51,33 @@ fn settings(c: &hearth_core::config::Supervise) -> Settings {
         ready_timeout: ms(c.ready_timeout_ms),
         stop_grace: ms(c.stop_grace_ms),
         unresponsive_probes: c.unresponsive_probes,
+    }
+}
+
+/// One line for `hearth log`.
+pub fn summary(body: &serde_json::Value) -> String {
+    let event = &body["event"];
+    let decision = event["decision"]
+        .as_str()
+        .map_or(String::new(), |d| format!(" ({d})"));
+    format!(
+        "{} {}{decision} · {}",
+        body["addr"].as_str().unwrap_or("?"),
+        event["event"].as_str().unwrap_or("?"),
+        body["command"].as_str().unwrap_or("?")
+    )
+}
+
+/// Events a person should hear about without watching the terminal.
+fn alarming(event: &Event) -> bool {
+    let gave_up = |d: &Decision| matches!(d, Decision::GiveUp { .. });
+    match event {
+        Event::Poisoned { .. } | Event::Wedged { .. } | Event::Lost { .. } => true,
+        Event::Exited { decision, .. }
+        | Event::NotReady { decision, .. }
+        | Event::PortTaken { decision, .. }
+        | Event::SpawnFailed { decision, .. } => gave_up(decision),
+        Event::Started { .. } | Event::Ready { .. } | Event::Noticed { .. } => false,
     }
 }
 
@@ -197,7 +228,18 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     }
     let (program, rest) = args.command.split_first().ok_or("no command given")?;
     find_program(program)?;
+    let command_line = args
+        .command
+        .iter()
+        .map(|a| a.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
     let (program, rest) = (program.clone(), rest.to_vec());
+    let journal = Journal::open(config.state.max_snapshots_per_kind);
+    if let Err(e) = &journal {
+        eprintln!("hearth: run events will not be recorded: {e}");
+    }
+    let mut sending = Vec::new();
     let make = Box::new(move || {
         let mut c = Command::new(&program);
         c.args(&rest);
@@ -218,6 +260,27 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         let polled = Instant::now();
         if let Some(event) = supervised.poll() {
             let t_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let record = serde_json::json!({
+                "addr": probe.addr,
+                "expect": args.expect,
+                "command": command_line,
+                "t_ms": t_ms,
+                "event": event,
+            });
+            if let Ok(journal) = &journal
+                && let Err(e) = journal.record(KIND, &record)
+            {
+                eprintln!("hearth: event not recorded: {e}");
+            }
+            if alarming(&event) {
+                let title = format!("hearth: {}", probe.addr);
+                sending.extend(crate::notify::send(
+                    &config.notify,
+                    &title,
+                    &describe(&event),
+                    &record,
+                ));
+            }
             let line = if json {
                 let mut v = serde_json::to_value(&event).map_err(|e| e.to_string())?;
                 v["t_ms"] = t_ms.into();
@@ -233,9 +296,53 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         }
         std::thread::sleep(interval.saturating_sub(polled.elapsed()));
     }
+    for s in sending {
+        // A delivery thread that panicked has already said so on stderr.
+        let _ = s.join();
+    }
     Err(format!(
         "gave up on the server at {} after {} restarts",
         probe.addr,
         supervised.restarts()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_trouble_is_alarming() {
+        let restart = Decision::Restart { after_ms: 1 };
+        let give_up = Decision::GiveUp {
+            exits: 2,
+            window_ms: 1,
+        };
+        let exited = |decision| Event::Exited {
+            code: Some(1),
+            signal: None,
+            decision,
+        };
+        assert!(!alarming(&exited(restart)));
+        assert!(alarming(&exited(give_up)));
+        assert!(alarming(&Event::Poisoned {
+            line: String::new(),
+            stop_error: None,
+            decision: restart,
+        }));
+        assert!(!alarming(&Event::Started { pid: 1 }));
+    }
+
+    #[test]
+    fn log_summary_names_the_event_and_decision() {
+        let body = serde_json::json!({
+            "addr": "127.0.0.1:8081",
+            "command": "llama-server -m m.gguf",
+            "event": { "event": "exited", "decision": "give_up" },
+        });
+        assert_eq!(
+            summary(&body),
+            "127.0.0.1:8081 exited (give_up) · llama-server -m m.gguf"
+        );
+    }
 }

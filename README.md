@@ -59,9 +59,12 @@ cargo build --release -p hearth
 #   keeps the server alive: restarts on exit, wedge, or a poisoned backend in its log (the latched
 #   Metal "recreate the backend" state that still answers /health), SIGTERM then SIGKILL, gives up on a crash loop,
 #   refuses a port someone else serves, and the server dies with hearth even on SIGKILL
+./target/release/hearth log --kind run      # every start, exit, wedge, poisoning and give-up hearth run saw
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.
+
+Set `[notify] desktop = true` or `webhook_url` in your config to be told when `hearth run` finds a poisoned backend or a wedge, or gives up on a crash loop.
 
 Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
 

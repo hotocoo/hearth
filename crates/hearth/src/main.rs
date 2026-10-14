@@ -9,6 +9,7 @@ mod fit;
 mod history;
 mod incidents;
 mod mcp;
+mod notify;
 mod ports;
 mod run;
 mod units;

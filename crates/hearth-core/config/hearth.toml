@@ -73,3 +73,17 @@ stop_grace_ms = 5000
 # called wedged and restarted.
 probe_interval_ms = 1000
 unresponsive_probes = 3
+
+[notify]
+# Who hears about a server hearth gave up on, one it found wedged, or one
+# whose backend poisoned itself. Both channels are off by default.
+
+# A desktop notification: osascript on macOS, notify-send on Linux.
+desktop = false
+
+# POST the event as JSON to this URL with curl (http:// or https://), e.g.
+# an ntfy topic or a chat webhook. Unset means no webhook.
+# webhook_url = "https://ntfy.sh/your-topic"
+
+# How long one webhook delivery may take.
+timeout_ms = 5000
