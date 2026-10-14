@@ -697,7 +697,15 @@ fn describe(identity: &Identity) -> String {
             } else {
                 loaded
                     .iter()
-                    .map(|l| format!("{} ({})", l.name, l.size_bytes.map_or("?".into(), bytes)))
+                    .map(|l| {
+                        format!(
+                            "{} ({}{})",
+                            l.name,
+                            l.size_bytes.map_or("?".into(), bytes),
+                            l.context_length
+                                .map_or(String::new(), |c| format!(", ctx {c}"))
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             }
