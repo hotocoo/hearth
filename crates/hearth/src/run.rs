@@ -196,14 +196,23 @@ pub(crate) fn listener_of(port: u16, tether: u32) -> Result<Option<i32>, String>
         .min())
 }
 
-/// Adds to a ready event's record what the server holds in memory once it
-/// serves (`footprint_at_ready`), so a later fit of the same model can say
-/// what a start of it measured. A footprint that cannot be read is
-/// recorded as the reason instead.
-pub(crate) fn footprint_at_ready(record: &mut serde_json::Value, server_pid: i32) {
-    record["footprint_at_ready"] = match hearth_sense::process_footprint(server_pid) {
-        Ok(f) => serde_json::to_value(f).unwrap_or_default(),
-        Err(e) => serde_json::json!({ "error": e.to_string() }),
+/// Adds to a ready event's record what the server held in memory at the
+/// moment it became ready (`footprint_at_ready`), so a later fit of the
+/// same model can say what a start of it measured. `listener` is what
+/// [`listener_of`] found; when there is no footprint, the reason is
+/// recorded instead.
+pub(crate) fn footprint_at_ready(
+    record: &mut serde_json::Value,
+    listener: &Result<Option<i32>, String>,
+) {
+    let error = |e: String| serde_json::json!({ "error": e });
+    record["footprint_at_ready"] = match listener {
+        Ok(Some(pid)) => match hearth_sense::process_footprint(*pid) {
+            Ok(f) => serde_json::to_value(f).unwrap_or_else(|e| error(e.to_string())),
+            Err(e) => error(e.to_string()),
+        },
+        Ok(None) => error("no process of the server's group listens on its port".into()),
+        Err(e) => error(format!("cannot list processes: {e}")),
     };
 }
 
@@ -222,10 +231,8 @@ fn journal_record(
         "t_ms": t_ms,
         "event": event,
     });
-    if let Event::Ready { pid, .. } = event
-        && let Ok(Some(server)) = listener_of(addr.port(), *pid)
-    {
-        footprint_at_ready(&mut record, server);
+    if let Event::Ready { pid, .. } = event {
+        footprint_at_ready(&mut record, &listener_of(addr.port(), *pid));
     }
     record
 }

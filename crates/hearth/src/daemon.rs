@@ -424,15 +424,19 @@ fn supervise(
             use hearth_runtime::supervise::Event as E;
             // The server's pid is learned when it is ready and forgotten as
             // soon as it is gone, so nothing measures a pid since reused.
+            let mut ready = None;
             let listening = match &event {
-                E::Ready { pid, .. } => Some(
-                    crate::run::listener_of(address(server).port(), *pid).unwrap_or_else(|e| {
+                E::Ready { pid, .. } => {
+                    let found = crate::run::listener_of(address(server).port(), *pid);
+                    if let Err(e) = &found {
                         log(&format!(
                             "cannot list processes to find the server's pid: {e}"
                         ));
-                        None
-                    }),
-                ),
+                    }
+                    let pid = found.clone().unwrap_or(None);
+                    ready = Some(found);
+                    Some(pid)
+                }
                 E::Started { .. } | E::Noticed { .. } => None,
                 _ => Some(None),
             };
@@ -446,8 +450,8 @@ fn supervise(
                 "command": server.command.first(),
                 "event": event,
             });
-            if let Some(Some(pid)) = listening {
-                crate::run::footprint_at_ready(&mut record, pid);
+            if let Some(found) = &ready {
+                crate::run::footprint_at_ready(&mut record, found);
             }
             log(&format!("[{name}] {}", crate::run::describe(&event)));
             crate::run::keep(

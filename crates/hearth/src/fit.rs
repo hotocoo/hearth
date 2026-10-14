@@ -408,7 +408,7 @@ fn measured_compute_in(
         // memory-mapped weights is what the P0 gate (ADR-000) settles.
         let held = footprint.map_or_else(String::new, |f| {
             format!(
-                "; once serving, that server's footprint was {} (not used in the verdict until ADR-000's gate says how mapped weights count)",
+                "; at the moment it became ready, that server's footprint was {} (one reading; it may leave out memory-mapped weights, so it is not used in the verdict until ADR-000's gate says how they count)",
                 bytes(f)
             )
         });
