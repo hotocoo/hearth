@@ -9,6 +9,10 @@
           "type": "integer",
           "minimum": 1,
           "description": "Seconds between the two samples."
+        },
+        "explain": {
+          "type": "boolean",
+          "description": "Also return where every number comes from: kernel counter, sysctl or file, and the formula that combines them."
         }
       }
     },

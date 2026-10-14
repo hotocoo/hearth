@@ -51,6 +51,7 @@ Release archives (macOS arm64, Linux x86_64 and aarch64, static) are built by `.
 cargo build --release -p hearth
 ./target/release/hearth doctor              # memory, open files, threads vs kernel limits; who holds them
 ./target/release/hearth doctor --watch 30   # project time to each limit from measured growth
+./target/release/hearth doctor --explain    # where every number comes from: counter, sysctl, formula
 ./target/release/hearth incidents           # macOS: panics (watchdog / GPU driver), jetsam, stalls; Linux: OOM kills, hung tasks
 ./target/release/hearth fit model.gguf --ctx 32768 --cache-type q8_0   # fits the device? fits now? max context?
 ./target/release/hearth fit qwen3:8b --ctx 32768 --cache-type q8_0     # an Ollama model, read from its store

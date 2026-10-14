@@ -47,11 +47,20 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
         source,
     };
     let m = &h.memory;
-    let mut out = vec![d(
-        "memory.total",
-        bytes(m.total_bytes),
-        "hw.memsize / MemTotal".into(),
-    )];
+    let macos = matches!(m.raw, hearth_sense::RawHost::Macos(_));
+    let (total_from, swap_from) = if macos {
+        ("sysctl hw.memsize", "sysctl vm.swapusage")
+    } else {
+        (
+            "/proc/meminfo MemTotal",
+            "/proc/meminfo SwapTotal - SwapFree",
+        )
+    };
+    let level = m.pressure.map_or_else(
+        || "not published".to_string(),
+        |p| format!("{p:?}").to_lowercase(),
+    );
+    let mut out = vec![d("memory.total", bytes(m.total_bytes), total_from.into())];
     match &m.raw {
         hearth_sense::RawHost::Macos(vm) => {
             let page = |n: u64| bytes(n.saturating_mul(vm.page_size));
@@ -70,10 +79,10 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
             ));
             out.push(d(
                 "memory.pressure",
-                format!("{:?}", m.pressure),
+                level.clone(),
                 format!(
-                    "sysctl kern.memorystatus_vm_pressure_level = {:?} (1 normal, 2 warn, 4 critical)",
-                    vm.vm_pressure_level
+                    "sysctl kern.memorystatus_vm_pressure_level = {} (1 normal, 2 warn, 4 critical)",
+                    vm.vm_pressure_level.map_or("unreadable".into(), |v| v.to_string())
                 ),
             ));
         }
@@ -85,7 +94,7 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
             ));
             out.push(d(
                 "memory.pressure",
-                format!("{:?}", m.pressure),
+                level.clone(),
                 format!(
                     "/proc/pressure/memory: some avg10 {:?}, full avg10 {:?}",
                     l.psi_some_avg10, l.psi_full_avg10
@@ -96,7 +105,7 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
     out.push(d(
         "memory.swap_used",
         bytes(m.swap_used_bytes),
-        "vm.swapusage / SwapTotal - SwapFree".into(),
+        swap_from.into(),
     ));
     let l = &h.limits;
     let shown = |v: Option<u64>| v.map_or("unknown".into(), |n| n.to_string());
