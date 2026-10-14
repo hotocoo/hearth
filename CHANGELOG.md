@@ -4,6 +4,15 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:05 log --all, and fixes for notes
+
+- **`log --all`.** One timeline of every kind, newest first, like `git log --all`: snapshots, run events and notes, each with its kind and `~N`.
+- **Bundle.** `bundle` withholds note text, because notes may quote keys.
+- **Notes.** A note is capped at `state.max_note_bytes`. `note hello --json` no longer records `--json` as part of the message; words that look like flags go after `--`.
+- **Thinning.** `state.thinned_kinds` refuses event kinds (`run`, `note`), which would otherwise be thinned away.
+- **Tags.** A `tag --at` that fails leaves the existing tag as it was.
+- **MCP.** Resources serve notes.
+
 ### 2026-10-15 06:00 notes
 
 - **`hearth note [--by WHO] MESSAGE`.** Records what someone did or saw, such as "lowered -c to 131072 after the pressure", in the journal beside hearth's snapshots. `log --kind note` lists notes, and `--grep` searches them.
