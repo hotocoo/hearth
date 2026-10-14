@@ -197,7 +197,13 @@ fn ports_round(
         .filter(|f| f["severity"] == "warn" && f["code"] != "unresponsive")
         .map(|f| {
             (
-                format!("{}:{}", f["code"].as_str().unwrap_or("finding"), f["pid"]),
+                // One process can serve several models, each its own state.
+                format!(
+                    "{}:{}:{}",
+                    f["code"].as_str().unwrap_or("finding"),
+                    f["pid"],
+                    f["model"].as_str().unwrap_or_default()
+                ),
                 format!(
                     "{}; {}",
                     f["message"].as_str().unwrap_or_default(),

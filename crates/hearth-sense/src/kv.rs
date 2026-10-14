@@ -154,66 +154,121 @@ impl Geometry {
 
     /// Geometry from a Transformers `config.json`, the convention MLX and
     /// safetensors models follow. Multimodal configs keep the language
-    /// model's under `text_config`. Keys: `num_hidden_layers`,
-    /// `num_key_value_heads` (defaults to `num_attention_heads`), `head_dim`
-    /// (defaults to `hidden_size / num_attention_heads`), `sliding_window`
-    /// with `layer_types` naming each layer's attention, and
-    /// `max_position_embeddings` as the trained context.
+    /// model's under `text_config`; a key missing there is looked up at the
+    /// top level, then in the model type's Transformers defaults
+    /// ([`hf_default`]). Keys: `num_hidden_layers`, `num_key_value_heads`
+    /// (defaults to `num_attention_heads`), `head_dim` (defaults to
+    /// `hidden_size / num_attention_heads`), `sliding_window` with
+    /// `layer_types` naming each layer's attention (or a
+    /// `sliding_window_pattern` period), `kv_lora_rank` for latent attention,
+    /// and `max_position_embeddings` as the trained context.
+    #[allow(clippy::too_many_lines)]
     pub fn from_hf_config(config: &serde_json::Value) -> Result<Self> {
         let c = if config["text_config"].is_object() {
             &config["text_config"]
         } else {
             config
         };
-        let num = |k: &str| c[k].as_u64();
-        let need = |k: &'static str| {
-            num(k).ok_or(SenseError::Parse {
-                what: "config.json geometry",
-                detail: format!("missing {k}"),
-            })
-        };
         let arch = c["model_type"]
             .as_str()
             .or_else(|| config["model_type"].as_str())
-            .unwrap_or("unknown")
-            .to_string();
+            .unwrap_or("unknown");
+        let num = |k: &str| {
+            c[k].as_u64()
+                .or_else(|| config[k].as_u64())
+                .or_else(|| hf_default(arch, k))
+        };
+        let need = |k: &'static str| {
+            num(k).ok_or_else(|| SenseError::Parse {
+                what: "config.json geometry",
+                detail: format!(
+                    "missing {k} (model type {arch}; Transformers may fill it from defaults hearth does not know)"
+                ),
+            })
+        };
         let n = usize::try_from(need("num_hidden_layers")?).map_err(|_| SenseError::Parse {
             what: "config.json geometry",
             detail: "num_hidden_layers too large".into(),
         })?;
-        let heads = need("num_attention_heads")?;
-        let kv_heads = num("num_key_value_heads").unwrap_or(heads);
-        let head_dim = match num("head_dim") {
-            Some(d) => d,
-            None => need("hidden_size")? / heads.max(1),
-        };
         let mut notes = Vec::new();
         let mut confidence = Confidence::High;
-        let window = num("sliding_window");
+        let heads = need("num_attention_heads")?;
+        if let Some(rank) = num("kv_lora_rank") {
+            let layers = latent_layers(rank, heads, &num, &mut notes)?;
+            return Ok(Self {
+                arch: arch.to_string(),
+                trained_context: num("max_position_embeddings"),
+                layers: vec![layers; n],
+                confidence: Confidence::Medium,
+                notes,
+            });
+        }
+        let kv_heads = num("num_key_value_heads").unwrap_or(heads);
+        let head_dim = if let Some(d) = num("head_dim") {
+            d
+        } else {
+            confidence = Confidence::Medium;
+            notes.push("no head_dim: taken as hidden_size / num_attention_heads".into());
+            need("hidden_size")? / heads.max(1)
+        };
+        let window = num("sliding_window").filter(|&w| w > 0);
         let kinds: Option<Vec<&str>> = c["layer_types"]
             .as_array()
             .map(|a| a.iter().filter_map(serde_json::Value::as_str).collect());
+        let period = num("sliding_window_pattern").filter(|&p| p > 0);
+        let mut unknown: Vec<&str> = Vec::new();
         let layers = (0..n)
             .map(|i| {
                 let kind = kinds.as_ref().and_then(|k| k.get(i).copied());
+                let full = Layer::Full {
+                    kv_heads,
+                    k_len: head_dim,
+                    v_len: head_dim,
+                };
+                let sliding = |window| Layer::Sliding {
+                    kv_heads,
+                    k_len: head_dim,
+                    v_len: head_dim,
+                    window,
+                };
                 match (kind, window) {
-                    (Some("sliding_attention"), Some(window)) => Layer::Sliding {
-                        kv_heads,
-                        k_len: head_dim,
-                        v_len: head_dim,
-                        window,
-                    },
+                    _ if kv_heads == 0 => Layer::Recurrent,
+                    (Some("sliding_attention"), Some(w)) => sliding(w),
+                    (Some("full_attention" | "attention"), _) => full,
                     (Some(k), _) if k.contains("linear") || k.contains("mamba") => Layer::Recurrent,
-                    _ => Layer::Full {
-                        kv_heads,
-                        k_len: head_dim,
-                        v_len: head_dim,
+                    (Some(k), _) => {
+                        if !unknown.contains(&k) {
+                            unknown.push(k);
+                        }
+                        full
+                    }
+                    (None, Some(w)) if kinds.is_none() => match period {
+                        Some(p) if !(i as u64 + 1).is_multiple_of(p) => sliding(w),
+                        _ => full,
                     },
+                    (None, _) => full,
                 }
             })
             .collect::<Vec<_>>();
-        if window.is_some() && kinds.is_none() {
-            confidence = Confidence::Medium;
+        if !unknown.is_empty() {
+            confidence = confidence.min(Confidence::Medium);
+            notes.push(format!(
+                "layer types {} costed as full attention, which errs high",
+                unknown.join(", ")
+            ));
+        }
+        if kinds
+            .as_ref()
+            .is_some_and(|k| k.contains(&"sliding_attention"))
+            && window.is_none()
+        {
+            confidence = confidence.min(Confidence::Medium);
+            notes.push(
+                "sliding_attention layers without a sliding_window: costed as full attention, which errs high".into(),
+            );
+        }
+        if window.is_some() && kinds.is_none() && period.is_none() {
+            confidence = confidence.min(Confidence::Medium);
             notes.push(
                 "sliding_window is set but layer_types is not: every layer is costed as full attention, which errs high"
                     .into(),
@@ -226,7 +281,7 @@ impl Geometry {
             );
         }
         Ok(Self {
-            arch,
+            arch: arch.to_string(),
             trained_context: num("max_position_embeddings"),
             layers,
             confidence,
@@ -249,7 +304,11 @@ impl Geometry {
                         kv_heads,
                         k_len,
                         v_len,
-                    } => (cache_tokens, kv_heads * k_len, kv_heads * v_len),
+                    } => (
+                        cache_tokens,
+                        kv_heads.saturating_mul(k_len),
+                        kv_heads.saturating_mul(v_len),
+                    ),
                     Layer::Sliding {
                         kv_heads,
                         k_len,
@@ -257,16 +316,21 @@ impl Geometry {
                         window,
                     } => {
                         let held = swa.map_or(cache_tokens, |s| {
-                            cache_tokens.min(window * s.sequences + s.ubatch)
+                            cache_tokens
+                                .min(window.saturating_mul(s.sequences).saturating_add(s.ubatch))
                         });
-                        (held, kv_heads * k_len, kv_heads * v_len)
+                        (
+                            held,
+                            kv_heads.saturating_mul(k_len),
+                            kv_heads.saturating_mul(v_len),
+                        )
                     }
                     Layer::Latent { k_len, v_len } => (cache_tokens, k_len, v_len),
                     Layer::Recurrent => (0, 0, 0),
                 };
-                tokens * (k.bytes(k_elems) + v.bytes(v_elems))
+                tokens.saturating_mul(k.bytes(k_elems).saturating_add(v.bytes(v_elems)))
             })
-            .sum()
+            .fold(0, u64::saturating_add)
     }
 
     /// Largest total context whose KV cache fits in `budget` bytes, or `None`
@@ -293,6 +357,70 @@ impl Geometry {
         }
         (lo > 0).then_some(lo)
     }
+}
+
+/// Defaults Transformers' configuration classes fill in when a
+/// `config.json` leaves a key out, for the model types whose configs are
+/// known to rely on them (Gemma's `head_dim` is not hidden / heads). Format
+/// facts, as GGUF's key defaults are.
+fn hf_default(model_type: &str, key: &str) -> Option<u64> {
+    match (model_type, key) {
+        ("gemma" | "gemma2" | "gemma3_text", "head_dim") => Some(256),
+        ("gemma2" | "gemma3_text", "num_attention_heads") => Some(8),
+        ("gemma2" | "gemma3_text", "num_key_value_heads") => Some(4),
+        ("gemma3_text", "sliding_window_pattern") => Some(6),
+        _ => None,
+    }
+}
+
+/// One latent-attention (MLA) layer from a Transformers config. Runtimes
+/// differ: llama.cpp caches the compressed latent (`kv_lora_rank +
+/// qk_rope_head_dim` per token), MLX and Transformers the expanded keys and
+/// values (`heads × (qk_nope_head_dim + qk_rope_head_dim)` and `heads ×
+/// v_head_dim`). The larger is costed, so the fit never says yes wrongly.
+fn latent_layers(
+    rank: u64,
+    heads: u64,
+    num: &dyn Fn(&str) -> Option<u64>,
+    notes: &mut Vec<String>,
+) -> Result<Layer> {
+    let need = |k: &'static str| {
+        num(k).ok_or_else(|| SenseError::Parse {
+            what: "config.json geometry",
+            detail: format!("latent attention without {k}"),
+        })
+    };
+    let rope = need("qk_rope_head_dim")?;
+    let nope = need("qk_nope_head_dim")?;
+    let v = need("v_head_dim")?;
+    let latent = Layer::Latent {
+        k_len: rank + rope,
+        v_len: rank,
+    };
+    let expanded = Layer::Full {
+        kv_heads: heads,
+        k_len: nope + rope,
+        v_len: v,
+    };
+    let per_token = |l: Layer| match l {
+        Layer::Latent { k_len, v_len } => k_len + v_len,
+        Layer::Full {
+            kv_heads,
+            k_len,
+            v_len,
+        } => kv_heads.saturating_mul(k_len + v_len),
+        _ => 0,
+    };
+    notes.push(format!(
+        "latent attention: a runtime caching the latent needs {} values per token per layer, one caching expanded keys and values (MLX) {}; the larger is costed",
+        per_token(latent),
+        per_token(expanded)
+    ));
+    Ok(if per_token(expanded) >= per_token(latent) {
+        expanded
+    } else {
+        latent
+    })
 }
 
 /// Runtime parameters that bound sliding-window caches.
@@ -366,7 +494,7 @@ impl CacheType {
     #[must_use]
     pub const fn bytes(self, elements: u64) -> u64 {
         let (bytes, per) = self.block();
-        elements.div_ceil(per) * bytes
+        elements.div_ceil(per).saturating_mul(bytes)
     }
 
     /// Every cache type, largest per element first.
@@ -451,6 +579,67 @@ mod tests {
             }
         ));
         assert!(Geometry::from_hf_config(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn transformers_latent_attention_costs_the_larger_layout() {
+        // DeepSeek-V3's attention: MLX caches expanded keys and values.
+        let cfg = serde_json::json!({
+            "model_type": "deepseek_v3", "num_hidden_layers": 61, "num_attention_heads": 128,
+            "num_key_value_heads": 128, "hidden_size": 7168, "kv_lora_rank": 512,
+            "qk_rope_head_dim": 64, "qk_nope_head_dim": 128, "v_head_dim": 128
+        });
+        let g = Geometry::from_hf_config(&cfg).unwrap();
+        assert_eq!(g.confidence, Confidence::Medium);
+        assert_eq!(
+            g.layers[0],
+            Layer::Full {
+                kv_heads: 128,
+                k_len: 192,
+                v_len: 128
+            }
+        );
+        let partial = serde_json::json!({"num_hidden_layers": 1, "num_attention_heads": 1, "kv_lora_rank": 512});
+        assert!(Geometry::from_hf_config(&partial).is_err());
+    }
+
+    #[test]
+    fn transformers_defaults_fill_gemma_configs() {
+        // gemma-3-4b-it leaves the attention keys to Transformers' defaults.
+        let cfg = serde_json::json!({
+            "model_type": "gemma3",
+            "text_config": {"model_type": "gemma3_text", "num_hidden_layers": 12,
+                            "hidden_size": 2560, "sliding_window": 1024}
+        });
+        let g = Geometry::from_hf_config(&cfg).unwrap();
+        assert_eq!(g.confidence, Confidence::High);
+        assert!(matches!(
+            g.layers[0],
+            Layer::Sliding {
+                kv_heads: 4,
+                k_len: 256,
+                window: 1024,
+                ..
+            }
+        ));
+        assert!(matches!(g.layers[5], Layer::Full { .. }));
+        assert!(matches!(g.layers[11], Layer::Full { .. }));
+        let odd = serde_json::json!({
+            "num_hidden_layers": 2, "num_attention_heads": 4, "num_key_value_heads": 0, "head_dim": 64
+        });
+        assert!(
+            Geometry::from_hf_config(&odd)
+                .unwrap()
+                .layers
+                .iter()
+                .all(|l| *l == Layer::Recurrent)
+        );
+        let conv = serde_json::json!({
+            "num_hidden_layers": 2, "num_attention_heads": 4, "head_dim": 64,
+            "layer_types": ["conv", "full_attention"]
+        });
+        let g = Geometry::from_hf_config(&conv).unwrap();
+        assert!(g.notes.iter().any(|n| n.contains("conv")));
     }
 
     use super::*;

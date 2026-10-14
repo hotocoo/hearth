@@ -111,6 +111,11 @@ fn locate(args: &Args) -> Result<(PathBuf, Option<u64>), String> {
 /// `-ctv`/`--cache-type-v`, each f16 (llama.cpp's default) when absent.
 /// `None` when no readable llama-server listens there.
 fn server_cache_types(port: u16) -> Option<(CacheType, CacheType)> {
+    cache_types_from_args(&listener_args(port)?)
+}
+
+/// The command line of the process listening on `port`, when readable.
+fn listener_args(port: u16) -> Option<Vec<String>> {
     let pid = hearth_sense::list_processes()
         .ok()?
         .into_iter()
@@ -121,7 +126,17 @@ fn server_cache_types(port: u16) -> Option<(CacheType, CacheType)> {
                 .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
                 .then_some(p.pid)
         })?;
-    cache_types_from_args(&hearth_sense::process_args(pid).ok()?)
+    hearth_sense::process_args(pid).ok()
+}
+
+/// The value of `--model` (or `--model=VALUE`) on a command line, as
+/// `mlx_lm.server` and vLLM take the model they serve.
+fn model_arg(args: &[String]) -> Option<String> {
+    args.iter().enumerate().find_map(|(i, a)| {
+        a.strip_prefix("--model=")
+            .map(str::to_string)
+            .or_else(|| (a == "--model").then(|| args.get(i + 1).cloned()).flatten())
+    })
 }
 
 /// See [`server_cache_types`]: only a llama-server's arguments say this.
@@ -236,13 +251,22 @@ fn from_server(
                 .map(|p| (p, None))
         }
         // mlx_lm.server and other OpenAI-compatible servers name their
-        // model by repo id or path, which fit resolves like any name.
+        // model by repo id or path, which fit resolves like any name. What
+        // the server was started with wins over what it lists: mlx_lm.server
+        // lists the models in the cache, not the one it serves.
         Identity::OpenAiCompatible { models } => {
-            let name = match (model, models.as_slice()) {
-                (Some(m), _) => m.to_string_lossy().into_owned(),
-                (None, [only]) => only.clone(),
-                (None, []) => return Err(format!("{addr} lists no model; name one with --model")),
-                (None, several) => {
+            let started = model
+                .is_none()
+                .then(|| listener_args(port).as_deref().and_then(model_arg))
+                .flatten();
+            let name = match (model, started, models.as_slice()) {
+                (Some(m), _, _) => m.to_string_lossy().into_owned(),
+                (None, Some(m), _) => m,
+                (None, None, [only]) => only.clone(),
+                (None, None, []) => {
+                    return Err(format!("{addr} lists no model; name one with --model"));
+                }
+                (None, None, several) => {
                     return Err(format!(
                         "{addr} lists several models ({}); pick one with --model",
                         several.join(", ")
@@ -338,8 +362,9 @@ fn weights_and_geometry(model: &std::path::Path) -> Result<(Vec<PathBuf>, u64, G
         let config: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("{}: {e}", config_path.display()))?;
         let mut files: Vec<PathBuf> = std::fs::read_dir(model)
+            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
             .map_err(|e| format!("{}: {e}", model.display()))?
-            .filter_map(Result::ok)
+            .into_iter()
             .map(|e| e.path())
             .filter(|p| {
                 p.extension()
@@ -776,5 +801,20 @@ mod port_tests {
         ]);
         let e = from_server(port, None).unwrap_err();
         assert!(e.contains("a:1, b:2"), "{e}");
+    }
+
+    #[test]
+    fn the_model_a_server_was_started_with() {
+        let line = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        assert_eq!(
+            model_arg(&line("python -m mlx_lm.server --model org/m --port 8081")).as_deref(),
+            Some("org/m")
+        );
+        assert_eq!(
+            model_arg(&line("vllm serve --model=/m")).as_deref(),
+            Some("/m")
+        );
+        assert_eq!(model_arg(&line("python -m mlx_lm.server --model")), None);
+        assert_eq!(model_arg(&line("python -m mlx_lm.server")), None);
     }
 }

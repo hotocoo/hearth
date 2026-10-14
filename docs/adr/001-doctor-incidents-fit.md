@@ -177,14 +177,18 @@ When the context does not fit, `fits_device_with` names the cache types it would
 
 `fit` also takes a model directory with `config.json` and `.safetensors` files, which is how MLX (`mlx_lm.server`) and Transformers models are stored. The Hugging Face cache lookup returns such a repo as a directory. The weights are the safetensors files' total size; for MLX they are already quantized.
 
-The geometry follows the same rules as for GGUF, from the config's Transformers keys:
+The geometry comes from the config's Transformers keys:
 - `num_hidden_layers`;
-- `num_key_value_heads`, defaulting to the attention heads;
-- `head_dim`, defaulting to `hidden_size / heads`;
-- `sliding_window` with per-layer `layer_types`, where linear or mamba layers are recurrent;
+- `num_key_value_heads`, defaulting to the attention heads; 0 marks a recurrent layer;
+- `head_dim`, defaulting to `hidden_size / heads` (medium confidence, with a note);
+- `sliding_window` with per-layer `layer_types`, or a `sliding_window_pattern` period; linear or mamba layers are recurrent; an unknown layer type is costed as full attention with a note;
 - `max_position_embeddings` as the trained context.
 
-A multimodal config's `text_config` is used.
+A multimodal config's `text_config` is used. A key missing there is read from the top level, then from the Transformers defaults of that model type. Gemma configs rely on those defaults: their `head_dim` is 256, not `hidden_size / heads`, so deriving it would undercount.
 
-A sliding window without `layer_types` is costed as full attention and marked medium confidence.
+Latent attention (`kv_lora_rank`, as in DeepSeek and Kimi) differs from GGUF. llama.cpp caches the compressed latent (`kv_lora_rank + qk_rope_head_dim` per token). MLX caches expanded keys and values (`heads × (qk_nope_head_dim + qk_rope_head_dim)` and `heads × v_head_dim`), which for DeepSeek-V3 is about 2.9 times as much. `fit` costs the larger, at medium confidence, so it never says a model fits when a runtime would not hold it.
+
+A sliding window without `layer_types` or a pattern is costed as full attention and marked medium confidence.
+
+On `--port` with an OpenAI-compatible server, the `--model` the server was started with wins over its `/v1/models` listing, because `mlx_lm.server` lists the models in the cache, not the one it serves.
 

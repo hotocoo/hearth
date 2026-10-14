@@ -97,6 +97,9 @@ struct Finding {
     /// watch` tells a new problem from one it already reported.
     code: &'static str,
     pid: i32,
+    /// The model it is about, when one process serves several.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     message: String,
     remediation: String,
 }
@@ -467,13 +470,16 @@ fn partially_offloaded(ports: &[Port]) -> Vec<Finding> {
             let (Some(size), Some(vram)) = (m.size_bytes, m.size_vram_bytes) else {
                 continue;
             };
-            if vram >= size {
+            // Nothing on the accelerator is a host without one, or a
+            // deliberate num_gpu 0; only a split is a lack of room.
+            if vram >= size || vram == 0 {
                 continue;
             }
             out.push(Finding {
                 severity: "warn",
                 code: "partial_offload",
                 pid: p.pid,
+                model: Some(m.name.clone()),
                 message: format!(
                     "{} on {}: only {} of {} is on the accelerator; the rest runs on the CPU",
                     m.name,
@@ -546,6 +552,7 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
             Some(Finding {
                 code: "oversized",
                 pid: p.pid,
+                model: None,
                 severity: "warn",
                 message: format!(
                     "{} (pid {}) on {} is configured past the device: its context needs {} of {} ({})",
@@ -587,6 +594,7 @@ fn findings(ports: &[Port]) -> Vec<Finding> {
             out.push(Finding {
                 code: "unresponsive",
                 pid: p.pid,
+                model: None,
                 severity: if runtime_pids.contains(&p.pid) {
                     "warn"
                 } else {
@@ -606,6 +614,7 @@ fn findings(ports: &[Port]) -> Vec<Finding> {
             out.push(Finding {
                 code: "slow",
                 pid: p.pid,
+                model: None,
                 severity: "warn",
                 message: format!(
                     "{} (pid {}) on {} answered only after its learned deadline ({})",
@@ -624,6 +633,7 @@ fn findings(ports: &[Port]) -> Vec<Finding> {
             Identity::LlamaCpp { health, .. } if health != "ok" => out.push(Finding {
                 code: "not_ready",
                 pid: p.pid,
+                model: None,
                 severity: "info",
                 message: format!(
                     "llama-server on {} is not ready: {health}",
@@ -1070,6 +1080,7 @@ mod tests {
         };
         assert_eq!(partially_offloaded(&[mk(60)]).len(), 1);
         assert!(partially_offloaded(&[mk(100)]).is_empty());
+        assert!(partially_offloaded(&[mk(0)]).is_empty());
     }
 
     #[test]

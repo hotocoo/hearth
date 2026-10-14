@@ -205,20 +205,19 @@ fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
         let store = store.name();
         // A repo of safetensors with a config.json (MLX, Transformers) is
         // fitted as a whole directory.
-        let safetensors_repo = candidates.is_empty()
-            && quant.is_none()
-            && files.join("config.json").is_file()
-            && std::fs::read_dir(&files).is_ok_and(|mut d| {
-                d.any(|e| {
-                    e.is_ok_and(|e| {
-                        e.path()
-                            .extension()
-                            .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
-                    })
-                })
-            });
-        if safetensors_repo {
-            return Some(Ok(files));
+        if candidates.is_empty() && quant.is_none() && files.join("config.json").is_file() {
+            let entries =
+                match std::fs::read_dir(&files).and_then(Iterator::collect::<Result<Vec<_>, _>>) {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(format!("{}: {e}", files.display()))),
+                };
+            if entries.iter().any(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
+            }) {
+                return Some(Ok(files));
+            }
         }
         return Some(match candidates.as_slice() {
             [one] => Ok(one.clone()),
