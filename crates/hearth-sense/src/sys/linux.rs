@@ -279,22 +279,67 @@ fn amd_gpus(drm: &std::path::Path) -> Result<Vec<Accelerator>> {
 /// commands asking must not wait with it. No `nvidia-smi` means no NVIDIA
 /// GPU; any other failure (a driver and library mismatch) is an error.
 fn nvidia_gpus(timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
+    Ok(nvidia_smi(
+        &[
+            "--query-gpu=name,memory.total,memory.used",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout,
+    )?
+    .map(|text| parse_nvidia_smi(&text))
+    .unwrap_or_default())
+}
+
+/// Accelerator memory each process holds: NVIDIA's compute processes, as
+/// `nvidia-smi` reports them. Empty when there is no NVIDIA driver.
+pub fn accelerator_process_bytes(timeout: std::time::Duration) -> Result<Vec<(i32, u64)>> {
+    Ok(nvidia_smi(
+        &[
+            "--query-compute-apps=pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        timeout,
+    )?
+    .map(|text| parse_compute_apps(&text))
+    .unwrap_or_default())
+}
+
+/// `pid, used_memory` lines in MiB; a process on several GPUs is summed.
+fn parse_compute_apps(text: &str) -> Vec<(i32, u64)> {
+    let mut out: Vec<(i32, u64)> = Vec::new();
+    for line in text.lines() {
+        let mut f = line.split(',');
+        let (Some(pid), Some(mib)) = (f.next(), f.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(mib)) = (pid.trim().parse::<i32>(), mib.trim().parse::<u64>()) else {
+            continue;
+        };
+        let bytes = mib.saturating_mul(1024 * 1024);
+        match out.iter_mut().find(|(p, _)| *p == pid) {
+            Some((_, b)) => *b = b.saturating_add(bytes),
+            None => out.push((pid, bytes)),
+        }
+    }
+    out
+}
+
+/// Runs `nvidia-smi` with `args`, bounded by `timeout`. `None` when it is
+/// not installed (no NVIDIA driver).
+fn nvidia_smi(args: &[&str], timeout: std::time::Duration) -> Result<Option<String>> {
     use std::io::Read as _;
     let fail = |detail: String| SenseError::Os {
         call: "nvidia-smi",
         detail,
     };
     let mut child = match std::process::Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=name,memory.total,memory.used",
-            "--format=csv,noheader,nounits",
-        ])
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(fail(e.to_string())),
     };
     let (tx, rx) = std::sync::mpsc::channel();
@@ -318,7 +363,7 @@ fn nvidia_gpus(timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
         }
         return Err(fail(format!("{status}: {}", err.trim())));
     }
-    Ok(parse_nvidia_smi(&text))
+    Ok(Some(text))
 }
 
 /// `name, total MiB, used MiB` per line, as nvidia-smi prints them.
@@ -563,6 +608,9 @@ mod tests {
         let nv = parse_nvidia_smi("NVIDIA GeForce RTX 4090, 24564, 1234\nbroken line\n");
         assert_eq!(nv.len(), 1);
         assert_eq!(nv[0].total_bytes, Some(24564 * 1024 * 1024));
+        // A process on two GPUs is one entry, summed.
+        let apps = parse_compute_apps("4242, 20480\n77, 512\n4242, 1024\nbad\n");
+        assert_eq!(apps, [(4242, 21504 * 1024 * 1024), (77, 512 * 1024 * 1024)]);
     }
 
     #[test]

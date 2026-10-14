@@ -15,8 +15,8 @@ use serde::Serialize;
 #[cfg(unix)]
 pub use sys::effective_uid;
 pub use sys::{
-    LIMIT_SOURCES, accelerators, host_memory, list_processes, process_args, process_counts,
-    process_footprint, process_group, system_limits, tcp_sockets,
+    LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
+    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
 };
 
 #[derive(Debug, thiserror::Error)]

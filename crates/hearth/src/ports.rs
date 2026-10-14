@@ -43,6 +43,11 @@ struct Port {
     #[serde(flatten)]
     fingerprint: Fingerprint,
     memory: Option<ProcessFootprint>,
+    /// Accelerator memory the process holds apart from `memory`: a discrete
+    /// GPU's (NVIDIA). Absent where the GPU shares host memory (Apple
+    /// silicon), since the footprint already counts it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accelerator_bytes: Option<u64>,
     deadline: Deadline,
     /// Missed its learned deadline, then answered within the first-contact
     /// one: busy, swapping, or on its way to wedging.
@@ -334,6 +339,16 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
         .collect();
     let results = probe_all(jobs, deadline(None, discovery), max_bytes)?;
 
+    // Asked once for every process, and only when a runtime answered.
+    let any_runtime = results.values().any(|(f, _, _)| is_runtime(&f.identity));
+    let on_accelerator = if any_runtime {
+        crate::pressure::accelerator_process_bytes().unwrap_or_else(|e| {
+            state_errors.push(format!("accelerator memory per process: {e}"));
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
     let ports: Vec<Port> = listeners
         .into_iter()
         .filter_map(|(key, (process, path, bound))| {
@@ -344,6 +359,10 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
             }
             Some(Port {
                 owned_by: owned.get(&key.0).cloned(),
+                accelerator_bytes: on_accelerator
+                    .iter()
+                    .find(|(pid, _)| *pid == key.0)
+                    .map(|(_, b)| *b),
                 pid: key.0,
                 memory: is_runtime
                     .then(|| hearth_sense::process_footprint(key.0).ok())
@@ -931,6 +950,8 @@ fn render(r: &Report) -> String {
     for p in &r.ports {
         let memory = p.memory.as_ref().map_or(String::new(), |m| {
             format!(" · footprint {}", bytes(m.footprint_bytes))
+        }) + &p.accelerator_bytes.map_or(String::new(), |b| {
+            format!(" + {} on the accelerator", bytes(b))
         });
         let _ = writeln!(
             out,
@@ -1092,6 +1113,7 @@ mod tests {
                 latency_us: None,
             },
             memory: None,
+            accelerator_bytes: None,
             deadline: Deadline::FirstContact { us: 1, samples: 0 },
             slow: false,
             owned_by: None,

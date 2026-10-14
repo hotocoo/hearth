@@ -7,16 +7,16 @@ pub use unix::effective_uid;
 mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
-    LIMIT_SOURCES, accelerators, host_memory, list_processes, process_args, process_counts,
-    process_footprint, process_group, system_limits, tcp_sockets,
+    LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
+    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
 };
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
-    LIMIT_SOURCES, accelerators, host_memory, list_processes, process_args, process_counts,
-    process_footprint, process_group, system_limits, tcp_sockets,
+    LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
+    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
 };
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -38,6 +38,11 @@ mod unsupported {
     pub fn accelerators(_query_timeout: std::time::Duration) -> Result<Vec<Accelerator>> {
         Err(SenseError::Unsupported("accelerators"))
     }
+    pub fn accelerator_process_bytes(
+        _query_timeout: std::time::Duration,
+    ) -> Result<Vec<(i32, u64)>> {
+        Err(SenseError::Unsupported("accelerator memory per process"))
+    }
     pub fn system_limits() -> Result<SystemLimits> {
         Err(SenseError::Unsupported("system limits"))
     }
@@ -57,6 +62,6 @@ mod unsupported {
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub use unsupported::{
-    LIMIT_SOURCES, accelerators, host_memory, list_processes, process_args, process_counts,
-    process_footprint, process_group, system_limits, tcp_sockets,
+    LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
+    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
 };
