@@ -19,6 +19,10 @@ pub struct Args {
     /// a GGUF's context is then not sized.
     #[arg(long, value_parser = crate::fit::parse_cache)]
     cache_type: Option<CacheType>,
+    /// Also mark the models a running server serves now, and where (asks
+    /// every listening runtime, as `hearth ports --runtimes` does).
+    #[arg(long)]
+    serving: bool,
 }
 
 #[derive(Serialize)]
@@ -39,8 +43,14 @@ struct Model {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_ctx_device: Option<u64>,
     fits_device: Option<bool>,
+    /// Addresses of the running servers that serve it, with --serving.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    serving_on: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// Where its weights are, to match it against running servers.
+    #[serde(skip)]
+    path: Option<std::path::PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -104,7 +114,9 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
         cache_type: None,
         max_ctx_device: None,
         fits_device: None,
+        serving_on: Vec::new(),
         error: None,
+        path: None,
     };
     let found = source
         .locate(&model.name)
@@ -117,6 +129,7 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
         }
     };
     let cache = cache.or_else(|| crate::fit::dtype_cache_type(&path));
+    model.path = Some(std::fs::canonicalize(&path).unwrap_or(path));
     model.arch = Some(geometry.arch.clone());
     model.weights_bytes = Some(weights);
     model.trained_context = geometry.trained_context;
@@ -128,6 +141,36 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
             .map(|n| geometry.trained_context.map_or(n, |t| n.min(t)))
     });
     model
+}
+
+/// What running servers serve: `(model file, address)` for llama.cpp
+/// servers, `(model name, address)` for Ollama's loaded models.
+type Served = (Vec<(std::path::PathBuf, String)>, Vec<(String, String)>);
+
+fn served() -> Result<Served, String> {
+    let line: Vec<String> = ["hearth", "--json", "ports", "--runtimes"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let report: serde_json::Value =
+        serde_json::from_str(&crate::dispatch(&line)?).map_err(|e| e.to_string())?;
+    let (mut files, mut names) = (Vec::new(), Vec::new());
+    for p in report["ports"].as_array().into_iter().flatten() {
+        let addr = p["addr"].as_str().unwrap_or("?").to_string();
+        if let Some(m) = p["model"].as_str() {
+            let m = std::path::Path::new(m);
+            files.push((
+                std::fs::canonicalize(m).unwrap_or_else(|_| m.to_path_buf()),
+                addr.clone(),
+            ));
+        }
+        for l in p["loaded"].as_array().into_iter().flatten() {
+            if let Some(n) = l["name"].as_str() {
+                names.push((n.to_string(), addr.clone()));
+            }
+        }
+    }
+    Ok((files, names))
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
@@ -146,6 +189,18 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             )
         })
         .collect();
+    let mut models = models;
+    if args.serving {
+        let (files, names) = served()?;
+        for m in &mut models {
+            let by_file = files.iter().filter(|(f, _)| m.path.as_ref() == Some(f));
+            let by_name = names
+                .iter()
+                .filter(|(n, _)| m.store == "ollama" && *n == m.name);
+            m.serving_on = by_file.map(|(_, a)| a.clone()).collect();
+            m.serving_on.extend(by_name.map(|(_, a)| a.clone()));
+        }
+    }
     let report = Report {
         ceiling_bytes: ceiling.as_ref().map(|c| c.bytes),
         ceiling_source: ceiling.map(|c| c.source),
@@ -191,7 +246,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             }
             (None, None) => String::new(),
         };
-        let _ = writeln!(out, "{:<60} [{}]  {line}", m.name, m.store);
+        let serving = if m.serving_on.is_empty() {
+            String::new()
+        } else {
+            format!("  serving on {}", m.serving_on.join(", "))
+        };
+        let _ = writeln!(out, "{:<60} [{}]  {line}{serving}", m.name, m.store);
     }
     for e in &report.errors {
         let _ = writeln!(out, "store unreadable: {e}");

@@ -101,6 +101,10 @@
         "cache_type": {
           "type": "string",
           "description": "KV cache type to size contexts with: f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0 iq4_nl."
+        },
+        "serving": {
+          "type": "boolean",
+          "description": "Also mark which models a running server serves now, and on which address (probes the listening runtimes, as ports with runtimes_only does)."
         }
       }
     },
