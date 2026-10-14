@@ -141,7 +141,7 @@ pub fn weights_of(name: &str, store: Store) -> Result<Vec<String>, String> {
     }
     Ok(ggufs
         .iter()
-        .filter_map(|p| p.file_name()?.to_str().map(|f| format!("{org}/{repo}/{f}")))
+        .filter_map(|p| relative(p, &files).map(|f| format!("{org}/{repo}/{f}")))
         .collect())
 }
 
@@ -204,22 +204,42 @@ fn later_shard(name: &str) -> bool {
 /// Model weights in `dir`: `.gguf` files that are not a multimodal
 /// projector, and of a split model only its first shard.
 fn weights_in(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
+    // Repos often keep each quantization in its own folder
+    // (`Q4_K_M/m-Q4_K_M-00001-of-00002.gguf`), so folders are walked too.
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(d) = pending.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                pending.push(p);
+                continue;
+            }
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             let lower = name.to_ascii_lowercase();
-            p.extension()
+            if p.extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
                 && !lower.contains("mmproj")
                 && !later_shard(&lower)
-        })
-        .collect();
+            {
+                files.push(p);
+            }
+        }
+    }
     files.sort();
     files
+}
+
+/// `path` relative to `base`, with `/` between its parts, as a name's
+/// `FILE` part.
+fn relative(path: &Path, base: &Path) -> Option<String> {
+    let parts: Option<Vec<&str>> = path
+        .strip_prefix(base)
+        .ok()?
+        .components()
+        .map(|c| c.as_os_str().to_str())
+        .collect();
+    Some(parts?.join("/"))
 }
 
 /// `org/repo[:QUANT]` or `org/repo/FILE` split into its parts, if `name`
@@ -241,8 +261,15 @@ pub fn parse(name: &str) -> Option<(String, String, Option<String>, Option<Strin
         [org, repo] if safe(org) && safe(repo) => {
             Some(((*org).into(), (*repo).into(), quant, None))
         }
-        [org, repo, file] if safe(org) && safe(repo) && safe(file) && quant.is_none() => {
-            Some(((*org).into(), (*repo).into(), None, Some((*file).into())))
+        // FILE may be in a folder of the repo: org/repo/Q4_K_M/file.gguf.
+        [org, repo, file @ ..]
+            if safe(org)
+                && safe(repo)
+                && !file.is_empty()
+                && file.iter().all(|f| safe(f))
+                && quant.is_none() =>
+        {
+            Some(((*org).into(), (*repo).into(), None, Some(file.join("/"))))
         }
         _ => None,
     }
@@ -284,9 +311,9 @@ fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
         let candidates: Vec<PathBuf> = weights_in(&files)
             .into_iter()
             .filter(|p| {
+                // The quantization may name the file or its folder.
                 quant.as_ref().is_none_or(|q| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
+                    relative(p, &files)
                         .is_some_and(|n| n.to_ascii_lowercase().contains(&q.to_ascii_lowercase()))
                 })
             })
@@ -318,7 +345,7 @@ fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
                 "{name}: several files in the {store}; name one as {org}/{repo}/FILE or {org}/{repo}:QUANT: {}",
                 several
                     .iter()
-                    .filter_map(|p| p.file_name()?.to_str())
+                    .filter_map(|p| relative(p, &files))
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
@@ -341,7 +368,13 @@ mod tests {
             parse("org/repo/m.gguf").unwrap().3.as_deref(),
             Some("m.gguf")
         );
-        for bad in ["qwen3:8b", "../x/y", "a/b/c/d", "a/../b"] {
+        assert_eq!(
+            parse("org/repo/Q4_K_M/m.gguf").unwrap().3.as_deref(),
+            Some("Q4_K_M/m.gguf")
+        );
+        for bad in [
+            "qwen3:8b", "../x/y", "a/b/../d", "a/../b", "a/b/", "a/b/c:Q4",
+        ] {
             assert_eq!(parse(bad), None, "{bad}");
         }
     }
@@ -362,14 +395,18 @@ mod tests {
         ] {
             std::fs::write(dir.join(f), "").unwrap();
         }
+        std::fs::create_dir_all(dir.join("Q4_K_M")).unwrap();
+        std::fs::write(dir.join("Q4_K_M/m-Q4_K_M-00001-of-00002.gguf"), "").unwrap();
+        std::fs::write(dir.join("Q4_K_M/m-Q4_K_M-00002-of-00002.gguf"), "").unwrap();
         let names: Vec<String> = weights_in(&dir)
             .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .map(|p| relative(p, &dir).unwrap())
             .collect();
         assert_eq!(
             names,
             [
                 "Lord-of-the-Rings-7B.gguf",
+                "Q4_K_M/m-Q4_K_M-00001-of-00002.gguf",
                 "m-Q4_K.gguf",
                 "m-Q8_0-00001-of-00002.gguf"
             ]
