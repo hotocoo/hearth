@@ -15,6 +15,11 @@
 //!   the expected model for `unresponsive_probes` probes in a row is stopped
 //!   and counted as an exit: that is what a wedged scheduler, or a listener
 //!   that died inside a live process, looks like from outside.
+//! * **A poisoned server is restarted.** The server's output is read line by
+//!   line (and passed on to hearth's stderr). A line that says the backend is
+//!   in a permanent error state, like llama.cpp's Metal "recreate the backend
+//!   to recover", stops and restarts it: such a server still answers
+//!   `/health`, and fails every request until it is restarted.
 //! * **A server never outlives its supervisor.** On Unix the server runs in
 //!   its own process group, under a small `sh` tether that holds the
 //!   supervisor's end of a pipe. When the pipe closes, because the
@@ -28,13 +33,16 @@
 //! every rule is tested without a model. Every number comes from the caller,
 //! which reads them from configuration.
 
+use std::io::{BufRead as _, BufReader, Read, Write as _};
 use std::net::SocketAddr;
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use crate::fingerprint::{Identity, fingerprint};
+use crate::signals::{Signal, classify};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartPolicy {
@@ -298,6 +306,20 @@ pub enum Event {
         #[serde(flatten)]
         decision: Decision,
     },
+    /// The server's own output said its backend is in a permanent error
+    /// state; it was stopped.
+    Poisoned {
+        line: String,
+        stop_error: Option<String>,
+        #[serde(flatten)]
+        decision: Decision,
+    },
+    /// The server's output reported something worth knowing that needs no
+    /// action by itself, such as an accelerator out-of-memory error.
+    Noticed {
+        signal: Signal,
+        line: String,
+    },
     /// The operating system could not say whether the server still runs; it
     /// was stopped.
     Lost {
@@ -334,6 +356,8 @@ pub struct Supervised {
     restarts: Restarts,
     epoch: Instant,
     state: State,
+    /// Signals read from the running server's output.
+    signals: Option<Receiver<(Signal, String)>>,
 }
 
 impl Supervised {
@@ -353,6 +377,7 @@ impl Supervised {
             restarts: Restarts::new(settings.restart),
             epoch: now,
             state: State::Waiting { until: now },
+            signals: None,
         }
     }
 
@@ -374,6 +399,8 @@ impl Supervised {
     /// Records an exit at the current time, after any stop has finished, so
     /// the back-off is measured from when the server was really gone.
     fn after_exit(&mut self, ready_since: Option<Instant>) -> Decision {
+        // What the old server said must not act on the next one.
+        self.signals = None;
         let now = Instant::now();
         let at = |t: Instant| t.duration_since(self.epoch);
         let decision = self.restarts.on_exit(at(now), ready_since.map(at));
@@ -390,6 +417,9 @@ impl Supervised {
     /// fingerprint of the port (a few requests, each bounded by the probe
     /// deadline), plus the stop grace when a server has to be stopped.
     pub fn poll(&mut self) -> Option<Event> {
+        if let Some((signal, line)) = self.signals.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            return Some(self.on_signal(signal, line));
+        }
         match &mut self.state {
             State::GaveUp => None,
             State::Waiting { until } => {
@@ -481,12 +511,22 @@ impl Supervised {
         }
         let spawned = (self.make)().and_then(|c| {
             tethered(&c, self.settings.stop_grace)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|e| e.to_string())
         });
         match spawned {
-            Ok(child) => {
+            Ok(mut child) => {
                 let pid = child.id();
+                let (tx, rx) = channel();
+                if let Some(out) = child.stdout.take() {
+                    watch(out, tx.clone());
+                }
+                if let Some(err) = child.stderr.take() {
+                    watch(err, tx);
+                }
+                self.signals = Some(rx);
                 self.state = State::Starting {
                     child,
                     since: Instant::now(),
@@ -497,6 +537,27 @@ impl Supervised {
                 let decision = self.after_exit(None);
                 Event::SpawnFailed { error, decision }
             }
+        }
+    }
+
+    fn on_signal(&mut self, signal: Signal, line: String) -> Event {
+        let (child, ready_since) = match &mut self.state {
+            State::Starting { child, .. } => (child, None),
+            State::Ready { child, since, .. } => (child, Some(*since)),
+            // Read after the server was already handled.
+            State::Waiting { .. } | State::GaveUp => return Event::Noticed { signal, line },
+        };
+        match signal {
+            Signal::Poisoned => {
+                let stop_error = stop(child).err();
+                let decision = self.after_exit(ready_since);
+                Event::Poisoned {
+                    line,
+                    stop_error,
+                    decision,
+                }
+            }
+            Signal::OutOfMemory => Event::Noticed { signal, line },
         }
     }
 
@@ -537,6 +598,31 @@ impl Supervised {
         self.state = State::GaveUp;
         result
     }
+}
+
+/// Passes the server's output on to hearth's stderr line by line, and sends
+/// every line that carries a signal. Ends when the server's group closes the
+/// stream.
+fn watch<R: Read + Send + 'static>(stream: R, signals: Sender<(Signal, String)>) {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            // A closed stderr leaves the log unseen, never the server unwatched.
+            let _ = std::io::stderr().write_all(&line);
+            let text = String::from_utf8_lossy(&line);
+            if let Some(signal) = classify(&text) {
+                // Fails only once the supervisor has moved on to another
+                // server; this one's output is still passed on until it closes.
+                let _ = signals.send((signal, text.trim_end().to_string()));
+            }
+        }
+    });
 }
 
 /// Closes the tether's pipe, which stops the server's process group with

@@ -28,7 +28,8 @@ pub struct Args {
     /// Without it, any model runtime answering on the port counts.
     #[arg(long)]
     expect: Option<String>,
-    /// The server command and its arguments, after `--`.
+    /// The server command and its arguments, after `--`. Its output goes to
+    /// hearth's stderr; hearth's stdout carries only hearth's own events.
     #[arg(last = true, required = true)]
     command: Vec<OsString>,
 }
@@ -148,6 +149,16 @@ fn describe(event: &Event) -> String {
         Event::SpawnFailed { error, decision } => {
             format!("could not start: {error}; {}", next(decision))
         }
+        Event::Poisoned {
+            line,
+            stop_error,
+            decision,
+        } => format!(
+            "backend poisoned (\"{line}\"): it fails every request until restarted; stopped{}; {}",
+            stopping(stop_error.as_ref()),
+            next(decision)
+        ),
+        Event::Noticed { signal, line } => format!("noticed {}: {line}", json(signal)),
         Event::Lost {
             error,
             stop_error,

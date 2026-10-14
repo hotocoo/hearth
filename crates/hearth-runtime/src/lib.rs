@@ -2,4 +2,5 @@
 
 pub mod fingerprint;
 pub mod http;
+pub mod signals;
 pub mod supervise;

@@ -16,9 +16,11 @@ use hearth_runtime::supervise::{
     Decision, Event, Preflight, Probe, RestartPolicy, Settings, Supervised, preflight, tethered,
 };
 
-/// argv: port, model id, trigger file, mode (`exit` or `wedge`), ignore SIGTERM.
-/// Each request checks the trigger: in `exit` mode the server exits with code 3
-/// and removes it, in `wedge` mode it stops answering (the file stays).
+/// argv: port, model id, trigger file, mode (`exit`, `wedge` or `poison`),
+/// ignore SIGTERM. Each request checks the trigger: in `exit` mode the server
+/// exits with code 3 and removes it, in `wedge` mode it stops answering (the
+/// file stays), in `poison` mode it keeps answering and logs what llama.cpp's
+/// Metal backend logs on every request once it has latched.
 const FAKE: &str = r#"
 import sys, json, os, signal, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -31,7 +33,10 @@ class H(BaseHTTPRequestHandler):
             if mode == "exit":
                 os.remove(trigger)
                 os._exit(3)
-            time.sleep(3600)
+            if mode == "poison":
+                print("ggml_metal_graph_compute: backend is in error state from a previous command buffer failure - recreate the backend to recover", file=sys.stderr, flush=True)
+            else:
+                time.sleep(3600)
         b = json.dumps({"data": [{"id": ident}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def log_message(self, *a): pass
@@ -390,5 +395,57 @@ fn a_wrapped_server_stops_when_its_supervisors_pipe_closes() {
     assert!(
         !status.success(),
         "the tether reports the server's end: {status:?}"
+    );
+}
+
+/// A latched backend keeps answering; only its log says it is dead.
+#[test]
+fn a_server_whose_log_says_it_is_poisoned_is_restarted() {
+    let port = free_port();
+    let t = trigger("poison");
+    let mut s = Supervised::new(
+        probe(port),
+        Some("fake-model".into()),
+        settings(),
+        Fake::new("fake-model", &t, "poison").make(port),
+    );
+    let mut readies = 0;
+    let seen = drive(
+        &mut s,
+        |e| match e {
+            Event::Ready { .. } => {
+                readies += 1;
+                if readies == 1 {
+                    std::fs::write(&t, "").unwrap();
+                }
+            }
+            Event::Poisoned { .. } => std::fs::remove_file(&t).unwrap(),
+            _ => {}
+        },
+        |seen| {
+            seen.iter()
+                .filter(|e| matches!(e, Event::Ready { .. }))
+                .count()
+                >= 2
+        },
+    );
+    let poisoned = seen
+        .iter()
+        .position(|e| matches!(e, Event::Poisoned { .. }))
+        .unwrap_or_else(|| panic!("{seen:?}"));
+    let Event::Poisoned {
+        line,
+        stop_error: None,
+        decision: Decision::Restart { .. },
+    } = &seen[poisoned]
+    else {
+        panic!("{seen:?}")
+    };
+    assert!(line.contains("recreate the backend"), "{line}");
+    assert!(
+        seen[poisoned..]
+            .iter()
+            .any(|e| matches!(e, Event::Ready { .. })),
+        "restarted after the poison: {seen:?}"
     );
 }

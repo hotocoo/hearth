@@ -34,6 +34,7 @@ A started server is ready only when its port answers as a model runtime that:
 - **Exits.** Back-off starts at `supervise.backoff_start_ms` and grows by `backoff_factor` up to `backoff_max_ms`. It is measured from when the server was really gone, after any stop grace. More than `restart_budget` exits inside `restart_window_ms` is a crash loop: hearth gives up and exits 1. A server that stayed ready a whole window earns the shortest back-off back.
 - **Never ready.** A server not ready within `ready_timeout_ms` is stopped and counted as an exit. The event carries what the port last answered.
 - **Wedged.** A ready server is stopped and counted as an exit when `unresponsive_probes` probes in a row find its port not serving the expected model. Not serving means no answer, a refused connection, or a different answer. A listener that died inside a live process looks like that, as does a scheduler that accepts connections and never answers. Probes are `probe_interval_ms` apart. One poll blocks for at most one fingerprint: a few requests, each bounded by `discovery.first_contact_timeout_ms`.
+- **Poisoned.** The server's stdout and stderr are read line by line and passed on to hearth's stderr; hearth's stdout carries only its own events. A line matching a poison signature stops the server and counts as an exit. That is llama.cpp's Metal "backend is in error state from a previous command buffer failure - recreate the backend to recover", logged on every request once the backend has latched. Such a server still answers `/health` 200, so probing alone never finds it. This is the failure supportdesk diagnosed by hand. Accelerator out-of-memory lines (Metal `kIOGPUCommandBufferCallbackErrorOutOfMemory`, CUDA, Vulkan) are reported as `noticed` events and change nothing by themselves. Signatures are the runtimes' own format strings, in `hearth-runtime::signals`. Lines from a server that has already been stopped never act on its successor.
 - **Lost.** When the operating system cannot say whether the server still runs (`try_wait` fails), the server is stopped and the event carries the error. Errors from stopping are reported on the event that caused the stop.
 - **Exit status.** A server killed by a signal is reported as that signal (the shell's `128 + n`), not as an exit code.
 
@@ -55,7 +56,8 @@ Integration tests run real Python servers that exit, serve the wrong model, wedg
 - refusal by name, and `port_taken` on a start;
 - the never-ready restart;
 - wedge detection and kill;
-- the tether through a wrapper.
+- the tether through a wrapper;
+- a server that keeps answering while its log says it is poisoned, which is restarted.
 
 A live run on the development machine:
 - `kill -9` of `hearth run` with a wrapper script around the server left the port free within the grace;

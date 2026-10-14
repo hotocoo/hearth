@@ -56,7 +56,8 @@ cargo build --release -p hearth
 ./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory
 ./target/release/hearth diff --kind doctor --from ~5   # per-process file, thread, CLOSE_WAIT movement
 ./target/release/hearth run --port 8081 --expect qwen3 -- llama-server -m qwen3.gguf --port 8081
-#   keeps the server alive: restarts on exit or wedge (SIGTERM then SIGKILL), gives up on a crash loop,
+#   keeps the server alive: restarts on exit, wedge, or a poisoned backend in its log (the latched
+#   Metal "recreate the backend" state that still answers /health), SIGTERM then SIGKILL, gives up on a crash loop,
 #   refuses a port someone else serves, and the server dies with hearth even on SIGKILL
 ```
 
