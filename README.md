@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `run`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `run`, `watch`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -60,11 +60,13 @@ cargo build --release -p hearth
 #   Metal "recreate the backend" state that still answers /health), SIGTERM then SIGKILL, gives up on a crash loop,
 #   refuses a port someone else serves, and the server dies with hearth even on SIGKILL
 ./target/release/hearth log --kind run      # every start, exit, wedge, poisoning and give-up hearth run saw
+./target/release/hearth watch               # doctor + ports on intervals, all recorded; reports pressure, limits
+#                                             reached within the horizon, runtimes that vanish or go silent
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.
 
-Set `[notify] desktop = true` or `webhook_url` in your config to be told when `hearth run` finds a poisoned backend or a wedge, or gives up on a crash loop.
+Set `[notify] desktop = true` or `webhook_url` in your config to be told when `hearth run` finds a poisoned backend or a wedge, or gives up on a crash loop, and when `hearth watch` finds a problem.
 
 Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
 

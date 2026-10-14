@@ -13,6 +13,7 @@ mod notify;
 mod ports;
 mod run;
 mod units;
+mod watch;
 
 use clap::{Parser, Subcommand};
 
@@ -50,6 +51,10 @@ enum Command {
     /// stops answering, give up on a crash loop, and stop it when hearth
     /// stops. Refuses a port another server already holds.
     Run(run::Args),
+    /// Keep running doctor and ports, record every round, and report (and
+    /// notify) when memory pressure rises, a resource would reach its limit
+    /// soon, or a model runtime vanishes, restarts or stops answering.
+    Watch(watch::Args),
     /// Serve these commands as tools to AI agents over the Model Context
     /// Protocol on stdin/stdout.
     Mcp,
@@ -64,6 +69,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Log(args) => history::log(args, cli.json),
         Command::Diff(args) => history::diff(args, cli.json),
         Command::Run(args) => run::run(args, cli.json),
+        Command::Watch(args) => watch::run(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }
@@ -71,7 +77,10 @@ fn execute(cli: &Cli) -> Result<String, String> {
 /// Runs a command line in-process; how MCP tools reach the CLI commands.
 pub(crate) fn dispatch(argv: &[String]) -> Result<String, String> {
     let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
-    if matches!(cli.command, Command::Mcp | Command::Run(_)) {
+    if matches!(
+        cli.command,
+        Command::Mcp | Command::Run(_) | Command::Watch(_)
+    ) {
         return Err("long-running commands cannot be called as tools".into());
     }
     execute(&cli)

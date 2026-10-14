@@ -269,6 +269,17 @@ fn probe_all(
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
+    let report = observe(args.runtimes)?;
+    if json {
+        crate::to_json(&report)
+    } else {
+        Ok(render(&report))
+    }
+}
+
+/// Probes every listening port, and records the report unless it was
+/// filtered to runtimes.
+fn observe(runtimes_only: bool) -> Result<Report, String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
     let discovery = &config.discovery;
     let max_bytes = discovery.max_probe_response_bytes;
@@ -298,7 +309,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .filter_map(|(key, (process, path, bound))| {
             let (fingerprint, deadline, slow) = results.get(&key)?.clone();
             let is_runtime = is_runtime(&fingerprint.identity);
-            if args.runtimes && !is_runtime {
+            if runtimes_only && !is_runtime {
                 return None;
             }
             Some(Port {
@@ -326,9 +337,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     };
     // A filtered run is not a full picture of the machine, so it is not
     // recorded: a later diff would report every other port as vanished.
-    if !args.runtimes
-        && let Some(journal) = &journal
-    {
+    if !runtimes_only && let Some(journal) = &journal {
         match journal.record(KIND, &report) {
             Ok(r) => {
                 report.snapshot = Some(r.snapshot.id);
@@ -339,11 +348,63 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             Err(e) => report.state_errors.push(e.to_string()),
         }
     }
-    if json {
-        crate::to_json(&report)
-    } else {
-        Ok(render(&report))
-    }
+    Ok(report)
+}
+
+/// A full, recorded `ports` report as JSON, the form `diff` compares.
+pub fn observe_recorded() -> Result<(Value, Option<String>, Vec<String>), String> {
+    let report = observe(false)?;
+    let value = serde_json::to_value(&report).map_err(|e| e.to_string())?;
+    Ok((value, report.snapshot, report.state_errors))
+}
+
+/// Changes a person should hear about between two reports: a runtime that
+/// vanished, restarted, or stopped answering. Other listeners come and go
+/// all the time and are left out.
+pub fn alarms(before: &Value, after: &Value) -> Vec<Change> {
+    let runtime_keys = |body: &Value| -> std::collections::BTreeSet<Key> {
+        recorded(body)
+            .into_iter()
+            .filter(|(_, by_pid)| {
+                by_pid
+                    .values()
+                    .any(|p| Identity::deserialize(*p).is_ok_and(|i| is_runtime(&i)))
+            })
+            .map(|(k, _)| k)
+            .collect()
+    };
+    let keys: std::collections::BTreeSet<Key> = runtime_keys(before)
+        .union(&runtime_keys(after))
+        .cloned()
+        .collect();
+    let only = |body: &Value| {
+        let ports: Vec<Value> = body["ports"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| {
+                let port = p["addr"]
+                    .as_str()
+                    .and_then(|a| a.parse::<SocketAddr>().ok())
+                    .map(|a| a.port());
+                port.is_some_and(|port| {
+                    let program = program(p["path"].as_str(), p["process"].as_str().unwrap_or(""));
+                    keys.contains(&(program, port))
+                })
+            })
+            .cloned()
+            .collect();
+        serde_json::json!({ "ports": ports })
+    };
+    diff(&only(before), &only(after))
+        .0
+        .into_iter()
+        .filter(|c| match c.kind {
+            "vanished" | "restarted" => true,
+            "changed" => c.after.as_deref().is_some_and(|a| a.contains(NO_ANSWER)),
+            _ => false,
+        })
+        .collect()
 }
 
 fn is_runtime(identity: &Identity) -> bool {
@@ -430,11 +491,14 @@ fn recorded(body: &Value) -> BTreeMap<Key, BTreeMap<i64, &Value>> {
     out
 }
 
+/// How a port that accepts connections and never answers is described.
+const NO_ANSWER: &str = "NO ANSWER";
+
 /// What a recorded port looked like, without the parts that differ on every
 /// probe (how long a silent port was waited for).
 fn state_of(port: &Value) -> String {
     match Identity::deserialize(port) {
-        Ok(Identity::Unresponsive { .. }) => "NO ANSWER".into(),
+        Ok(Identity::Unresponsive { .. }) => NO_ANSWER.into(),
         Ok(identity) => describe(&identity),
         Err(_) => port["kind"].as_str().unwrap_or("unknown").to_string(),
     }
@@ -735,6 +799,26 @@ mod tests {
             deltas.len(),
             1,
             "only the surviving worker's footprint compares"
+        );
+    }
+
+    #[test]
+    fn alarms_are_runtimes_that_vanished_restarted_or_went_silent() {
+        let ready = json!({"kind":"ollama","version":"0.30","models":[],"loaded":[]});
+        let silent = json!({"kind":"unresponsive","waited_ms":2500});
+        let other = json!({"kind":"other_http","status":404});
+        let mut dev = port(30, 3000, &other, None);
+        dev["path"] = json!("/usr/bin/node");
+        let before =
+            json!({"ports": [port(5, 11434, &ready, None), port(6, 8080, &ready, None), dev]});
+        let after = json!({"ports": [port(5, 11434, &silent, None)]});
+        let alarms = alarms(&before, &after);
+        let kinds: Vec<&str> = alarms.iter().map(|c| c.kind).collect();
+        assert_eq!(
+            kinds,
+            ["vanished", "changed"],
+            "a dev server that went away is not an alarm: {:?}",
+            alarms.iter().map(|c| &c.subject).collect::<Vec<_>>()
         );
     }
 

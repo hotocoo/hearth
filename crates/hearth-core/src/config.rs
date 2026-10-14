@@ -19,6 +19,15 @@ pub struct Config {
     pub state: State,
     pub supervise: Supervise,
     pub notify: Notify,
+    pub watch: Watch,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Watch {
+    pub doctor_interval_ms: u64,
+    pub ports_interval_ms: u64,
+    pub limit_horizon_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,24 +88,102 @@ pub enum ConfigError {
     },
 }
 
+const AT_LEAST_ONE: &str = "must be at least 1";
+
+fn invalid(
+    key: &'static str,
+    value: &dyn std::fmt::Display,
+    reason: &'static str,
+) -> Result<(), ConfigError> {
+    Err(ConfigError::Invalid {
+        key,
+        value: value.to_string(),
+        reason,
+    })
+}
+
 impl Config {
     /// Rejects values that parse but cannot mean anything.
     fn validate(self) -> Result<Self, ConfigError> {
-        let invalid = |key, value: &dyn std::fmt::Display, reason| {
-            Err(ConfigError::Invalid {
-                key,
-                value: value.to_string(),
-                reason,
-            })
-        };
-        let d = &self.discovery;
-        if d.first_contact_timeout_ms == 0 {
-            return invalid(
-                "discovery.first_contact_timeout_ms",
-                &0,
-                "must be at least 1",
-            );
+        self.positive()?;
+        self.relations()?;
+        self.representable()?;
+        if let Some(url) = &self.notify.webhook_url
+            && !(url.starts_with("http://") || url.starts_with("https://"))
+        {
+            invalid(
+                "notify.webhook_url",
+                url,
+                "must be an http:// or https:// URL",
+            )?;
         }
+        Ok(self)
+    }
+
+    /// Counts and durations for which zero means nothing.
+    fn positive(&self) -> Result<(), ConfigError> {
+        let (d, v, w) = (&self.discovery, &self.supervise, &self.watch);
+        let gone = "must be at least 1, or a snapshot would be deleted as it is written";
+        for (key, value, reason) in [
+            (
+                "discovery.first_contact_timeout_ms",
+                d.first_contact_timeout_ms,
+                AT_LEAST_ONE,
+            ),
+            (
+                "discovery.learned_min_samples",
+                d.learned_min_samples as u64,
+                AT_LEAST_ONE,
+            ),
+            (
+                "state.max_snapshots_per_kind",
+                self.state.max_snapshots_per_kind as u64,
+                gone,
+            ),
+            ("notify.timeout_ms", self.notify.timeout_ms, AT_LEAST_ONE),
+            (
+                "watch.doctor_interval_ms",
+                w.doctor_interval_ms,
+                AT_LEAST_ONE,
+            ),
+            ("watch.ports_interval_ms", w.ports_interval_ms, AT_LEAST_ONE),
+            ("watch.limit_horizon_ms", w.limit_horizon_ms, AT_LEAST_ONE),
+            (
+                "supervise.restart_window_ms",
+                v.restart_window_ms,
+                AT_LEAST_ONE,
+            ),
+            (
+                "supervise.ready_timeout_ms",
+                v.ready_timeout_ms,
+                AT_LEAST_ONE,
+            ),
+            (
+                "supervise.probe_interval_ms",
+                v.probe_interval_ms,
+                AT_LEAST_ONE,
+            ),
+            (
+                "supervise.unresponsive_probes",
+                u64::from(v.unresponsive_probes),
+                AT_LEAST_ONE,
+            ),
+            (
+                "supervise.backoff_factor",
+                u64::from(v.backoff_factor),
+                AT_LEAST_ONE,
+            ),
+        ] {
+            if value == 0 {
+                return invalid(key, &0, reason);
+            }
+        }
+        Ok(())
+    }
+
+    /// Values that only mean something relative to each other.
+    fn relations(&self) -> Result<(), ConfigError> {
+        let (d, v) = (&self.discovery, &self.supervise);
         if !(d.learned_deadline_multiplier.is_finite() && d.learned_deadline_multiplier >= 1.0) {
             return invalid(
                 "discovery.learned_deadline_multiplier",
@@ -111,68 +198,12 @@ impl Config {
                 "must not exceed discovery.first_contact_timeout_ms",
             );
         }
-        if d.learned_min_samples == 0 {
-            return invalid("discovery.learned_min_samples", &0, "must be at least 1");
-        }
-        if self.state.max_snapshots_per_kind == 0 {
-            return invalid(
-                "state.max_snapshots_per_kind",
-                &0,
-                "must be at least 1, or a snapshot would be deleted as it is written",
-            );
-        }
-        let n = &self.notify;
-        if let Some(url) = &n.webhook_url
-            && !(url.starts_with("http://") || url.starts_with("https://"))
-        {
-            return invalid(
-                "notify.webhook_url",
-                url,
-                "must be an http:// or https:// URL",
-            );
-        }
-        if n.timeout_ms == 0 {
-            return invalid("notify.timeout_ms", &0, "must be at least 1");
-        }
-        let v = &self.supervise;
-        for (key, value) in [
-            ("supervise.restart_window_ms", v.restart_window_ms),
-            ("supervise.ready_timeout_ms", v.ready_timeout_ms),
-            ("supervise.probe_interval_ms", v.probe_interval_ms),
-            (
-                "supervise.unresponsive_probes",
-                u64::from(v.unresponsive_probes),
-            ),
-        ] {
-            if value == 0 {
-                return invalid(key, &0, "must be at least 1");
-            }
-        }
-        // Deadlines are computed as now + this; a value the clock cannot
-        // represent would make that overflow.
-        let representable = |ms: u64| {
-            std::time::Instant::now()
-                .checked_add(std::time::Duration::from_millis(ms))
-                .is_some()
-        };
-        for (key, value) in [
-            ("supervise.restart_window_ms", v.restart_window_ms),
-            ("supervise.ready_timeout_ms", v.ready_timeout_ms),
-            ("supervise.stop_grace_ms", v.stop_grace_ms),
-        ] {
-            if !representable(value) {
-                return invalid(key, &value, "is too large for this platform's clock");
-            }
-        }
         if v.backoff_max_ms > v.restart_window_ms {
             return invalid(
                 "supervise.backoff_max_ms",
                 &v.backoff_max_ms,
                 "must not exceed supervise.restart_window_ms, or a crash loop would never be noticed",
             );
-        }
-        if v.backoff_factor == 0 {
-            return invalid("supervise.backoff_factor", &0, "must be at least 1");
         }
         if v.backoff_start_ms > v.backoff_max_ms {
             return invalid(
@@ -181,7 +212,28 @@ impl Config {
                 "must not exceed supervise.backoff_max_ms",
             );
         }
-        Ok(self)
+        Ok(())
+    }
+
+    /// Deadlines are computed as now + a duration; one the clock cannot
+    /// represent would make that overflow.
+    fn representable(&self) -> Result<(), ConfigError> {
+        let (v, w) = (&self.supervise, &self.watch);
+        for (key, value) in [
+            ("supervise.restart_window_ms", v.restart_window_ms),
+            ("supervise.ready_timeout_ms", v.ready_timeout_ms),
+            ("supervise.stop_grace_ms", v.stop_grace_ms),
+            ("watch.doctor_interval_ms", w.doctor_interval_ms),
+            ("watch.ports_interval_ms", w.ports_interval_ms),
+        ] {
+            let fits = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_millis(value))
+                .is_some();
+            if !fits {
+                return invalid(key, &value, "is too large for this platform's clock");
+            }
+        }
+        Ok(())
     }
 }
 

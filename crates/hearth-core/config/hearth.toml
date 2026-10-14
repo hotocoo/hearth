@@ -87,3 +87,15 @@ desktop = false
 
 # How long one webhook delivery may take.
 timeout_ms = 5000
+
+[watch]
+# `hearth watch` observes on these intervals. Every observation is recorded,
+# so state.max_snapshots_per_kind times the interval is how far back
+# `hearth diff` can reach for that kind.
+doctor_interval_ms = 10000
+ports_interval_ms = 60000
+
+# A resource growing at the measured rate is reported when it would reach
+# its limit (the kernel's, or the process's) within this long. Growth alone
+# is not reported: descriptor and thread counts move all the time.
+limit_horizon_ms = 3600000

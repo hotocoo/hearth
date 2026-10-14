@@ -75,9 +75,105 @@ struct Growth {
 #[derive(Serialize)]
 struct Finding {
     severity: &'static str,
+    /// What kind of finding this is, stable across runs: with `pid`, what
+    /// `hearth watch` uses to tell a new problem from one it already reported.
+    code: &'static str,
+    pid: Option<i32>,
     message: String,
     /// What to do about it, for a person or an agent.
     remediation: String,
+}
+
+/// A problem `hearth watch` reports once when it appears and once when it
+/// clears. `key` says what it is about, stable across observations.
+pub struct Alarm {
+    pub key: String,
+    pub text: String,
+}
+
+/// One doctor sample, kept so the next one can be compared with it.
+pub struct Observation {
+    report: Report,
+    at: Instant,
+}
+
+impl Observation {
+    /// Problems a person should hear about, each with what to do:
+    /// * memory pressure the kernel declares (warn or critical);
+    /// * any resource that would reach its limit within `horizon` at the
+    ///   growth rate measured since the previous observation.
+    ///
+    /// Growth alone is not a problem: thread and descriptor counts move all
+    /// the time.
+    pub fn alarms(&self, horizon: Duration) -> Vec<Alarm> {
+        let r = &self.report;
+        let mut out: Vec<_> = r
+            .findings
+            .iter()
+            .filter(|f| f.code == "memory_pressure")
+            .map(|f| Alarm {
+                key: f.code.to_string(),
+                text: format!("[{}] {}; {}", f.severity, f.message, f.remediation),
+            })
+            .collect();
+        let Some(t) = &r.trend else { return out };
+        let soon = |secs: f64| secs.is_finite() && secs < horizon.as_secs_f64();
+        if let (Some(rate), Some(open), Some(max)) = (
+            t.files_per_second,
+            r.health.limits.files_open,
+            r.health.limits.files_max,
+        ) && rate > 0.0
+        {
+            #[allow(clippy::cast_precision_loss)]
+            let secs = max.saturating_sub(open) as f64 / rate;
+            if soon(secs) {
+                out.push(Alarm {
+                    key: "files_growing".into(),
+                    text: format!(
+                        "open files on this machine growing {rate:.1}/s: the kernel limit ({max}) in {}; find the leaking process with hearth diff --kind doctor",
+                        duration(secs)
+                    ),
+                });
+            }
+        }
+        for g in &t.growing {
+            if let Some(secs) = g.seconds_to_limit.filter(|&s| soon(s)) {
+                out.push(Alarm {
+                    key: format!("{}:{}", g.resource, g.pid),
+                    text: format!(
+                        "{} (pid {}) {} growing {:.1}/s: its limit in {}; restart it or fix the leak before then",
+                        g.name,
+                        g.pid,
+                        g.resource,
+                        g.per_second,
+                        duration(secs)
+                    ),
+                });
+            }
+        }
+        out
+    }
+
+    pub fn state_errors(&self) -> &[String] {
+        &self.report.state_errors
+    }
+}
+
+/// Measures the machine, with a trend from `previous` when given, and
+/// records the report.
+pub fn observe(previous: Option<&Observation>) -> Result<Observation, String> {
+    let health = hearth_sense::box_health().map_err(|e| e.to_string())?;
+    let at = Instant::now();
+    let trend = previous.map(|p| {
+        trend(
+            &p.report.health,
+            &health,
+            at.duration_since(p.at).as_secs_f64(),
+        )
+    });
+    let mut report = build(health, trend);
+    record(&mut report);
+    Ok(Observation { report, at })
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
@@ -290,6 +386,29 @@ fn trend(a: &BoxHealth, b: &BoxHealth, seconds: f64) -> Trend {
     }
 }
 
+/// What the kernel's own memory pressure level says.
+fn pressure(level: Option<PressureLevel>) -> Option<Finding> {
+    match level {
+        Some(PressureLevel::Warn) => Some(Finding {
+            severity: "warn",
+            code: "memory_pressure",
+            pid: None,
+            message: "the kernel reports memory pressure: warn".into(),
+            remediation: "do not load more models; unload idle ones or reduce context sizes".into(),
+        }),
+        Some(PressureLevel::Critical) => Some(Finding {
+            severity: "critical",
+            code: "memory_pressure",
+            pid: None,
+            message: "the kernel reports memory pressure: critical".into(),
+            remediation:
+                "free memory now: stop the largest idle model server; jetsam kills are imminent"
+                    .into(),
+        }),
+        Some(PressureLevel::Normal) | None => None,
+    }
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
     let file_majority = majority(&health.processes, |p| p.open_files);
@@ -319,22 +438,7 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
                 count: n,
             })
     });
-    let mut findings = Vec::new();
-    match health.memory.pressure {
-        Some(PressureLevel::Warn) => findings.push(Finding {
-            severity: "warn",
-            message: "the kernel reports memory pressure: warn".into(),
-            remediation: "do not load more models; unload idle ones or reduce context sizes".into(),
-        }),
-        Some(PressureLevel::Critical) => findings.push(Finding {
-            severity: "critical",
-            message: "the kernel reports memory pressure: critical".into(),
-            remediation:
-                "free memory now: stop the largest idle model server; jetsam kills are imminent"
-                    .into(),
-        }),
-        _ => {}
-    }
+    let mut findings: Vec<Finding> = pressure(health.memory.pressure).into_iter().collect();
     if let Some(t) = &trend {
         if let (Some(rate), Some(open), Some(max)) = (
             t.files_per_second,
@@ -344,6 +448,8 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
         {
             findings.push(Finding {
                 severity: "warn",
+                code: "files_growing",
+                pid: None,
                 message: format!(
                     "system open files growing {rate:.1}/s; limit reached in {} at this rate",
                     duration(max.saturating_sub(open) as f64 / rate)
@@ -355,6 +461,8 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
             if let Some(secs) = g.seconds_to_limit {
                 findings.push(Finding {
                     severity: "info",
+                    code: g.resource,
+                    pid: Some(g.pid),
                     message: format!(
                         "{} (pid {}) {} growing {:.1}/s; its limit in {}",
                         g.name,
