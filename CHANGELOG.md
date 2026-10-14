@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:38 owned and observed ports
+
+- `hearth ports` (and MCP `ports`) reports `owned_by` for each listener: the hearthd server it is, or null for processes hearth only observes.
+
 ### 2026-10-15 02:35 hearth reload
 
 - `hearth reload` (MCP `reload`) applies the configuration's `[servers]` to a running hearthd. New servers start, removed ones stop, and changed ones restart with their new definition. Every other server keeps its process.
