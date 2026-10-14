@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:35 hearth reload
+
+- `hearth reload` (MCP `reload`) applies the configuration's `[servers]` to a running hearthd. New servers start, removed ones stop, and changed ones restart with their new definition. Every other server keeps its process.
+
 ### 2026-10-15 02:25 status names the real server process
 
 - `hearth status` showed the tether's pid. It now reports `server_pid`, the process listening on the server's port, with its `footprint_bytes`.
