@@ -102,6 +102,9 @@ enum Command {
     /// Every setting in effect: its value, whether it is built in or comes
     /// from your file, and what it means.
     Config(config_cmd::Args),
+    /// Print the shell completion script, e.g. `hearth completions zsh >
+    /// ~/.zfunc/_hearth` (bash, elvish, fish, powershell, zsh).
+    Completions { shell: clap_complete::Shell },
     /// Serve these commands as tools to AI agents over the Model Context
     /// Protocol on stdin/stdout.
     Mcp,
@@ -122,6 +125,16 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Watch(args) => watch::run(args, cli.json),
         Command::Config(args) => config_cmd::run(args, cli.json),
         Command::Bundle(args) => bundle::run(args, cli.json),
+        Command::Completions { shell } => {
+            let mut script = Vec::new();
+            clap_complete::generate(
+                *shell,
+                &mut <Cli as clap::CommandFactory>::command(),
+                "hearth",
+                &mut script,
+            );
+            String::from_utf8(script).map_err(|e| e.to_string())
+        }
         #[cfg(unix)]
         Command::Service(args) => service::run(args, cli.json),
         #[cfg(unix)]

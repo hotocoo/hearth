@@ -28,6 +28,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: completion scripts parse
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p hearth --bin hearth
+          ./target/debug/hearth completions bash | bash -n
       - name: incidents smoke test (Linux kernel log)
         if: runner.os == 'Linux'
         run: |
