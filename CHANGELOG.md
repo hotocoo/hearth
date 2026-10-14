@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:11 exit causes
+
+- **Exit causes.** When a server hearth supervises exits, the event says why, from llama.cpp's own log: `model_missing`, `load_failed`, `out_of_memory`, `port_in_use` or `bad_argument`, with the line that said it. `hearth run` prints it.
+- **`server-died`.** The workflow reads the cause first. A missing model or a bad argument is not cured by a restart.
+
 ### 2026-10-15 07:08 models --ctx
 
 - `hearth models --ctx N` lists only the models the device holds at N tokens of context, answering "what can I run here with 32k context".
