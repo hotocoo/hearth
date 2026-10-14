@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `run`, `watch`, `status`, `restart`, `config`, `mcp`) and `hearthd`, which keeps configured model servers alive. hearthd does not proxy inference yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (inspection, history, supervision, workflows and an MCP server; `hearth --help` lists every command) and `hearthd`, which keeps configured model servers alive, checks they fit before starting them, and watches the machine. hearthd does not proxy inference yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
