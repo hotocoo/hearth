@@ -110,6 +110,7 @@ pub fn parse(name: &str) -> Option<(String, String, Option<String>, Option<Strin
 /// The weights file for `name` in the first store that has its repo.
 /// `None` when no store has the repo (so another lookup may be tried);
 /// an error when one does but the file is not clear.
+#[must_use]
 pub fn find(name: &str) -> Option<Result<PathBuf, String>> {
     let (org, repo, quant, file) = parse(name)?;
     for (store, dir) in repo_dirs(&org, &repo) {

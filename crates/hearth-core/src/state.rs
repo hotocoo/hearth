@@ -196,6 +196,9 @@ fn kind_of(id: &str) -> Option<&str> {
     id.splitn(3, '-').nth(2)
 }
 
+/// The kinds hearth records: what `state.thinned_kinds` may name.
+pub const KINDS: &[&str] = &["ports", "doctor", "run"];
+
 pub struct Journal {
     dir: PathBuf,
     keep: usize,

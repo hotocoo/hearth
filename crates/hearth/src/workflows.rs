@@ -41,13 +41,38 @@ fn problem(w: &Value, tools: &[String]) -> Option<String> {
     if !w["description"].is_string() {
         return Some(format!("{name}: no description"));
     }
-    let args = w["arguments"].as_array();
-    if args.is_some_and(|a| a.iter().any(|x| !x["name"].is_string())) {
-        return Some(format!("{name}: every argument needs a name"));
+    let args = match &w["arguments"] {
+        Value::Null => Vec::new(),
+        Value::Array(a) => a.clone(),
+        _ => return Some(format!("{name}: arguments must be a list")),
+    };
+    let mut seen = Vec::new();
+    for a in &args {
+        let Some(arg) = a["name"].as_str().filter(|n| !n.is_empty()) else {
+            return Some(format!("{name}: every argument needs a name"));
+        };
+        if seen.contains(&arg) {
+            return Some(format!("{name}: argument {arg} is declared twice"));
+        }
+        seen.push(arg);
+        if !(a["default"].is_null() || a["default"].is_string())
+            || !(a["required"].is_null() || a["required"].is_boolean())
+        {
+            return Some(format!(
+                "{name}: {arg}: default must be text and required true or false"
+            ));
+        }
+    }
+    // Backticks are for tool names only, so an agent reading the template
+    // can trust that what is quoted that way is a tool it may call.
+    if template.matches('`').count() % 2 != 0 {
+        return Some(format!("{name}: unbalanced backtick"));
     }
     for named in template.split('`').skip(1).step_by(2) {
         if !tools.iter().any(|t| t == named) {
-            return Some(format!("{name}: `{named}` is not a hearth tool"));
+            return Some(format!(
+                "{name}: `{named}` is not a hearth tool (backticks are for tool names only)"
+            ));
         }
     }
     None
@@ -95,24 +120,47 @@ pub fn all(tools: &[String]) -> (Vec<Value>, Vec<String>) {
             continue;
         }
         w["source"] = json!(path.display().to_string());
-        out.retain(|o| o["name"] != w["name"]);
-        out.push(w);
+        let mine_before = out
+            .iter()
+            .any(|o| o["name"] == w["name"] && o["source"] != "built-in");
+        if mine_before {
+            problems.push(format!(
+                "{}: {} is defined twice; the later one is used",
+                path.display(),
+                w["name"].as_str().unwrap_or_default()
+            ));
+        }
+        match out.iter_mut().find(|o| o["name"] == w["name"]) {
+            Some(slot) => *slot = w,
+            None => out.push(w),
+        }
     }
     (out, problems)
 }
 
-/// `w`'s template with `arguments` filled in. A missing argument takes its
-/// default; a missing required one is an error.
+/// `w`'s template with `arguments` filled in, in one pass: a value is
+/// never itself read for placeholders. A missing argument takes its
+/// default; a missing required one, an undeclared one, or one that is not
+/// text or a number is an error.
 pub fn render(w: &Value, arguments: &Value) -> Result<String, String> {
     let name = w["name"].as_str().unwrap_or_default();
-    let mut text = w["template"].as_str().unwrap_or_default().to_string();
-    for arg in w["arguments"].as_array().into_iter().flatten() {
+    let declared: Vec<&Value> = w["arguments"].as_array().into_iter().flatten().collect();
+    if let Some(given) = arguments.as_object() {
+        for key in given.keys() {
+            if !declared.iter().any(|a| a["name"] == key.as_str()) {
+                return Err(format!("{name} takes no argument {key}"));
+            }
+        }
+    }
+    let mut values = std::collections::BTreeMap::new();
+    for arg in &declared {
         let key = arg["name"].as_str().unwrap_or_default();
-        let given = arguments[key].as_str().map(str::to_string).or_else(|| {
-            arguments[key]
-                .is_number()
-                .then(|| arguments[key].to_string())
-        });
+        let given = match &arguments[key] {
+            Value::Null => None,
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => return Err(format!("{name}: {key} must be text or a number")),
+        };
         let value = match (given, arg["default"].as_str()) {
             (Some(v), _) => v,
             (None, Some(default)) => default.to_string(),
@@ -121,9 +169,27 @@ pub fn render(w: &Value, arguments: &Value) -> Result<String, String> {
             }
             (None, None) => "not given".into(),
         };
-        text = text.replace(&format!("{{{key}}}"), &value);
+        values.insert(key.to_string(), value);
     }
-    Ok(text)
+    let template = w["template"].as_str().unwrap_or_default();
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let found = after
+            .find('}')
+            .and_then(|close| Some((close, values.get(&after[..close])?)));
+        if let Some((close, value)) = found {
+            out.push_str(value);
+            rest = &after[close + 1..];
+        } else {
+            out.push('{');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 #[derive(clap::Args)]
@@ -190,6 +256,19 @@ mod tests {
         let bad = json!({"name":"mine","description":"d","template":"call `rm`"});
         assert!(problem(&bad, &tools).unwrap().contains("rm"));
         assert!(problem(&json!({"name":"Bad Name"}), &tools).is_some());
+    }
+
+    #[test]
+    fn values_are_not_expanded_again_and_unknown_arguments_refused() {
+        let w = json!({"name":"w","template":"{x} then {y}","arguments":[
+            {"name":"x"},{"name":"y","default":"secret"}]});
+        assert_eq!(render(&w, &json!({"x":"{y}"})).unwrap(), "{y} then secret");
+        assert!(render(&w, &json!({"z":"1"})).is_err());
+        assert!(render(&w, &json!({"x":true})).is_err());
+        let dup = json!({"name":"d","description":"d","template":"t","arguments":[{"name":"a"},{"name":"a"}]});
+        assert!(problem(&dup, &[]).unwrap().contains("twice"));
+        let tick = json!({"name":"d","description":"d","template":"use `doctor"});
+        assert!(problem(&tick, &["doctor".into()]).is_some());
     }
 
     #[test]

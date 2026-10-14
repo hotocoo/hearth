@@ -59,20 +59,21 @@ fn handle(msg: &Value) -> Option<Value> {
                     "protocolVersion": version,
                     "capabilities": { "tools": {}, "prompts": {} },
                     "serverInfo": { "name": "hearth", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": "hearth inspects a machine that runs local models and keeps the servers hearthd owns alive. \
+                    "instructions": instructions("hearth inspects a machine that runs local models and keeps the servers hearthd owns alive. \
                         Start with a workflow from prompts/list when one fits (diagnose-slow-machine, server-died, can-i-load, what-changed, find-a-leak). \
                         Otherwise: doctor for memory, files and threads; ports for what runs where (owned_by says what hearthd owns); \
                         incidents for crashes and kills; fit before loading a model; \
                         log, diff, show, follow and tag for history (references: ~N, @2h, ids, tag names); \
                         status, logs, restart, stop, start and reload for hearthd's servers (only those: never act on a process hearth did not start); \
-                        config for why hearth did something; process_memory for what one process really uses; bundle for everything at once."
+                        config for why hearth did something; process_memory for what one process really uses; bundle for everything at once."),
                 }),
             )
         }
         Some("ping") => ok(id, json!({})),
         Some("tools/list") => ok(id, json!({ "tools": listed_tools() })),
-        Some("prompts/list") => ok(id, json!({ "prompts": prompt_list() })),
+        Some("prompts/list") => ok(id, json!({ "prompts": prompt_list(prompts()) })),
         Some("prompts/get") => match prompt(
+            &prompts(),
             params["name"].as_str().unwrap_or_default(),
             &params["arguments"],
         ) {
@@ -106,8 +107,27 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
 }
 
 /// The workflows, built-in and the user's (see [`crate::workflows`]).
+/// What was wrong with the user's file goes to stderr, where MCP clients
+/// show a server's log, and into `initialize`'s instructions.
 fn prompts() -> Vec<Value> {
-    crate::workflows::all(&tool_names()).0
+    let (all, problems) = crate::workflows::all(&tool_names());
+    for p in &problems {
+        eprintln!("hearth: workflow skipped: {p}");
+    }
+    all
+}
+
+/// The `initialize` instructions, with any problem in the user's workflows.
+fn instructions(base: &str) -> String {
+    let (_, problems) = crate::workflows::all(&tool_names());
+    if problems.is_empty() {
+        base.to_string()
+    } else {
+        format!(
+            "{base} Some of the user's workflows were skipped: {}",
+            problems.join("; ")
+        )
+    }
 }
 
 /// Names of every tool served.
@@ -120,8 +140,8 @@ pub(crate) fn tool_names() -> Vec<String> {
         .collect()
 }
 
-fn prompt_list() -> Vec<Value> {
-    prompts()
+fn prompt_list(prompts: Vec<Value>) -> Vec<Value> {
+    prompts
         .into_iter()
         .map(|mut p| {
             // Only what the protocol defines: the template and the
@@ -147,12 +167,12 @@ fn prompt_list() -> Vec<Value> {
 
 /// The prompt `name` with `arguments` filled in. A missing argument takes
 /// its documented default; a missing required one is an error.
-fn prompt(name: &str, arguments: &Value) -> Result<Value, String> {
-    let p = prompts()
-        .into_iter()
+fn prompt(prompts: &[Value], name: &str, arguments: &Value) -> Result<Value, String> {
+    let p = prompts
+        .iter()
         .find(|p| p["name"] == name)
         .ok_or_else(|| format!("no prompt named {name:?}; prompts/list has them"))?;
-    let text = crate::workflows::render(&p, arguments)?;
+    let text = crate::workflows::render(p, arguments)?;
     Ok(json!({
         "description": p["description"],
         "messages": [{ "role": "user", "content": { "type": "text", "text": text } }],
@@ -328,8 +348,10 @@ mod tests {
 
     #[test]
     fn prompts_are_listed_and_filled_in() {
-        let reply = handle(&json!({"jsonrpc":"2.0","id":7,"method":"prompts/list"})).unwrap();
-        let listed = reply["result"]["prompts"].as_array().unwrap();
+        // The built-in workflows only: the user's own file must not decide
+        // whether these tests pass.
+        let builtin = crate::workflows::builtin();
+        let listed = &prompt_list(builtin.clone());
         assert!(listed.len() >= 4);
         assert!(listed.iter().all(|p| p.get("template").is_none()));
         let allowed = ["name", "description", "required"];
@@ -360,23 +382,17 @@ mod tests {
                 );
             }
         }
-        let reply = handle(&json!({"jsonrpc":"2.0","id":8,"method":"prompts/get",
-            "params":{"name":"can-i-load","arguments":{"model":"qwen3:8b","ctx":"32768"}}}))
+        let reply = prompt(
+            &builtin,
+            "can-i-load",
+            &json!({"model":"qwen3:8b","ctx":"32768"}),
+        )
         .unwrap();
-        let text = reply["result"]["messages"][0]["content"]["text"]
-            .as_str()
-            .unwrap();
+        let text = reply["messages"][0]["content"]["text"].as_str().unwrap();
         assert!(text.contains("qwen3:8b") && text.contains("32768") && !text.contains("{model}"));
-        let missing = handle(&json!({"jsonrpc":"2.0","id":9,"method":"prompts/get",
-            "params":{"name":"can-i-load","arguments":{}}}))
-        .unwrap();
-        assert_eq!(missing["error"]["code"], -32602);
-        let reply = handle(&json!({"jsonrpc":"2.0","id":10,"method":"prompts/get",
-            "params":{"name":"what-changed"}}))
-        .unwrap();
-        let text = reply["result"]["messages"][0]["content"]["text"]
-            .as_str()
-            .unwrap();
+        assert!(prompt(&builtin, "can-i-load", &json!({})).is_err());
+        let reply = prompt(&builtin, "what-changed", &Value::Null).unwrap();
+        let text = reply["messages"][0]["content"]["text"].as_str().unwrap();
         assert!(text.contains("\"~1\""), "defaults fill in");
     }
 

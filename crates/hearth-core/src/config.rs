@@ -200,6 +200,9 @@ impl Config {
                     "variable names cannot be empty or contain '=' or NUL",
                 )?;
             }
+            if server.env.values().any(|v| v.contains('\0')) {
+                invalid("servers.*.env", name, "values cannot contain NUL")?;
+            }
             if server.dir.as_ref().is_some_and(|d| !d.is_absolute()) {
                 invalid("servers.*.dir", name, "must be an absolute path")?;
             }
@@ -283,6 +286,18 @@ impl Config {
 
     /// Values that only mean something relative to each other.
     fn relations(&self) -> Result<(), ConfigError> {
+        if let Some(k) = self
+            .state
+            .thinned_kinds
+            .iter()
+            .find(|k| !crate::state::KINDS.contains(&k.as_str()))
+        {
+            invalid(
+                "state.thinned_kinds",
+                k,
+                "is not a kind hearth records (ports, doctor, run)",
+            )?;
+        }
         let tiers = &self.state.tiers;
         if tiers.windows(2).any(|w| w[0].within_ms >= w[1].within_ms) {
             invalid(
@@ -440,6 +455,7 @@ mod tests {
             "[supervise]\nbackoff_factor = 0\n",
             "[notify]\nwebhook_url = \"file:///etc/passwd\"\n",
             "[[state.tiers]]\nwithin_ms = 2\nevery_ms = 0\n[[state.tiers]]\nwithin_ms = 1\nevery_ms = 0\n",
+            "[state]\nthinned_kinds = [\"doctr\"]\n",
             "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
         ] {
             assert!(

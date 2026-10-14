@@ -250,11 +250,14 @@ fn stats(journal: &Journal, json: bool) -> Result<String, String> {
             "oldest_ms": oldest, "newest_ms": newest, "bytes": bytes,
         }));
     }
-    let tags = journal.tags_lenient().map_err(|e| e.to_string())?.0.len();
+    let (tags, bad) = journal.tags_lenient().map_err(|e| e.to_string())?;
+    let tags = tags.len();
+    let unreadable: Vec<String> = bad.iter().map(ToString::to_string).collect();
     let report = serde_json::json!({
         "directory": journal.path().display().to_string(),
         "kinds": kinds,
         "tags": tags,
+        "unreadable_tags": unreadable,
     });
     if json {
         return crate::to_json(&report);
@@ -274,6 +277,9 @@ fn stats(journal: &Journal, json: bool) -> Result<String, String> {
         );
     }
     let _ = writeln!(out, "  {tags} tags");
+    for e in &unreadable {
+        let _ = writeln!(out, "  unreadable tag: {e}");
+    }
     Ok(out)
 }
 
@@ -296,7 +302,16 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
                 .ids_since(kind.name(), age)
                 .map_err(|e| e.to_string())?;
             let start = ids.len().saturating_sub(limit);
-            ids[start..].iter().map(|id| journal.read(id)).collect()
+            // A snapshot thinned away between listing and reading is not an
+            // error: it is just gone.
+            ids[start..]
+                .iter()
+                .map(|id| journal.read(id))
+                .filter(|r| {
+                    !matches!(r, Err(hearth_core::state::StateError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::NotFound)
+                })
+                .collect()
         }
         None => journal
             .recent(kind.name(), limit)
