@@ -105,7 +105,7 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - If measurement fails, hearth serializes. It never fails open.
 - **Recovery.**
   - A classifier sorts failures as transient, capacity, poisoned, wedged or model-missing. It uses latency signatures, stderr and HTTP evidence.
-  - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit or wedge, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` (ADR-004); the classifier and the retry come with the gateway.
+  - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit, wedge or a poisoned backend, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` and `hearthd` (ADR-004, ADR-007). The request-level classifier and the retry come with the gateway.
   - Runtimes hearth did not start are never killed.
 - **Gateway.**
   - OpenAI, Anthropic Messages and Ollama APIs, translated as needed.
@@ -114,8 +114,7 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - Errors are typed and carry a `remediation` field.
 - **Scheduling.** Priority classes, fair queuing across apps, quotas and deadline-aware shedding.
 - **For people and agents.**
-  - MCP actions on runtimes hearth owns (restart, load, unload, drain) through the daemon's admin API. Runtimes it did not start are refused, with the reason.
-  - Notifications when a runtime is poisoned or restarted, or when memory pressure or descriptor and thread use turns dangerous.
+  - MCP `load`, `unload` and `drain` on runtimes hearth owns, next to the `restart` that ships. Runtimes hearth did not start are refused, with the reason.
 - **Platforms.** macOS on Apple Silicon first. Linux with NVIDIA (NVML), AMD (sysfs) and CPU.
 
 ## License
