@@ -460,15 +460,40 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
     let mut seen = std::collections::BTreeSet::new();
     ports
         .iter()
-        .filter(|p| matches!(p.fingerprint.identity, Identity::LlamaCpp { model: Some(_), .. }))
         .filter(|p| seen.insert(p.pid))
         .filter_map(|p| {
-            let port = p.fingerprint.addr.port().to_string();
-            let line: Vec<String> = ["hearth", "--json", "fit", "--port", &port]
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect();
-            // A server whose fit cannot be computed is not a finding.
+            // What this exact process runs: its model and context from the
+            // answer already probed, its cache types from its own command
+            // line. Nothing is probed again and no other process is read.
+            let Identity::LlamaCpp {
+                model: Some(model),
+                n_ctx: Some(n_ctx),
+                slots,
+                ..
+            } = &p.fingerprint.identity
+            else {
+                return None;
+            };
+            let ctx = n_ctx.saturating_mul(slots.unwrap_or(1).max(1));
+            let (k, v) = crate::fit::cache_types_from_args(
+                &hearth_sense::process_args(p.pid).ok()?,
+            )?;
+            let line: Vec<String> = [
+                "hearth",
+                "--json",
+                "fit",
+                "--ctx",
+                &ctx.to_string(),
+                "--cache-type",
+                k.name(),
+                "--cache-type-v",
+                v.name(),
+                "--",
+                model,
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
             let r: Value = serde_json::from_str(&crate::dispatch(&line).ok()?).ok()?;
             if r["fits_device"] != false {
                 return None;

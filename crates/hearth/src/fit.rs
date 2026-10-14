@@ -124,7 +124,7 @@ fn server_cache_types(port: u16) -> Option<(CacheType, CacheType)> {
 }
 
 /// See [`server_cache_types`]: only a llama-server's arguments say this.
-fn cache_types_from_args(args: &[String]) -> Option<(CacheType, CacheType)> {
+pub(crate) fn cache_types_from_args(args: &[String]) -> Option<(CacheType, CacheType)> {
     let program = args.first()?;
     if !std::path::Path::new(program)
         .file_name()
