@@ -28,6 +28,15 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 | Why hearth waited, retried or reported something | `config`; `doctor` with `explain` for where each number comes from |
 | The whole picture in one call | `bundle` |
 
+## Resources
+
+Recorded snapshots are MCP resources, read with `resources/read`:
+- `hearth://ports/~0`: the latest ports snapshot;
+- `hearth://doctor/@1h`: the doctor snapshot from an hour ago;
+- `hearth://run/healthy`: the run snapshot at the tag `healthy`.
+
+`resources/list` offers the latest snapshot of each kind and every tag. The template `hearth://{kind}/{reference}` takes any reference that `diff` takes.
+
 ## Workflows
 
 `hearth mcp` also serves MCP prompts. Each is a workflow: which tools to call, in which order, and how to answer.

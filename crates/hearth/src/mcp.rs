@@ -57,7 +57,7 @@ fn handle(msg: &Value) -> Option<Value> {
                 id,
                 json!({
                     "protocolVersion": version,
-                    "capabilities": { "tools": {}, "prompts": {} },
+                    "capabilities": { "tools": {}, "prompts": {}, "resources": {} },
                     "serverInfo": { "name": "hearth", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": instructions("hearth inspects a machine that runs local models and keeps the servers hearthd owns alive. \
                         Start with a workflow from prompts/list when one fits (diagnose-slow-machine, server-died, can-i-load, what-changed, find-a-leak). \
@@ -65,12 +65,29 @@ fn handle(msg: &Value) -> Option<Value> {
                         incidents for crashes and kills; fit before loading a model; \
                         log, diff, show, follow and tag for history (references: ~N, @2h, ids, tag names); \
                         status, logs, restart, stop, start and reload for hearthd's servers (only those: never act on a process hearth did not start); \
-                        config for why hearth did something; process_memory for what one process really uses; bundle for everything at once."),
+                        config for why hearth did something; snapshots are also resources (hearth://ports/~0, hearth://doctor/@1h, hearth://run/TAG); process_memory for what one process really uses; bundle for everything at once."),
                 }),
             )
         }
         Some("ping") => ok(id, json!({})),
         Some("tools/list") => ok(id, json!({ "tools": listed_tools() })),
+        Some("resources/list") => match resources() {
+            Ok(list) => ok(id, json!({ "resources": list })),
+            Err(e) => error(id, -32603, &e),
+        },
+        Some("resources/templates/list") => ok(
+            id,
+            json!({ "resourceTemplates": [{
+                "uriTemplate": "hearth://{kind}/{reference}",
+                "name": "A recorded snapshot",
+                "description": "kind is ports, doctor or run; reference is a snapshot id, ~N (N before the latest), @AGE (@30m, @2h, @1d) or a tag name.",
+                "mimeType": "application/json",
+            }] }),
+        ),
+        Some("resources/read") => match read_resource(params["uri"].as_str().unwrap_or_default()) {
+            Ok(contents) => ok(id, json!({ "contents": [contents] })),
+            Err(e) => error(id, -32002, &e),
+        },
         Some("prompts/list") => ok(id, json!({ "prompts": prompt_list(prompts()) })),
         Some("prompts/get") => match prompt(
             &prompts(),
@@ -104,6 +121,61 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
         "structuredContent": structured,
         "isError": is_error,
     })
+}
+
+const KINDS: [&str; 3] = ["ports", "doctor", "run"];
+
+/// The journal as MCP resources: the latest snapshot of each kind, and each
+/// kind at every tag.
+fn resources() -> Result<Vec<Value>, String> {
+    let config = hearth_core::config::load().map_err(|e| e.to_string())?;
+    let journal = hearth_core::state::Journal::open(&config.state).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for kind in KINDS {
+        if journal.ids(kind).map_err(|e| e.to_string())?.is_empty() {
+            continue;
+        }
+        out.push(json!({
+            "uri": format!("hearth://{kind}/~0"),
+            "name": format!("latest {kind}"),
+            "description": format!("The most recent {kind} snapshot hearth recorded."),
+            "mimeType": "application/json",
+        }));
+    }
+    for (tag, ids) in journal.tags_lenient().map_err(|e| e.to_string())?.0 {
+        for kind in ids.keys() {
+            out.push(json!({
+                "uri": format!("hearth://{kind}/{tag}"),
+                "name": format!("{kind} at tag {tag}"),
+                "mimeType": "application/json",
+            }));
+        }
+    }
+    Ok(out)
+}
+
+/// One snapshot, named `hearth://KIND/REFERENCE`. The reference is
+/// validated by the journal before it touches the file system.
+fn read_resource(uri: &str) -> Result<Value, String> {
+    let rest = uri
+        .strip_prefix("hearth://")
+        .ok_or_else(|| format!("{uri:?} is not a hearth:// resource"))?;
+    let (kind, reference) = rest
+        .split_once('/')
+        .ok_or("expected hearth://KIND/REFERENCE")?;
+    if !KINDS.contains(&kind) {
+        return Err(format!("unknown kind {kind:?}; one of ports, doctor, run"));
+    }
+    let config = hearth_core::config::load().map_err(|e| e.to_string())?;
+    let journal = hearth_core::state::Journal::open(&config.state).map_err(|e| e.to_string())?;
+    let snapshot = journal
+        .resolve(kind, reference)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "uri": uri,
+        "mimeType": "application/json",
+        "text": serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?,
+    }))
 }
 
 /// The workflows, built-in and the user's (see [`crate::workflows`]).
@@ -442,6 +514,26 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|t| t.get("cli").is_none())
+        );
+    }
+
+    #[test]
+    fn resource_uris_are_checked_before_the_journal_is_touched() {
+        for bad in [
+            "http://x",
+            "hearth://",
+            "hearth://secrets/~0",
+            "hearth://ports",
+        ] {
+            assert!(read_resource(bad).is_err(), "{bad}");
+        }
+        let reply =
+            handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/templates/list"})).unwrap();
+        assert!(
+            reply["result"]["resourceTemplates"][0]["uriTemplate"]
+                .as_str()
+                .unwrap()
+                .starts_with("hearth://")
         );
     }
 

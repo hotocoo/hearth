@@ -139,3 +139,7 @@ That is about 700 doctor snapshots, some 45 MB at tens of KB each. `max_snapshot
 
 Kinds not listed, such as `run` events, are only capped, because every event matters. Tagged snapshots are exempt as before. Configuration rejects tiers whose windows do not grow.
 
+## Addendum (2026-10-15): snapshots as MCP resources
+
+`hearth mcp` declares the `resources` capability. Each snapshot is `hearth://KIND/REFERENCE`, where KIND is ports, doctor or run and REFERENCE is an id, `~N`, `@AGE` or a tag. The reference goes through the journal's own resolution, so it is validated before it touches the file system. `resources/list` offers the latest snapshot of each kind and each tag.
+
