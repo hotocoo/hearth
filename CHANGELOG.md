@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:42 fit check refinements
+
+- The fit check before start refuses only a too-big verdict. A check that cannot run is reported, and the start goes ahead. Verdicts are reused across restarts.
+- `fit --port` counts llama.cpp's per-sequence `n_ctx` times its slots.
+- `ctx = 0`, an empty `model` and unknown cache types are rejected up front.
+
 ### 2026-10-15 04:33 hearth run fit check
 
 - `hearth run --model M --ctx N --cache-type T -- …` checks before every start that the model fits the device, as hearthd does for declared servers.
