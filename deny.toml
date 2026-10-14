@@ -1,0 +1,34 @@
+# cargo-deny: what may enter the dependency tree. CI runs `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every RustSec advisory that affects a dependency fails the check, including
+# unmaintained and yanked crates.
+yanked = "deny"
+
+[licenses]
+# Licenses compatible with shipping hearth as Apache-2.0 OR MIT.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate are worth knowing about, not failing on.
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies inside this workspace carry versions too.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io; no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
