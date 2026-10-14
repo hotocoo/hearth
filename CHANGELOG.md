@@ -4,6 +4,16 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:06 hearthd control socket hardening
+
+- **Lock.** One hearthd per state directory, enforced with an exclusive lock on `hearthd.lock`. A stale socket is replaced only when it is a socket. The socket is 0600. MSRV is now 1.89, for `File::try_lock`.
+- **Ownership.** The state directory and socket must be real, owned by the user, and private. hearthd and the client both check, so a spoofed socket in a shared directory is refused. An existing directory is never chmodded.
+- **Limits.** New `[control]` keys `max_message_bytes` and `timeout_ms` bound every exchange. Clients are served one at a time from memory. Bad requests get an error answer.
+- **Restarts.** A restart is acted on at once, and at most one order is pending per server.
+- **Resilience.** Logging survives a closed stdout. A panicking supervisor marks its server `unsupervised`. Poisoned locks recover. Accept errors are paced.
+- **Status.** Control characters are stripped from `hearth status` output.
+- **Tests.** New tests cover a second hearthd, oversized and stalled clients, a file squatting the socket path, and a state directory open to others.
+
 ### 2026-10-15 00:56 hearth service
 
 - `hearth service install|uninstall|show`: runs hearthd at login as the user.
