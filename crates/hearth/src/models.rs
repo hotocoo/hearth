@@ -48,8 +48,8 @@ struct Model {
     serving_on: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
-    /// Where its weights are, to match it against running servers.
-    #[serde(skip)]
+    /// Where its weights are (a directory for MLX and safetensors).
+    #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<std::path::PathBuf>,
 }
 
