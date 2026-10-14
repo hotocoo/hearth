@@ -166,6 +166,7 @@ fn ports_round(
     out: &mut Out,
     previous: Option<&Value>,
     known: &mut std::collections::BTreeSet<(String, u16)>,
+    confirm: u32,
 ) -> Result<(Value, Seen), String> {
     let (report, _, errors) = crate::ports::observe_recorded()?;
     known.extend(crate::ports::runtime_keys(&report));
@@ -184,8 +185,10 @@ fn ports_round(
             out.notify("hearth: runtime", &text, &event);
         }
     }
-    // Warnings about how a server runs (configured past the device, slow,
-    // silent) are states: reported once when they appear and when they clear.
+    // Warnings about how a server runs (configured past the device, slow)
+    // are states: reported once when they appear and when they clear, after
+    // `watch.confirm_rounds` rounds either way, so one probe that failed or
+    // answered late does not open or clear one.
     let mut problems: Seen = report["findings"]
         .as_array()
         .into_iter()
@@ -200,7 +203,7 @@ fn ports_round(
                     f["message"].as_str().unwrap_or_default(),
                     f["remediation"].as_str().unwrap_or_default()
                 ),
-                1,
+                confirm,
             )
         })
         .collect();
@@ -298,14 +301,15 @@ fn watch(
         }
         if now >= next_ports {
             next_ports = now + ports_every;
-            let problems = match ports_round(out, ports.as_ref(), &mut known_runtimes) {
-                Ok((report, problems)) => {
-                    ports = Some(report);
-                    problems
-                }
-                Err(e) if e.starts_with("output closed") => return Err(e),
-                Err(e) => vec![("failed".into(), format!("ports failed: {e}"), 1)],
-            };
+            let problems =
+                match ports_round(out, ports.as_ref(), &mut known_runtimes, w.confirm_rounds) {
+                    Ok((report, problems)) => {
+                        ports = Some(report);
+                        problems
+                    }
+                    Err(e) if e.starts_with("output closed") => return Err(e),
+                    Err(e) => vec![("failed".into(), format!("ports failed: {e}"), 1)],
+                };
             out.report("ports", ports_tracker.round(problems))?;
         }
         let wake = next_doctor.min(next_ports);

@@ -47,7 +47,7 @@ The intervals and the horizon are `[watch]` keys, validated non-zero and represe
 
 `ports` checks every llama.cpp server it finds, with the same computation as `hearth fit --port`. That uses the server's `/props` context times its slots, and the cache types on its command line. A server whose model at that context exceeds the device ceiling is a **warn** finding. The remediation gives the largest context that fits and the cache types that would keep the current one.
 
-`watch` (and hearthd) report warn findings from `ports` as problems, once when they appear and once when they clear, keyed by finding code and pid. Silent ports are left out, because they are already reported as runtime changes.
+`watch` (and hearthd) report warn findings from `ports` as problems, once when they appear and once when they clear, keyed by finding code and pid. Like projected limits, they must hold for `watch.confirm_rounds` rounds to open and be gone as long to clear. A single probe that answered late, or a fit that could not be computed, therefore neither opens nor clears one. Silent ports are left out, because they are already reported as runtime changes.
 
 On the development machine, the first watch round flagged the user's llama-server: 262,144 tokens of q8_0 cache need 56.9 GiB against Metal's 51.8 GiB. This is the configuration behind the memory pressure every earlier `doctor` showed.
 

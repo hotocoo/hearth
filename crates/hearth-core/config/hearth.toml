@@ -146,8 +146,9 @@ ports_interval_ms = 60000
 # is not reported: descriptor and thread counts move all the time.
 limit_horizon_ms = 3600000
 
-# Rounds in a row a projected limit must show before it is reported, and
-# must be gone before it is reported cleared. One rate measured over one
+# Rounds in a row a projected limit, or a ports warning (a server slow or
+# configured past the device), must show before it is reported, and must be
+# gone before it is reported cleared. One rate measured over one
 # interval wobbles; without this a count hovering near the horizon would
 # open and clear on alternate rounds. Kernel memory pressure is reported at
 # once.
