@@ -28,6 +28,17 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: incidents smoke test (Linux kernel log)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p hearth --bin hearth
+          # The runner may not be allowed to read the kernel log; then the
+          # command must say why, not crash or claim there is nothing.
+          if ./target/debug/hearth --json incidents > incidents.json 2> incidents.err; then
+            python3 -c "import json; json.load(open('incidents.json'))"
+          else
+            grep -q "journalctl" incidents.json incidents.err
+          fi
       - name: probe smoke test
         run: |
           cargo build --release -p hearth-sense --bin hearth-probe

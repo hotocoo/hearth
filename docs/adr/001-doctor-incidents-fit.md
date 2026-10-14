@@ -79,3 +79,14 @@ The GGUF reader is bounded:
 - Still to do:
   - CLOSE_WAIT socket counts per process need socket-level `proc_pidfdinfo`, which `libc` does not expose. Open-file growth under `--watch` already names a leaking process.
   - Linux crash forensics.
+
+## Addendum (2026-10-15): Linux incidents
+
+On Linux, `hearth incidents` reads the kernel log through `journalctl -k -o short-iso`. It reports two kinds of incident:
+- **OOM kills.** Machine-wide or by a memory cgroup's limit. Each gives the process, its pid, and the anonymous memory the kill freed.
+- **Hung tasks.** A task in uninterruptible sleep past the kernel's hung-task timeout, which is what a process stuck on a dead device or GPU driver looks like.
+
+Lines are matched on the kernel's own format strings, from `mm/oom_kill.c` and `kernel/hung_task.c`.
+
+Reading the kernel log usually needs the `systemd-journal` or `adm` group. When it is refused, the command says so and why, rather than reporting no incidents.
+

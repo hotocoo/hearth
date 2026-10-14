@@ -38,6 +38,23 @@ pub enum Kind {
     },
     /// Shutdown waited on a process that would not exit.
     ShutdownStall,
+    /// The Linux OOM killer killed a process, machine-wide or inside a
+    /// memory cgroup.
+    OomKill {
+        process: String,
+        pid: i64,
+        /// Anonymous memory it held when killed: what the kill freed.
+        anon_rss_bytes: Option<u64>,
+        /// Killed by its cgroup's limit, not by the machine running out.
+        cgroup: bool,
+    },
+    /// A task sat in uninterruptible sleep past the kernel's hung-task
+    /// timeout: what a process stuck on a dead device or driver looks like.
+    HungTask {
+        process: String,
+        pid: i64,
+        seconds: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -127,6 +144,69 @@ pub fn parse_file(path: &Path) -> Option<Incident> {
         time,
         source: path.to_path_buf(),
         kind,
+    })
+}
+
+/// Incidents in kernel log lines as `journalctl -k -o short-iso` prints
+/// them: `<time> <host> kernel: <message>`. The messages matched are the
+/// kernel's own format strings:
+/// * `mm/oom_kill.c`: `"%s: Killed process %d (%s) total-vm:%lukB,
+///   anon-rss:%lukB, ..."`, where `%s` is `Out of memory` or `Memory cgroup
+///   out of memory`;
+/// * `kernel/hung_task.c`: `"INFO: task %s:%d blocked for more than %ld
+///   seconds."`.
+#[must_use]
+pub fn from_kernel_log(text: &str, source: &Path) -> Vec<Incident> {
+    text.lines()
+        .filter_map(|line| {
+            let (time, message) = match line.split_once(" kernel: ") {
+                Some((head, message)) => (head.split_whitespace().next(), message),
+                None => (None, line),
+            };
+            let kind = oom_kill(message).or_else(|| hung_task(message))?;
+            Some(Incident {
+                time: time.map(str::to_string),
+                source: source.to_path_buf(),
+                kind,
+            })
+        })
+        .collect()
+}
+
+fn oom_kill(message: &str) -> Option<Kind> {
+    let (cause, rest) = message.split_once(": Killed process ")?;
+    let cgroup = cause.ends_with("Memory cgroup out of memory");
+    if !cgroup && !cause.ends_with("Out of memory") {
+        return None;
+    }
+    let (pid, rest) = rest.split_once(" (")?;
+    let (process, rest) = rest.split_once(") ")?;
+    let anon_rss_bytes = rest
+        .split(", ")
+        .find_map(|f| {
+            f.strip_prefix("anon-rss:")?
+                .strip_suffix("kB")?
+                .parse::<u64>()
+                .ok()
+        })
+        .map(|kb| kb.saturating_mul(1024));
+    Some(Kind::OomKill {
+        process: process.to_string(),
+        pid: pid.trim().parse().ok()?,
+        anon_rss_bytes,
+        cgroup,
+    })
+}
+
+fn hung_task(message: &str) -> Option<Kind> {
+    let rest = message.split_once("INFO: task ")?.1;
+    let (task, rest) = rest.split_once(" blocked for more than ")?;
+    let (process, pid) = task.rsplit_once(':')?;
+    let seconds = rest.split_whitespace().next()?.parse().ok()?;
+    Some(Kind::HungTask {
+        process: process.to_string(),
+        pid: pid.parse().ok()?,
+        seconds,
     })
 }
 
@@ -327,6 +407,40 @@ mod tests {
         }
         assert!(parse_file(&write(&dir, "notes.txt", "x")).is_none());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reads_oom_kills_and_hung_tasks_from_the_kernel_log() {
+        let log = "\
+2026-10-14T03:12:09+0800 box kernel: llama-server invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=0
+2026-10-14T03:12:09+0800 box kernel: Out of memory: Killed process 4242 (llama-server) total-vm:61234560kB, anon-rss:41943040kB, file-rss:1024kB, shmem-rss:0kB, UID:1000 pgtables:90000kB oom_score_adj:0
+2026-10-14T04:00:00+0800 box kernel: Memory cgroup out of memory: Killed process 77 (python3) total-vm:100kB, anon-rss:2048kB, file-rss:0kB, shmem-rss:0kB, UID:1000 pgtables:8kB oom_score_adj:0
+2026-10-14T05:00:00+0800 box kernel: INFO: task ollama:991 blocked for more than 122 seconds.
+2026-10-14T05:00:01+0800 box kernel: usb 1-1: new high-speed USB device number 2
+";
+        let found = from_kernel_log(log, Path::new("journalctl -k"));
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[0].time.as_deref(), Some("2026-10-14T03:12:09+0800"));
+        match &found[0].kind {
+            Kind::OomKill {
+                process,
+                pid,
+                anon_rss_bytes,
+                cgroup,
+            } => {
+                assert_eq!(
+                    (process.as_str(), *pid, *cgroup),
+                    ("llama-server", 4242, false)
+                );
+                assert_eq!(*anon_rss_bytes, Some(41_943_040 * 1024));
+            }
+            k => panic!("{k:?}"),
+        }
+        assert!(matches!(found[1].kind, Kind::OomKill { cgroup: true, .. }));
+        assert!(matches!(
+            &found[2].kind,
+            Kind::HungTask { process, pid: 991, seconds: 122 } if process == "ollama"
+        ));
     }
 
     #[test]
