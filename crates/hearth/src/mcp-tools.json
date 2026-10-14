@@ -105,6 +105,11 @@
         "serving": {
           "type": "boolean",
           "description": "Also mark which models a running server serves now, and on which address (probes the listening runtimes, as ports with runtimes_only does)."
+        },
+        "ctx": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only models the device holds at this many tokens of context, at cache_type or the model's own dtype: what can run here with that context."
         }
       }
     },

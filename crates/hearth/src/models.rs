@@ -23,6 +23,10 @@ pub struct Args {
     /// every listening runtime, as `hearth ports --runtimes` does).
     #[arg(long)]
     serving: bool,
+    /// Only models the device holds at this many tokens of context (at
+    /// --cache-type, or the model's own dtype): what can run here with it.
+    #[arg(long)]
+    ctx: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -194,6 +198,11 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
                 args.cache_type,
                 ceiling.as_ref().map(|c| c.bytes),
             )
+        })
+        // A model that could not be sized does not show it fits.
+        .filter(|m| {
+            args.ctx
+                .is_none_or(|want| m.max_ctx_device.is_some_and(|n| n >= want))
         })
         .collect();
     let mut models = models;
