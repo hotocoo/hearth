@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:17 supply-chain checks in CI
+
+- `cargo deny check` runs on every push. Licenses must be compatible with Apache-2.0 OR MIT. Yanked crates, wildcard versions, unknown registries and git sources fail the build, as do RustSec advisories.
+
 ### 2026-10-15 01:15 hearthd watches the machine (ADR-008)
 
 - With `watch.in_hearthd = true` (new key, default), hearthd runs the `hearth watch` rounds on its own thread. Findings go to its log, the journal and `[notify]`.
