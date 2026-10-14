@@ -217,14 +217,6 @@ fn supervise(
             Ok(Order::Start | Order::Stop) => {}
             Err(()) => events.extend(supervised.poll()),
         }
-        let (state, pid) = supervised.status();
-        let state = if halted { "stopped" } else { state };
-        let restarts = supervised.restarts();
-        update(board, name, |s| {
-            s.state = state.to_string();
-            s.pid = pid;
-            s.restarts = restarts;
-        });
         for event in events {
             let listening = match &event {
                 hearth_runtime::supervise::Event::Ready { .. } => {
@@ -256,6 +248,16 @@ fn supervise(
                 s.last_event_at_ms = Some(at);
             });
         }
+        // After the events, so status never shows a state whose details
+        // (the server's pid, the last event) are not there yet.
+        let (state, pid) = supervised.status();
+        let state = if halted { "stopped" } else { state };
+        let restarts = supervised.restarts();
+        update(board, name, |s| {
+            s.state = state.to_string();
+            s.pid = pid;
+            s.restarts = restarts;
+        });
     }
 }
 
