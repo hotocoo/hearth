@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:47 models listing fixes
+
+- **Store reads.** `models` reads each model from the store it is listed in. A stray file such as `.DS_Store` or one unreadable directory no longer hides other stores' models.
+- **Errors.** Unfinished downloads are skipped. Names hearth cannot look up are reported.
+- **`show --pointer`.** It refuses a pointer that does not start with `/`.
+
 ### 2026-10-15 06:39 hearth models
 
 - **`hearth models [FILTER] [--cache-type T]`.** Lists every model in the Hugging Face cache, LM Studio and Ollama's store. Each line gives its architecture, weights, trained context and the largest context the device holds it at. Names are what `fit` takes. Only files are read.
