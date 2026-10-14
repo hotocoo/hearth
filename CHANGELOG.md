@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:27 MCP prompts: diagnostic workflows
+
+- `hearth mcp` serves four workflows through `prompts/list` and `prompts/get`: `diagnose-slow-machine`, `server-died`, `can-i-load` and `what-changed`.
+- Each workflow names the tools to call, in order, and how to answer.
+- Arguments have defaults, and a missing required argument is an invalid-params error.
+
 ### 2026-10-15 01:24 Ollama model names in fit
 
 - `hearth fit qwen3:8b …` and MCP `fit` with `model: "qwen3:8b"` find the weights in Ollama's store, read from `OLLAMA_MODELS` or Ollama's defaults. Only files are read: Ollama need not run, and nothing is loaded.
