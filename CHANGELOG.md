@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:30 compute buffer fixes
+
+- **Ready events.** A `ready` event carries `compute_bytes` only when llama.cpp logged some. `fit` never treats zero as a measurement.
+- **JSON.** `fit`'s JSON drops `excludes` when compute buffers were measured.
+- **Fit note.** It says the value reflects that start's batch and flash-attention settings.
+
 ### 2026-10-15 06:22 learned compute buffers
 
 - **Logged at start.** `hearth run` and hearthd now record the model, KV and compute buffer sizes that llama.cpp logs while loading, on each `ready` event.
