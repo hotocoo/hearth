@@ -19,7 +19,13 @@ pub struct Args {
     /// GGUF file (any shard of a split model), or an Ollama model name such
     /// as `qwen3:8b`, found in Ollama's store (`OLLAMA_MODELS`, else its
     /// default) without asking Ollama.
-    model: PathBuf,
+    #[arg(required_unless_present = "port")]
+    model: Option<PathBuf>,
+    /// Instead of a model: the port of a running server on this machine,
+    /// asked which model it serves (llama.cpp reports its file; Ollama the
+    /// model loaded, given with --model when it has several).
+    #[arg(long)]
+    port: Option<u16>,
     /// Total tokens of KV cache the runtime will allocate (llama.cpp `-c`;
     /// for Ollama, `num_ctx` × `OLLAMA_NUM_PARALLEL`).
     #[arg(long)]
@@ -75,8 +81,62 @@ struct Ceiling {
     source: String,
 }
 
-/// The model's file: the path given, or the Ollama model of that name.
-fn locate(model: &std::path::Path) -> Result<PathBuf, String> {
+/// The model's file: from the server on `port` when given, else the path
+/// given, else the Ollama model of that name.
+fn locate(args: &Args) -> Result<PathBuf, String> {
+    match (args.port, &args.model) {
+        (Some(port), model) => from_server(port, model.as_deref()),
+        (None, Some(model)) => from_name(model),
+        (None, None) => Err("give a model or --port".into()),
+    }
+}
+
+/// Asks the server on `port` which model it serves, read-only.
+fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, String> {
+    use hearth_runtime::fingerprint::{Identity, fingerprint};
+    let config = hearth_core::config::load().map_err(|e| e.to_string())?;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let identity = fingerprint(
+        addr,
+        std::time::Duration::from_millis(config.discovery.first_contact_timeout_ms),
+        config.discovery.max_probe_response_bytes,
+    )
+    .identity;
+    match identity {
+        Identity::LlamaCpp {
+            model: Some(path), ..
+        } if model.is_none() => Ok(PathBuf::from(path)),
+        Identity::Ollama { loaded, .. } => {
+            let names: Vec<String> = loaded.into_iter().map(|l| l.name).collect();
+            let name = match (model, names.as_slice()) {
+                (Some(m), _) => m.to_string_lossy().into_owned(),
+                (None, [only]) => only.clone(),
+                (None, []) => {
+                    return Err(format!(
+                        "Ollama on {addr} has no model loaded; name one with --model"
+                    ));
+                }
+                (None, several) => {
+                    return Err(format!(
+                        "Ollama on {addr} has several models loaded ({}); pick one with --model",
+                        several.join(", ")
+                    ));
+                }
+            };
+            hearth_runtime::ollama_store::weights(&name)
+        }
+        Identity::LlamaCpp { .. } if model.is_some() => Err(
+            "--model and --port name the model twice: a llama.cpp server reports its own".into(),
+        ),
+        other => Err(format!(
+            "{addr} does not report a model file: {}",
+            serde_json::to_string(&other).unwrap_or_default()
+        )),
+    }
+}
+
+/// The path given, or the Ollama model of that name.
+fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
     if model.exists() {
         return Ok(model.to_path_buf());
     }
@@ -93,7 +153,7 @@ fn locate(model: &std::path::Path) -> Result<PathBuf, String> {
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
-    let model = locate(&args.model)?;
+    let model = locate(args)?;
     let files = gguf::model_files(&model);
     let weights_bytes = files
         .iter()
@@ -258,4 +318,66 @@ fn render(r: &Report) -> String {
         let _ = writeln!(out, "  note: {n}");
     }
     out
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+
+    /// Answers fixed JSON per path, as the runtime would.
+    fn fake(routes: Vec<(&'static str, &'static str)>) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { return };
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let reply = routes.iter().find(|(p, _)| *p == path).map_or_else(
+                    || "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
+                    |(_, body)| {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                            body.len()
+                        )
+                    },
+                );
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn a_llama_server_names_its_own_file() {
+        let port = fake(vec![
+            (
+                "/props",
+                r#"{"default_generation_settings":{"n_ctx":4096},"total_slots":1,"model_path":"/m/q.gguf"}"#,
+            ),
+            ("/health", r#"{"status":"ok"}"#),
+        ]);
+        assert_eq!(from_server(port, None).unwrap(), PathBuf::from("/m/q.gguf"));
+        assert!(
+            from_server(port, Some(std::path::Path::new("x")))
+                .unwrap_err()
+                .contains("twice")
+        );
+    }
+
+    #[test]
+    fn ollama_with_several_models_needs_one_named() {
+        let port = fake(vec![
+            ("/api/version", r#"{"version":"0.30"}"#),
+            (
+                "/api/ps",
+                r#"{"models":[{"name":"a:1","size":1},{"name":"b:2","size":2}]}"#,
+            ),
+        ]);
+        let e = from_server(port, None).unwrap_err();
+        assert!(e.contains("a:1, b:2"), "{e}");
+    }
 }

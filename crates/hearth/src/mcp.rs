@@ -193,7 +193,15 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         }
         "fit" => {
             command_line.push("fit".into());
-            command_line.push(args["model"].as_str().ok_or("model is required")?.into());
+            match (args["model"].as_str(), args["port"].as_u64()) {
+                (None, None) => return Err("model or port is required".into()),
+                (model, port) => {
+                    command_line.extend(model.map(str::to_string));
+                    if let Some(p) = port {
+                        command_line.extend(["--port".into(), p.to_string()]);
+                    }
+                }
+            }
             command_line.extend([
                 "--ctx".into(),
                 args["ctx"].as_u64().ok_or("ctx is required")?.to_string(),

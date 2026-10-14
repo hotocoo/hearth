@@ -36,14 +36,13 @@
     "inputSchema": {
       "type": "object",
       "required": [
-        "model",
         "ctx",
         "cache_type"
       ],
       "properties": {
         "model": {
           "type": "string",
-          "description": "Path to a .gguf file (any shard of a split model), or an Ollama model name such as qwen3:8b, read from Ollama's store without asking Ollama."
+          "description": "Path to a .gguf file (any shard of a split model), or an Ollama model name such as qwen3:8b, read from Ollama's store without asking Ollama. Required unless port is given."
         },
         "ctx": {
           "type": "integer",
@@ -67,6 +66,12 @@
           "type": "integer",
           "minimum": 1,
           "description": "Physical batch size (with parallel)."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Instead of model (or with an Ollama model name): the port of a running server on this machine, asked which model it serves. Answers whether that server could take a different context."
         }
       }
     }

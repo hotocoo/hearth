@@ -109,3 +109,17 @@ Each workflow names the tools to call in order, how to read their answers, and t
 
 A test fails when a workflow names a tool that does not exist. The workflows therefore cannot drift from the tool list.
 
+## Addendum (2026-10-15): `fit --port`
+
+`hearth fit --port P` asks the server on `P`, with the same read-only fingerprint as `ports`, which model it serves, and fits that file at the context given.
+- **llama.cpp** reports its model file.
+- **Ollama** reports the models it has loaded. One loaded model is used directly; with several, `--model` picks which. The weights are then found in Ollama's store.
+
+This answers "could my running server take a different context" without restarting it.
+
+On the development machine, the running llama-server (`--ctx-size 262144`, q8_0 K and V) came out at:
+- 34.53 GiB of KV cache, against a measured footprint of about 35 GiB (macOS footprints exclude memory-mapped weights);
+- plus 22.38 GiB of weights, 56.9 GiB in total.
+
+That is above Metal's recommended working set of 51.84 GiB, the memory pressure `doctor` and `watch` kept reporting. The largest context that fits the device is 223,620 tokens.
+
