@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 01:15 hearthd watches the machine (ADR-008)
+
+- With `watch.in_hearthd = true` (new key, default), hearthd runs the `hearth watch` rounds on its own thread. Findings go to its log, the journal and `[notify]`.
+- `hearth watch` refuses to run while hearthd watches, and says where the findings are.
+- Inside hearthd a closed stdout never stops the watching.
+
 ### 2026-10-15 01:13 login service PATH and control handler fixes
 
 - `hearth service install` carries `PATH` into the unit. Service managers start agents with a minimal one, in which `llama-server` would not be found.
