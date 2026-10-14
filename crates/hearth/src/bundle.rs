@@ -40,6 +40,17 @@ fn part(argv: &[&str], config_error: Option<&str>) -> Value {
     }
 }
 
+/// Replaces the configuration's error text wherever it appears in `value`:
+/// commands that still succeed report it among their own errors.
+fn scrub(value: &mut Value, error: &str) {
+    match value {
+        Value::String(s) if s.contains(error) => *s = WITHHELD.to_string(),
+        Value::Array(items) => items.iter_mut().for_each(|v| scrub(v, error)),
+        Value::Object(map) => map.values_mut().for_each(|v| scrub(v, error)),
+        _ => {}
+    }
+}
+
 /// Replaces values that may hold secrets.
 fn redact(config: &mut Value) {
     for s in config["settings"].as_array_mut().into_iter().flatten() {
@@ -65,7 +76,7 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
     let c = broken.as_deref();
     let mut config = part(&["config"], c);
     redact(&mut config);
-    let bundle = json!({
+    let mut bundle = json!({
         "hearth_version": env!("CARGO_PKG_VERSION"),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
@@ -77,12 +88,24 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
         "tags": part(&["tag"], c),
         "config": config,
     });
+    if let Some(error) = c {
+        scrub(&mut bundle, error);
+    }
     crate::to_json(&bundle)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configuration_errors_are_scrubbed_everywhere() {
+        let error = "h.toml: line 2: webhook_url = \"https://x/TOKEN\" oops";
+        let mut v = json!({ "doctor": { "state_errors": [error] }, "n": 1 });
+        scrub(&mut v, error);
+        assert!(!v.to_string().contains("TOKEN"), "{v}");
+        assert_eq!(v["n"], 1);
+    }
 
     #[test]
     fn secrets_are_redacted() {
