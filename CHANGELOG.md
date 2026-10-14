@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:55 servers configured past the device are flagged
+
+- `hearth ports` warns about any llama.cpp server whose model, at its context and cache types, exceeds the device. The warning gives the largest context that fits and the cache types that would keep the context.
+- `watch` and hearthd report it once.
+- `ports` findings carry `code` and `pid`.
+
 ### 2026-10-15 04:52 fit a running server with no arguments
 
 - `hearth fit --port P` reads a llama-server's cache types from its command line, with f16 when absent. `--cache-type` is optional with `--port`.
