@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 04:03 cgroup-aware memory on Linux
+
+- Inside a memory-limited cgroup, such as a container or a systemd slice, total and available memory are the smaller of the host's and the tightest limit over the process: its own cgroup or any ancestor's. Available memory counts the cgroup's reclaimable page cache. `doctor --explain` says which limit applied.
+
 ### 2026-10-15 03:58 Linux memory pressure
 
 - On Linux, the memory pressure level is derived from PSI using the new `[pressure]` keys `psi_some_warn` and `psi_full_critical`. `doctor`, `watch`, `fit` and the metrics use it, and `doctor --explain` shows the derivation. Before this, Linux never warned.
