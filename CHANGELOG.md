@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08). Versions follow semver once v0.1.0 ships.
 
 ## Unreleased
 
+### 2026-10-15 00:05 hearth mcp
+
+- `hearth mcp` serves the CLI commands as MCP tools over stdio: `doctor`, `incidents`, `fit` and `process_memory`.
+  - It speaks protocol revisions 2024-11-05 to 2025-11-25.
+  - Tool arguments are parsed by the same `clap` definitions as the CLI, so agents and people get identical validation and answers.
+  - Errors are returned in-band with `isError`.
+
 ### 2026-10-14 23:40 hearth CLI: doctor, incidents, fit (ADR-001)
 
 - `hearth doctor`:

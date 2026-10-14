@@ -7,6 +7,7 @@
 mod doctor;
 mod fit;
 mod incidents;
+mod mcp;
 mod units;
 
 use clap::{Parser, Subcommand};
@@ -31,15 +32,32 @@ enum Command {
     /// Whether a GGUF model at a given context fits on this machine, now and
     /// at all.
     Fit(fit::Args),
+    /// Serve these commands as tools to AI agents over the Model Context
+    /// Protocol on stdin/stdout.
+    Mcp,
+}
+
+fn execute(cli: &Cli) -> Result<String, String> {
+    match &cli.command {
+        Command::Doctor(args) => doctor::run(args, cli.json),
+        Command::Incidents(args) => incidents::run(args, cli.json),
+        Command::Fit(args) => fit::run(args, cli.json),
+        Command::Mcp => mcp::serve(),
+    }
+}
+
+/// Runs a command line in-process; how MCP tools reach the CLI commands.
+pub(crate) fn dispatch(argv: &[String]) -> Result<String, String> {
+    let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
+    if matches!(cli.command, Command::Mcp) {
+        return Err("mcp cannot be called as a tool".into());
+    }
+    execute(&cli)
 }
 
 fn main() {
     let cli = Cli::parse();
-    let result = match cli.command {
-        Command::Doctor(args) => doctor::run(&args, cli.json),
-        Command::Incidents(args) => incidents::run(&args, cli.json),
-        Command::Fit(args) => fit::run(&args, cli.json),
-    };
+    let result = execute(&cli);
     match result {
         Ok(text) => print!("{text}"),
         Err(e) => {

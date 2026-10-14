@@ -53,7 +53,13 @@ cargo build --release -p hearth
 ./target/release/hearth fit model.gguf --ctx 32768 --cache-type q8_0   # fits the device? fits now? max context?
 ```
 
-Every command takes `--json`. Every finding carries a `remediation`. On the development machine, the first `hearth incidents` run found a kernel panic inside the GPU memory driver (`IOGPUMemory.cpp:550`), which is neither a watchdog reboot nor an OOM.
+Every command takes `--json`. Every finding carries a `remediation`.
+
+For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit` and `process_memory`. For Claude Code:
+
+```sh
+claude mcp add hearth -- /path/to/hearth mcp
+``` On the development machine, the first `hearth incidents` run found a kernel panic inside the GPU memory driver (`IOGPUMemory.cpp:550`), which is neither a watchdog reboot nor an OOM.
 
 ## hearth-probe
 
