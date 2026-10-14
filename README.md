@@ -146,6 +146,10 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - MCP `load`, `unload` and `drain` on runtimes hearth owns, next to the `restart` that ships. Runtimes hearth did not start are refused, with the reason.
 - **Platforms.** macOS on Apple Silicon first. Linux with NVIDIA (NVML), AMD (sysfs) and CPU.
 
+## Developing
+
+`scripts/check.sh` runs what CI runs before a commit: `cargo fmt --check`, clippy with warnings as errors, every test, and the check that `docs/configuration.md` matches the shipped configuration. Every value hearth uses lives in `crates/hearth-core/config/hearth.toml`, never as a number in Rust code.
+
 ## License
 
 Apache-2.0 OR MIT.
