@@ -197,6 +197,10 @@
         "reference": {
           "type": "string",
           "description": "An id from log, ~N, or a tag name for N before the latest (default ~0). Also @AGE for how things were that long ago: @30m, @2h, @1d."
+        },
+        "pointer": {
+          "type": "string",
+          "description": "Only this part, as a JSON pointer into the snapshot (like git show REF:PATH): /body/health/memory, /body/findings, /body/ports/0. Snapshots run to tens of KB, so ask for the part you need."
         }
       }
     },

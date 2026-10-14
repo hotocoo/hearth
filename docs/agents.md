@@ -23,7 +23,7 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 | How much history is there? | `log` with `stats` |
 | When did this error, model or pid first or last show up? | `log` with `grep` (each match keeps its `~N` for `show` and `diff`) |
 | When did this process start leaking or restarting? | `follow` with a name, kind `doctor`, `ports` or `run` |
-| Everything recorded at one moment | `show` |
+| Everything recorded at one moment | `show`, with `pointer` (`/body/health/memory`) for only the part you need |
 | Mark a known-good state to compare with later | `tag` |
 | Record what you changed or advised, and why | `note` with `by`; `log` with kind `note` reads them back |
 | Servers hearth keeps alive | `status`, `logs`, and `restart`, `stop`, `start` (owned servers only) |

@@ -129,6 +129,10 @@ pub struct ShowArgs {
     /// a tag.
     #[arg(default_value = "~0")]
     reference: String,
+    /// Only this part of it, as a JSON pointer into the snapshot, like
+    /// `git show REF:PATH`: `/body/health/memory`, `/body/ports/0`.
+    #[arg(long)]
+    pointer: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -532,7 +536,37 @@ pub fn show(args: &ShowArgs, _json: bool) -> Result<String, String> {
     let snapshot = journal()?
         .resolve(args.kind.name(), &args.reference)
         .map_err(|e| e.to_string())?;
-    crate::to_json(&snapshot)
+    let Some(pointer) = &args.pointer else {
+        return crate::to_json(&snapshot);
+    };
+    let whole = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
+    let part = whole.pointer(pointer).ok_or_else(|| {
+        format!(
+            "nothing at {pointer} in {}; {}",
+            snapshot.id,
+            nearest(&whole, pointer)
+        )
+    })?;
+    crate::to_json(part)
+}
+
+/// What is there at the deepest part of `pointer` that exists in `value`,
+/// so a wrong path says where it went wrong.
+fn nearest(value: &Value, pointer: &str) -> String {
+    let mut at = "";
+    for (i, _) in pointer.match_indices('/').skip(1) {
+        if value.pointer(&pointer[..i]).is_none() {
+            break;
+        }
+        at = &pointer[..i];
+    }
+    let here = match value.pointer(at) {
+        Some(Value::Object(o)) => o.keys().cloned().collect::<Vec<_>>().join(", "),
+        Some(Value::Array(a)) => format!("{} items, /0 to /{}", a.len(), a.len().saturating_sub(1)),
+        Some(other) => format!("the value {other}"),
+        None => String::new(),
+    };
+    format!("{} has: {here}", if at.is_empty() { "the top" } else { at })
 }
 
 #[derive(Serialize)]
@@ -719,6 +753,21 @@ pub fn tag(args: &TagArgs, json: bool) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_wrong_pointer_says_where_it_went_wrong() {
+        let v = serde_json::json!({"body": {"ports": [1, 2], "health": {"memory": 1}}});
+        assert_eq!(nearest(&v, "/body/nope/x"), "/body has: health, ports");
+        assert_eq!(
+            nearest(&v, "/body/ports/5"),
+            "/body/ports has: 2 items, /0 to /1"
+        );
+        assert_eq!(nearest(&v, "nope"), "the top has: body");
+        assert_eq!(
+            nearest(&v, "/body/health/memory/x"),
+            "/body/health/memory has: the value 1"
+        );
+    }
+
     #[test]
     fn grep_reads_values_not_escaped_json() {
         let body = serde_json::json!({
