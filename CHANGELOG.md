@@ -4,6 +4,21 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:14 hearth run: supervised owned servers (ADR-004)
+
+- `hearth run --port P [--expect NAME] -- <command>` starts a model server and keeps it alive.
+  - **Preflight.** Before every start, the port is checked. If the expected model already answers, nothing is started. Anything else is refused by name, and on a restart it counts as a failed start.
+  - **Restarts.** On exit there is a back-off restart. More than the budget of exits inside one window is a crash loop: hearth gives up and exits 1. A server ready a whole window earns the shortest back-off back.
+  - **Readiness.** A server not ready within the timeout is stopped and restarted. Ready means the port answers as a runtime with the expected model and no loading state.
+  - **Wedges.** A ready server whose port stops serving the expected model for several probes in a row is called wedged, stopped and restarted.
+  - **Tether.** The server runs in its own process group. When hearth stops, exits or is killed with SIGKILL, the group gets SIGTERM, then SIGKILL after `stop_grace_ms`. That covers wrapper scripts and latched backends that ignore SIGTERM.
+  - **Output.** Events are human lines, or JSON lines with `--json`. A closed output pipe stops the server cleanly.
+  - **Commands.** A missing command is reported before anything starts.
+- New `[supervise]` configuration:
+  - keys: `restart_budget`, `restart_window_ms`, `backoff_start_ms`, `backoff_max_ms`, `backoff_factor`, `ready_timeout_ms`, `stop_grace_ms`, `probe_interval_ms`, `unresponsive_probes`;
+  - validated, including that the maximum back-off fits inside the restart window.
+- `hearth-runtime::supervise`: the supervisor as a library type, for the daemon.
+
 ### 2026-10-14 23:35 journal, hearth log and diff, learned probe deadlines (ADR-003)
 
 - Full runs of `ports` and `doctor` are recorded in hearth's journal: `$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`, created mode 0700.
