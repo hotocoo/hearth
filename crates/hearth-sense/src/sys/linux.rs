@@ -58,8 +58,14 @@ fn cgroup_memory() -> (Option<u64>, Option<u64>, Option<u64>) {
     let Some(rel) = cgroup.lines().find_map(|l| l.strip_prefix("0::")) else {
         return (None, None, None);
     };
+    cgroup_memory_at(std::path::Path::new("/sys/fs/cgroup"), rel)
+}
+
+/// [`cgroup_memory`] for the cgroup `rel` under the hierarchy mounted at
+/// `root`.
+fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
     let mut best: Option<(u64, u64, u64)> = None;
-    let mut path = std::path::PathBuf::from(format!("/sys/fs/cgroup{}", rel.trim_end_matches('/')));
+    let mut path = root.join(rel.trim_start_matches('/').trim_end_matches('/'));
     loop {
         let num = |file: &str| {
             fs::read_to_string(path.join(file))
@@ -84,7 +90,7 @@ fn cgroup_memory() -> (Option<u64>, Option<u64>, Option<u64>) {
                 best = Some((max, current, inactive));
             }
         }
-        if path.as_os_str() == "/sys/fs/cgroup" || !path.pop() {
+        if path == root || !path.pop() {
             break;
         }
     }
@@ -373,6 +379,32 @@ pub fn process_group(pid: i32) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_tightest_cgroup_limit_over_the_process_binds() {
+        let root = std::env::temp_dir().join(format!("hearth-cg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let leaf = root.join("slice/app");
+        fs::create_dir_all(&leaf).unwrap();
+        let w = |dir: &std::path::Path, max: &str, current: &str, inactive: u64| {
+            fs::write(dir.join("memory.max"), max).unwrap();
+            fs::write(dir.join("memory.current"), current).unwrap();
+            fs::write(
+                dir.join("memory.stat"),
+                format!("anon 1\ninactive_file {inactive}\n"),
+            )
+            .unwrap();
+        };
+        w(&leaf, "max", "100", 0);
+        w(&root.join("slice"), "1000", "900", 50);
+        // The leaf has no limit; its parent slice does, with 150 left.
+        assert_eq!(
+            cgroup_memory_at(&root, "/slice/app"),
+            (Some(1000), Some(900), Some(50))
+        );
+        assert_eq!(cgroup_memory_at(&root, "/nowhere"), (None, None, None));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
 
     #[test]
