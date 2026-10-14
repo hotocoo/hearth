@@ -4,6 +4,20 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:25 run events in the journal, notifications (ADR-005)
+
+- Every `hearth run` event is recorded in the journal as kind `run`, with the address, expected model and command. `hearth log --kind run` lists them, and MCP `log` takes `kind: run`.
+- `[notify]` configuration, both channels off by default:
+  - `desktop` uses `osascript` on macOS and `notify-send` on Linux. Text is passed as arguments, never as script.
+  - `webhook_url` POSTs the event as JSON with `curl` (http or https), bounded by `timeout_ms`.
+- Notifications fire on a poisoned backend, a wedge, a lost process, and any give-up.
+- A failed delivery is reported on stderr and never affects supervision. Pending deliveries finish before `hearth run` exits.
+
+### 2026-10-15 00:23 restart at the moment Metal latches
+
+- The poison signature is now `ggml_metal_synchronize: error: command buffer … failed`, the line llama.cpp logs where it sets `has_error`. The request that hit the failure is the last to fail, one sooner than before. The capture path's INFO line does not latch and is not matched.
+- Durations the platform clock cannot represent are rejected in `[supervise]`.
+
 ### 2026-10-15 00:18 poisoned backends restarted from their own log
 
 - `hearth run` reads the server's stdout and stderr line by line. The lines are passed on to hearth's stderr; hearth's stdout carries only events.
