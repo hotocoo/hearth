@@ -130,6 +130,7 @@ pub struct Supervise {
 #[serde(deny_unknown_fields)]
 pub struct State {
     pub max_snapshots_per_kind: usize,
+    pub max_note_bytes: u64,
     /// Kinds whose snapshots are states of the machine, and so can be
     /// thinned with age; the others (events) are only capped by count.
     pub thinned_kinds: Vec<String>,
@@ -287,6 +288,11 @@ impl Config {
             ),
             ("notify.timeout_ms", self.notify.timeout_ms, AT_LEAST_ONE),
             (
+                "state.max_note_bytes",
+                self.state.max_note_bytes,
+                AT_LEAST_ONE,
+            ),
+            (
                 "control.max_message_bytes",
                 self.control.max_message_bytes,
                 AT_LEAST_ONE,
@@ -358,12 +364,12 @@ impl Config {
             .state
             .thinned_kinds
             .iter()
-            .find(|k| !crate::state::KINDS.contains(&k.as_str()))
+            .find(|k| !crate::state::STATE_KINDS.contains(&k.as_str()))
         {
             invalid(
                 "state.thinned_kinds",
                 k,
-                "is not a kind hearth records (ports, doctor, run)",
+                "is not a state of the machine (ports, doctor): run events and notes are never thinned",
             )?;
         }
         let p = &self.pressure;

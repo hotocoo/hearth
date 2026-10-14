@@ -37,15 +37,19 @@ learned_min_samples = 3
 learned_deadline_floor_ms = 50
 
 [state]
-# Snapshots kept per kind (ports, doctor, run) in the state directory:
+# Snapshots kept per kind (ports, doctor, run, note) in the state directory:
 # $HEARTH_STATE, or $XDG_STATE_HOME/hearth (default ~/.local/state/hearth).
 # A hard cap: past it the oldest are deleted, whatever the tiers say.
 # `hearth log` lists them, `hearth diff` compares two. Tagged snapshots are
 # kept and not counted. A doctor snapshot is some tens of KB.
 max_snapshots_per_kind = 1000
 
-# Kinds that are states of the machine, thinned with age by the tiers below.
-# Others (run events) are only capped: every event matters.
+# Longest note `hearth note` records, in bytes: a note is a sentence or
+# two about what was done, not a log.
+max_note_bytes = 4096
+
+# Kinds that are states of the machine (ports, doctor), thinned with age by
+# the tiers below. Events (run, note) are only capped: every one matters.
 thinned_kinds = ["ports", "doctor"]
 
 # How thinned kinds age: within each window from now, one snapshot is kept

@@ -199,6 +199,10 @@ fn kind_of(id: &str) -> Option<&str> {
 /// The kinds hearth records: what `state.thinned_kinds` may name.
 pub const KINDS: &[&str] = &["ports", "doctor", "run", "note"];
 
+/// The kinds that are states of the machine, which may be thinned with
+/// age. The others are events (run events, notes): every one matters.
+pub const STATE_KINDS: &[&str] = &["ports", "doctor"];
+
 pub struct Journal {
     dir: PathBuf,
     keep: usize,
@@ -499,9 +503,24 @@ impl Journal {
             .filter(|_| valid_id(id))
             .ok_or_else(|| StateError::BadRef(id.to_string()))?;
         let ids = std::collections::BTreeMap::from([(kind.to_string(), id.to_string())]);
+        let file = self.file(id);
+        let gone = || StateError::Io {
+            path: file.clone(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        if !file.exists() {
+            return Err(gone());
+        }
         let dir = self.tags_dir();
         ensure_dir(&dir)?;
         let path = dir.join(format!("{name}.{EXTENSION}"));
+        // What the name held before, to put back if the snapshot is pruned
+        // before the new tag protects it.
+        let before = match std::fs::read(&path) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => return Err(StateError::Io { path, source }),
+        };
         let text = serde_json::to_vec(&ids).map_err(|source| StateError::Json {
             path: path.clone(),
             source,
@@ -513,15 +532,22 @@ impl Journal {
             return Err(StateError::Io { path, source });
         }
         // A prune may have removed it before the tag protected it.
-        let file = self.file(id);
         if file.exists() {
             return Ok(());
         }
-        self.delete_tag(name)?;
-        Err(StateError::Io {
-            path: file,
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        })
+        match before {
+            Some(b) => {
+                let tmp = dir.join(format!(".{name}.{}.tmp", unique_nanos()));
+                write_synced(&tmp, &b)
+                    .and_then(|()| std::fs::rename(&tmp, &path))
+                    .map_err(|source| StateError::Io {
+                        path: path.clone(),
+                        source,
+                    })?;
+            }
+            None => self.delete_tag(name)?,
+        }
+        Err(gone())
     }
 
     /// The ids tag `name` holds, by kind.
@@ -709,6 +735,9 @@ mod tests {
         let gone = first.replace("-ports", "-doctor");
         assert!(j.tag_snapshot("gone", &gone).is_err());
         assert!(j.tag("gone").is_err());
+        // A failed retag leaves the tag where it was.
+        assert!(j.tag_snapshot("first", &gone).is_err());
+        assert_eq!(j.resolve("ports", "first").unwrap().id, first);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

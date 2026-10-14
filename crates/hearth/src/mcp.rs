@@ -5,6 +5,7 @@
 //! `clap` definitions the CLI uses, so an agent and a person get identical
 //! validation and identical answers.
 
+use hearth_core::state::KINDS;
 use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
@@ -124,15 +125,13 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
     })
 }
 
-const KINDS: [&str; 3] = ["ports", "doctor", "run"];
-
 /// The journal as MCP resources: the latest snapshot of each kind, and each
 /// kind at every tag.
 fn resources() -> Result<Vec<Value>, String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
     let journal = hearth_core::state::Journal::open(&config.state).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for kind in KINDS {
+    for &kind in KINDS {
         if journal.ids(kind).map_err(|e| e.to_string())?.is_empty() {
             continue;
         }
@@ -165,7 +164,10 @@ fn read_resource(uri: &str) -> Result<Value, String> {
         .split_once('/')
         .ok_or("expected hearth://KIND/REFERENCE")?;
     if !KINDS.contains(&kind) {
-        return Err(format!("unknown kind {kind:?}; one of ports, doctor, run"));
+        return Err(format!(
+            "unknown kind {kind:?}; one of {}",
+            KINDS.join(", ")
+        ));
     }
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
     let journal = hearth_core::state::Journal::open(&config.state).map_err(|e| e.to_string())?;

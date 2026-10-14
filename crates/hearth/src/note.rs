@@ -12,13 +12,12 @@ pub const KIND: &str = "note";
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Who wrote it: a person, or the agent acting for them. Give it
-    /// before the message, which takes every word after it.
+    /// Who wrote it: a person, or the agent acting for them.
     #[arg(long)]
     by: Option<String>,
-    /// What was done or seen, as words joined with spaces; flags in it
-    /// (`-c 131072`) are part of the message.
-    #[arg(required = true, num_args = 1.., trailing_var_arg = true, allow_hyphen_values = true)]
+    /// What was done or seen, as words joined with spaces. Words that look
+    /// like flags (`-c 131072`) go after `--`, or quote the message.
+    #[arg(required = true, num_args = 1..)]
     message: Vec<String>,
 }
 
@@ -37,6 +36,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     }
     let by = args.by.as_deref().map(str::trim).filter(|b| !b.is_empty());
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
+    let max = config.state.max_note_bytes;
+    if u64::try_from(message.len() + by.map_or(0, str::len)).unwrap_or(u64::MAX) > max {
+        return Err(format!(
+            "a note is at most {max} bytes (state.max_note_bytes): say what was done and why, and leave logs to hearth logs"
+        ));
+    }
     let journal = hearth_core::state::Journal::open(&config.state).map_err(|e| e.to_string())?;
     let recorded = journal
         .record(KIND, &Note { message, by })

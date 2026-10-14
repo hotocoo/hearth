@@ -25,6 +25,9 @@ fn config_error() -> Option<String> {
     hearth_core::config::load().err().map(|e| e.to_string())
 }
 
+const NOTE_WITHHELD: &str =
+    "(withheld: notes are free text and may quote secrets; hearth log --kind note shows them)";
+
 const WITHHELD: &str = "the configuration does not load; details withheld from the bundle because they quote the offending line (run hearth config to see them)";
 
 /// Runs one hearth command line and returns its JSON, or its error.
@@ -96,6 +99,15 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
         "tags": part(&["tag"], c),
         "config": config,
     });
+    // Notes are free text, and agents write command lines into them, which
+    // may hold keys: the bundle says when they were written, not what.
+    for n in bundle["notes"]["snapshots"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        n["summary"] = json!(NOTE_WITHHELD);
+    }
     if let Some(error) = c {
         scrub(&mut bundle, error);
     }
