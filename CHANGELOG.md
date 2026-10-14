@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 06:19 flash attention flag and headroom
+
+- `fit` and the `ports` oversized finding write `-fa on`, the form current llama.cpp takes. The finding lists every value cache type that fits, not only the largest, which may leave no room for compute buffers.
+
 ### 2026-10-15 06:13 values-only cache types
 
 - `fit` shows the cache types it costed. When the context does not fit, it also lists `fits_device_with_values`: the value cache types that alone make it fit, with keys left unchanged (llama.cpp `-ctv`, which needs `-fa on`). Keys carry more of attention's precision.
