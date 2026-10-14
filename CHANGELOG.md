@@ -4,6 +4,16 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 00:33 hearth watch (ADR-006)
+
+- `hearth watch [--for-seconds N]` runs `doctor` and `ports` on the `[watch]` intervals. Every round is recorded, so `log` and `diff` cover the time watched.
+- A problem is reported once when it appears and once when it clears, on stdout (JSON lines with `--json`) and through `[notify]`. Problems are:
+  - memory pressure the kernel declares;
+  - a resource that would reach its limit within `watch.limit_horizon_ms` at the measured rate;
+  - a model runtime that vanished, restarted or stopped answering.
+- Doctor findings carry a stable `code` and `pid`.
+- Configuration validation is split by concern, and the watch intervals are checked like the others.
+
 ### 2026-10-15 00:25 run events in the journal, notifications (ADR-005)
 
 - Every `hearth run` event is recorded in the journal as kind `run`, with the address, expected model and command. `hearth log --kind run` lists them, and MCP `log` takes `kind: run`.
