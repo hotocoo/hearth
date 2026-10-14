@@ -61,7 +61,7 @@ fn handle(msg: &Value) -> Option<Value> {
                     "capabilities": { "tools": {}, "prompts": {}, "resources": {} },
                     "serverInfo": { "name": "hearth", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": instructions("hearth inspects a machine that runs local models and keeps the servers hearthd owns alive. \
-                        Start with a workflow from prompts/list when one fits (diagnose-slow-machine, server-died, can-i-load, what-changed, find-a-leak, when-did-it-start). \
+                        Start with a workflow from prompts/list when one fits (diagnose-slow-machine, server-died, can-i-load, right-size-a-server, what-changed, find-a-leak, when-did-it-start). \
                         Otherwise: doctor for memory, files and threads; ports for what runs where (owned_by says what hearthd owns); \
                         incidents for crashes and kills; fit before loading a model; \
                         log, diff, show, follow and tag for history (references: ~N, @2h, ids, tag names; log grep finds when something appeared); \

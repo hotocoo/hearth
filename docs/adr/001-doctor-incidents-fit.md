@@ -106,6 +106,7 @@ Reading the kernel log usually needs the `systemd-journal` or `adm` group. When 
 - `what-changed`;
 - `find-a-leak`;
 - `when-did-it-start`, which uses `log --grep` to find the first snapshot that mentions something and diffs it against the one before.
+- `right-size-a-server`, which turns `fit --port` into the flags to change (a smaller `-c`, or a smaller `-ctk`/`-ctv` that keeps the context) and records the advice with `note`.
 
 Each workflow names the tools to call in order, how to read their answers, and the shape of the reply. Each also states what not to do: never load a model, and restart only servers hearthd owns. Arguments have documented defaults, and a missing required argument is a JSON-RPC invalid-params error.
 

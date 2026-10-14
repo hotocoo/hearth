@@ -24,7 +24,7 @@
     "arguments": [
       {
         "name": "model",
-        "description": "Path to a .gguf file, or an Ollama model name such as qwen3:8b.",
+        "description": "A .gguf path, an MLX or safetensors model directory, an org/repo[:QUANT] name from the Hugging Face cache or LM Studio, or an Ollama model name such as qwen3:8b.",
         "required": true
       },
       {
@@ -34,12 +34,12 @@
       },
       {
         "name": "cache_type",
-        "description": "KV cache type, e.g. f16 or q8_0 (default f16).",
+        "description": "KV cache type, e.g. f16 or q8_0. Default: the model's own (an MLX model's dtype; for a GGUF, llama.cpp's default f16).",
         "required": false,
-        "default": "f16"
+        "default": "the model's own"
       }
     ],
-    "template": "Decide whether {model} with {ctx} tokens of context can be loaded on this machine.\n\n1. Call `fit` with model \"{model}\", ctx {ctx} and cache_type \"{cache_type}\". Note fits_device, fits_now, the largest context that would fit, and the notes (fits_now is provisional until the P0 gate has measured how memory-mapped weights count).\n2. Call `doctor` to see memory pressure and available memory now.\n3. Call `ports` with runtimes_only true to see which models are resident and their footprints.\n\nAnswer yes or no for the device and for right now. If it does not fit now, say which resident servers would have to be unloaded (largest first, from `ports`; hearthd's own can be unloaded with `stop` if the user agrees), or the largest context that fits. Never load or start the model yourself."
+    "template": "Decide whether {model} with {ctx} tokens of context can be loaded on this machine.\n\n1. Call `fit` with model \"{model}\", ctx {ctx} and cache_type \"{cache_type}\"; if that is \"the model's own\", leave cache_type out, and if fit then asks for one (a GGUF), use \"f16\", llama.cpp's default. Note fits_device, fits_now, the largest context that would fit, and the notes (fits_now is provisional until the P0 gate has measured how memory-mapped weights count).\n2. Call `doctor` to see memory pressure and available memory now.\n3. Call `ports` with runtimes_only true to see which models are resident and their footprints.\n\nAnswer yes or no for the device and for right now. If it does not fit now, say which resident servers would have to be unloaded (largest first, from `ports`; hearthd's own can be unloaded with `stop` if the user agrees), or the largest context that fits. Never load or start the model yourself."
   },
   {
     "name": "what-changed",
@@ -78,5 +78,17 @@
       }
     ],
     "template": "Find when \"{what}\" first appeared in hearth's history, and what changed at that moment. Only read: do not load a model or restart anything. Refer to snapshots by id, not ~N: hearthd and watch keep recording, which shifts every ~N.\n\n1. Call `log` with grep \"{what}\" for each kind: \"ports\", \"doctor\" and \"run\". A match mentions it as text (case ignored) or as an equal number.\n2. Of all matches, take the earliest by taken_at_ms: its kind is K, its id is FIRST, its back number is N. Call `log` with kind K and limit N+2 (no grep) to get the id of the snapshot just before it, BEFORE. If there is none, it was there when the history starts: say so.\n3. For K \"ports\" or \"doctor\", call `diff` with kind K, from BEFORE and to FIRST: what changed between the last snapshot without it and the first with it. For K \"run\" (events, which diff does not compare), call `show` with kind \"run\" and FIRST, and `follow` the server it names with kind \"run\".\n4. If the newest match is not the newest snapshot of its kind, it went away: compare that match with the snapshot after it the same way.\n5. To keep the moment past retention, call `tag` with a name, kind K and at FIRST.\n\nAnswer when it started (and ended, if it did), what changed at that moment, and what to do. If `log` has too few snapshots, say so: hearth watch, or hearthd, records from now on."
+  },
+  {
+    "name": "right-size-a-server",
+    "description": "A running model server is configured past what this machine holds, or close to it: work out the context and KV cache type that fit, and the exact flags to change.",
+    "arguments": [
+      {
+        "name": "port",
+        "description": "The port the server listens on, e.g. 8080.",
+        "required": true
+      }
+    ],
+    "template": "Work out how the model server on port {port} should be configured to fit this machine. Only read and advise: do not restart, stop or reconfigure it unless hearthd owns it (ports says owned_by) and the user asks.\n\n1. Call `fit` with port {port}: its model, the context and cache types it runs with, total_bytes against the ceiling, fits_device, max_ctx_device (the largest context that fits at its cache types) and fits_device_with (the cache types that keep its context).\n2. Call `ports` with runtimes_only true: the findings for this server (oversized, slow, partial_offload) and what else is resident, which shares the same memory.\n3. Call `doctor`: memory pressure now, which says how urgent this is.\n\nAnswer with the change to make, as flags for that server: either a smaller context (llama.cpp -c, at most max_ctx_device, leaving room for the other resident models) or a smaller KV cache type that keeps the context (-ctk and -ctv, the largest type in fits_device_with). Say what each costs: a smaller context truncates long prompts, a quantized cache loses a little quality. If it already fits, say so and stop. Then call `note` with by set to who you are, recording the advice, so the history shows why the server changed."
   }
 ]
