@@ -123,3 +123,11 @@ On the development machine, the running llama-server (`--ctx-size 262144`, q8_0 
 
 That is above Metal's recommended working set of 51.84 GiB, the memory pressure `doctor` and `watch` kept reporting. The largest context that fits the device is 223,620 tokens.
 
+## Addendum (2026-10-15): Hugging Face and LM Studio names in `fit`
+
+`fit` also takes `org/repo`, `org/repo:QUANT` (as `llama-server -hf` takes it) or `org/repo/FILE`. It looks the name up in the Hugging Face cache (`HF_HUB_CACHE`, else `HF_HOME/hub`, else `~/.cache/huggingface/hub`), using the snapshot `refs/main` names, then in LM Studio's models directory.
+- **Candidates.** Multimodal projectors and later shards of split models are never candidates.
+- **Ambiguity.** Several matches are listed, with how to pick one.
+- **Order.** These stores are searched before Ollama's, so an `org/repo:tag` name that one of them has is not mistaken for an Ollama namespace.
+- **LM Studio servers.** `fit --port` on an LM Studio server fits its loaded model the same way.
+

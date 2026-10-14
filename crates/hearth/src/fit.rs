@@ -16,9 +16,10 @@ use crate::units::bytes;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// GGUF file (any shard of a split model), or an Ollama model name such
-    /// as `qwen3:8b`, found in Ollama's store (`OLLAMA_MODELS`, else its
-    /// default) without asking Ollama.
+    /// GGUF file (any shard of a split model); a Hugging Face or LM Studio
+    /// name such as `org/repo:Q6_K` or `org/repo/file.gguf`, found in their
+    /// download stores; or an Ollama model name such as `qwen3:8b`, found
+    /// in Ollama's store. Nothing is downloaded or loaded.
     #[arg(required_unless_present = "port")]
     model: Option<PathBuf>,
     /// Instead of a model: the port of a running server on this machine,
@@ -125,6 +126,31 @@ fn from_server(port: u16, model: Option<&std::path::Path>) -> Result<PathBuf, St
             };
             hearth_runtime::ollama_store::weights(&name)
         }
+        Identity::LmStudio { models } => {
+            let loaded: Vec<&str> = models
+                .iter()
+                .filter(|(_, state)| state == "loaded")
+                .map(|(m, _)| m.as_str())
+                .collect();
+            let name = match (model, loaded.as_slice()) {
+                (Some(m), _) => m.to_string_lossy().into_owned(),
+                (None, [only]) => (*only).to_string(),
+                (None, []) => {
+                    return Err(format!(
+                        "LM Studio on {addr} has no model loaded; name one with --model"
+                    ));
+                }
+                (None, several) => {
+                    return Err(format!(
+                        "LM Studio on {addr} has several models loaded ({}); pick one with --model",
+                        several.join(", ")
+                    ));
+                }
+            };
+            hearth_runtime::model_stores::find(&name).unwrap_or_else(|| {
+                Err(format!("{name}: not found in LM Studio's models directory"))
+            })
+        }
         Identity::LlamaCpp { .. } if model.is_some() => Err(
             "--model and --port name the model twice: a llama.cpp server reports its own".into(),
         ),
@@ -141,6 +167,11 @@ fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
         return Ok(model.to_path_buf());
     }
     let name = model.to_string_lossy();
+    // org/repo names live in the Hugging Face cache or LM Studio first:
+    // that is where `llama-server -hf` and LM Studio put them.
+    if let Some(found) = hearth_runtime::model_stores::find(&name) {
+        return found;
+    }
     if hearth_runtime::ollama_store::parse_name(&name).is_none() {
         return Err(format!("{}: no such file", model.display()));
     }
