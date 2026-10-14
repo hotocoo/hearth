@@ -4,7 +4,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
-### TIMESTAMP hearth ports, layered config (ADR-002)
+### 2026-10-14 22:46 hearth ports, layered config (ADR-002)
 
 - `hearth ports` and MCP `ports`: every listening TCP port with its process, identified by what answers there.
   - Runtimes recognised: Ollama (models, loaded sizes), llama.cpp (model, n_ctx, slots, `/health`), ComfyUI, SD WebUI API, LM Studio, OpenAI-compatible.
