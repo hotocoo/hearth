@@ -83,6 +83,20 @@ pub fn dir() -> Result<PathBuf, StateError> {
         .ok_or(StateError::NoLocation)
 }
 
+/// Creates `dir` and its parents when missing. Snapshots hold process lists,
+/// executable paths and model paths, so what is created is readable by its
+/// owner only; an existing directory is left as it is.
+pub fn ensure_dir(dir: &Path) -> Result<(), StateError> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir).map_err(|source| StateError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })
+}
+
 /// A snapshot that was written, and anything that went wrong tidying up
 /// after it. The snapshot is on disk either way.
 #[derive(Debug)]
@@ -121,17 +135,8 @@ impl Journal {
         Self::at(dir()?, keep)
     }
 
-    /// Snapshots hold process lists, executable paths and model paths, so the
-    /// directory is created readable by its owner only.
     pub fn at(dir: PathBuf, keep: usize) -> Result<Self, StateError> {
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-        builder.create(&dir).map_err(|source| StateError::Io {
-            path: dir.clone(),
-            source,
-        })?;
+        ensure_dir(&dir)?;
         Ok(Self { dir, keep })
     }
 

@@ -222,6 +222,15 @@ fn serve(
     }
 }
 
+/// A taken control handler slot, given back when dropped.
+struct Slot<'a>(&'a AtomicU64);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Gives `stream` its own handler, up to `control.max_clients` at once; a
 /// client beyond that is told hearthd is busy, so stalled clients can take
 /// up handlers but never memory or threads without bound.
@@ -249,8 +258,9 @@ fn handle(
     let spawned = std::thread::Builder::new()
         .name("control".into())
         .spawn(move || {
+            // Frees the slot however serve ends, a panic included.
+            let _slot = Slot(&done);
             serve(&stream, &config, &board, &orders);
-            done.fetch_sub(1, Ordering::SeqCst);
         });
     if let Err(e) = spawned {
         busy.fetch_sub(1, Ordering::SeqCst);
@@ -285,7 +295,7 @@ fn take_lock(dir: &std::path::Path) -> Result<File, String> {
 fn bind() -> Result<(UnixListener, File), String> {
     let dir = hearth_core::state::dir().map_err(|e| e.to_string())?;
     // Creates it owner-only when missing; never changes an existing one.
-    Journal::at(dir.clone(), 1).map_err(|e| e.to_string())?;
+    hearth_core::state::ensure_dir(&dir).map_err(|e| e.to_string())?;
     crate::control::private(&dir, false)?;
     let held = take_lock(&dir)?;
     let path = crate::control::socket_path()?;

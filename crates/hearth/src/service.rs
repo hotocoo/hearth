@@ -2,8 +2,9 @@
 //! manager (launchd on macOS, systemd user units on Linux), as this user.
 //!
 //! The unit names the hearthd next to this `hearth`, and carries this
-//! shell's `HEARTH_CONFIG` and `HEARTH_STATE` when they are set, so the
-//! service sees the same configuration and state as the commands run here.
+//! shell's `HEARTH_CONFIG`, `HEARTH_STATE` and `PATH` when they are set, so
+//! the service sees the same configuration, state and programs as the
+//! commands run here.
 //! Nothing runs as root.
 
 use std::fmt::Write as _;
@@ -49,9 +50,11 @@ fn home() -> Result<PathBuf, String> {
         .ok_or_else(|| "HOME is not set".into())
 }
 
-/// `HEARTH_*` variables of this shell that the service must share.
+/// Variables of this shell the service must share: hearth's own, and
+/// `PATH`, since service managers start agents with a minimal one and a
+/// server command such as `llama-server` would not be found.
 fn carried_env() -> Vec<(&'static str, String)> {
-    ["HEARTH_CONFIG", "HEARTH_STATE"]
+    ["HEARTH_CONFIG", "HEARTH_STATE", "PATH"]
         .into_iter()
         .filter_map(|k| Some((k, std::env::var(k).ok().filter(|v| !v.is_empty())?)))
         .collect()
@@ -249,7 +252,10 @@ mod tests {
 
     #[test]
     fn units_quote_what_they_carry() {
-        let env = [("HEARTH_CONFIG", "/a b/<c>&\"d\".toml".to_string())];
+        let env = [
+            ("HEARTH_CONFIG", "/a b/<c>&\"d\".toml".to_string()),
+            ("PATH", "/opt/homebrew/bin:/usr/bin".to_string()),
+        ];
         let plist = launchd_plist(Path::new("/opt/h/hearthd"), Path::new("/s"), &env);
         assert!(plist.contains("<string>/a b/&lt;c&gt;&amp;&quot;d&quot;.toml</string>"));
         assert!(plist.contains("<string>/s/hearthd.log</string>"));
@@ -257,5 +263,7 @@ mod tests {
         assert!(unit.contains("ExecStart=\"/opt/h b/hearthd\""));
         assert!(unit.contains("Environment=\"HEARTH_CONFIG=/a b/<c>&\\\"d\\\".toml\""));
         assert!(unit.contains("KillMode=process"));
+        assert!(plist.contains("<key>PATH</key>\n\t\t<string>/opt/homebrew/bin:/usr/bin</string>"));
+        assert!(unit.contains("Environment=\"PATH=/opt/homebrew/bin:/usr/bin\""));
     }
 }

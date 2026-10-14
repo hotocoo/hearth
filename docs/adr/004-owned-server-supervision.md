@@ -72,6 +72,10 @@ Every value is a `[supervise]` key in `config/hearth.toml`. The defaults are Ale
 - a starting back-off above the maximum;
 - a maximum back-off longer than the restart window, because exits would then never share a window and a crash loop would go unnoticed.
 
+### Probe cost
+
+A ready server is fingerprinted in full on every probe: a few status GETs, such as Ollama's `/api/version`, `/api/tags` and `/api/ps`, or llama.cpp's `/props`, `/health` and `/v1/models`. This was weighed against a lighter liveness check. A single request cannot confirm that the expected model is still served, and that is what a wedge or a swapped model looks like. These endpoints answer from the runtimes' HTTP threads without touching inference. `supervise.probe_interval_ms` sets the rate for anyone who wants it lower.
+
 ## Consequences
 
 - One server per `hearth run`. The daemon will own many, through the same `Supervised` type, plus the admission ledger once the P0 gate has run.

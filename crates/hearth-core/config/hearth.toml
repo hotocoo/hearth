@@ -128,4 +128,7 @@ max_clients = 8
 # probe, loopback when unset) and expect (part of the model name the server
 # must report before it counts as ready). None are built in. hearthd
 # supervises each exactly as `hearth run` would, with the [supervise] values.
+# A program without a path is looked up in hearthd's PATH, which under a
+# login service is the PATH `hearth service install` was run with; an
+# absolute path avoids the question.
 [servers]
