@@ -42,3 +42,34 @@ learned_deadline_floor_ms = 50
 # The oldest are deleted first. `hearth log` lists them, `hearth diff`
 # compares two.
 max_snapshots_per_kind = 200
+
+[supervise]
+# `hearth run` keeps one model server alive. These bound how hard it tries.
+# Defaults follow Aletheia's supervisor, which they were ported from.
+
+# Exits tolerated inside restart_window_ms before hearth gives up: more is a
+# crash loop, and restarting a model that cannot load only burns the machine.
+restart_budget = 5
+restart_window_ms = 60000
+
+# Wait before a restart: starts here, grows by backoff_factor per exit up
+# to the maximum, and resets once a server has stayed ready a whole window.
+# The maximum may not exceed restart_window_ms, or exits would never share a
+# window and a crash loop would go unnoticed.
+backoff_start_ms = 500
+backoff_max_ms = 8000
+backoff_factor = 2
+
+# How long a started server has to answer as a runtime serving the expected
+# model. Large models on a cold disk take minutes to load.
+ready_timeout_ms = 180000
+
+# SIGTERM, then SIGKILL after this. A llama.cpp server whose Metal backend
+# latched after an out-of-memory error does not exit on SIGTERM.
+stop_grace_ms = 5000
+
+# How often the server is probed, and how many probes in a row may find it
+# not serving (no answer, refused, or not the expected model) before it is
+# called wedged and restarted.
+probe_interval_ms = 1000
+unresponsive_probes = 3

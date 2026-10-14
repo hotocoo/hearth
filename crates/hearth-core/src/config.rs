@@ -17,6 +17,7 @@ pub const BASE: &str = include_str!("../config/hearth.toml");
 pub struct Config {
     pub discovery: Discovery,
     pub state: State,
+    pub supervise: Supervise,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -27,6 +28,20 @@ pub struct Discovery {
     pub learned_deadline_multiplier: f64,
     pub learned_min_samples: usize,
     pub learned_deadline_floor_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Supervise {
+    pub restart_budget: u32,
+    pub restart_window_ms: u64,
+    pub backoff_start_ms: u64,
+    pub backoff_max_ms: u64,
+    pub backoff_factor: u32,
+    pub ready_timeout_ms: u64,
+    pub stop_grace_ms: u64,
+    pub probe_interval_ms: u64,
+    pub unresponsive_probes: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +110,37 @@ impl Config {
                 "state.max_snapshots_per_kind",
                 &0,
                 "must be at least 1, or a snapshot would be deleted as it is written",
+            );
+        }
+        let v = &self.supervise;
+        for (key, value) in [
+            ("supervise.restart_window_ms", v.restart_window_ms),
+            ("supervise.ready_timeout_ms", v.ready_timeout_ms),
+            ("supervise.probe_interval_ms", v.probe_interval_ms),
+            (
+                "supervise.unresponsive_probes",
+                u64::from(v.unresponsive_probes),
+            ),
+        ] {
+            if value == 0 {
+                return invalid(key, &0, "must be at least 1");
+            }
+        }
+        if v.backoff_max_ms > v.restart_window_ms {
+            return invalid(
+                "supervise.backoff_max_ms",
+                &v.backoff_max_ms,
+                "must not exceed supervise.restart_window_ms, or a crash loop would never be noticed",
+            );
+        }
+        if v.backoff_factor == 0 {
+            return invalid("supervise.backoff_factor", &0, "must be at least 1");
+        }
+        if v.backoff_start_ms > v.backoff_max_ms {
+            return invalid(
+                "supervise.backoff_start_ms",
+                &v.backoff_start_ms,
+                "must not exceed supervise.backoff_max_ms",
             );
         }
         Ok(self)
@@ -190,6 +236,10 @@ mod tests {
             "[discovery]\nlearned_deadline_multiplier = nan\n",
             "[discovery]\nlearned_min_samples = 0\n",
             "[state]\nmax_snapshots_per_kind = 0\n",
+            "[supervise]\nunresponsive_probes = 0\n",
+            "[supervise]\nbackoff_start_ms = 9\nbackoff_max_ms = 8\n",
+            "[supervise]\nbackoff_max_ms = 60001\n",
+            "[supervise]\nbackoff_factor = 0\n",
             "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
         ] {
             assert!(

@@ -10,6 +10,7 @@ mod history;
 mod incidents;
 mod mcp;
 mod ports;
+mod run;
 mod units;
 
 use clap::{Parser, Subcommand};
@@ -44,6 +45,10 @@ enum Command {
     /// vanished, runtimes that restarted, stopped answering or loaded other
     /// models, and how their memory moved. Defaults to the last two.
     Diff(history::DiffArgs),
+    /// Start a model server and keep it alive: restart it when it exits or
+    /// stops answering, give up on a crash loop, and stop it when hearth
+    /// stops. Refuses a port another server already holds.
+    Run(run::Args),
     /// Serve these commands as tools to AI agents over the Model Context
     /// Protocol on stdin/stdout.
     Mcp,
@@ -57,6 +62,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Ports(args) => ports::run(args, cli.json),
         Command::Log(args) => history::log(args, cli.json),
         Command::Diff(args) => history::diff(args, cli.json),
+        Command::Run(args) => run::run(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }
@@ -64,8 +70,8 @@ fn execute(cli: &Cli) -> Result<String, String> {
 /// Runs a command line in-process; how MCP tools reach the CLI commands.
 pub(crate) fn dispatch(argv: &[String]) -> Result<String, String> {
     let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
-    if matches!(cli.command, Command::Mcp) {
-        return Err("mcp cannot be called as a tool".into());
+    if matches!(cli.command, Command::Mcp | Command::Run(_)) {
+        return Err("long-running commands cannot be called as tools".into());
     }
     execute(&cli)
 }

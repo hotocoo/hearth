@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `run`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -55,6 +55,9 @@ cargo build --release -p hearth
 ./target/release/hearth log                 # snapshots ports recorded, newest first (--kind doctor)
 ./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory
 ./target/release/hearth diff --kind doctor --from ~5   # per-process file, thread, CLOSE_WAIT movement
+./target/release/hearth run --port 8081 --expect qwen3 -- llama-server -m qwen3.gguf --port 8081
+#   keeps the server alive: restarts on exit or wedge (SIGTERM then SIGKILL), gives up on a crash loop,
+#   refuses a port someone else serves, and the server dies with hearth even on SIGKILL
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.
@@ -90,7 +93,7 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - If measurement fails, hearth serializes. It never fails open.
 - **Recovery.**
   - A classifier sorts failures as transient, capacity, poisoned, wedged or model-missing. It uses latency signatures, stderr and HTTP evidence.
-  - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet.
+  - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit or wedge, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` (ADR-004); the classifier and the retry come with the gateway.
   - Runtimes hearth did not start are never killed.
 - **Gateway.**
   - OpenAI, Anthropic Messages and Ollama APIs, translated as needed.
@@ -99,11 +102,8 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - Errors are typed and carry a `remediation` field.
 - **Scheduling.** Priority classes, fair queuing across apps, quotas and deadline-aware shedding.
 - **For people and agents.**
-  - `hearth doctor`: file descriptors, threads, swap, pressure.
-  - `hearth incidents`: classifies panic and jetsam reports.
-  - `hearth ports`: what is actually listening, and which model it serves.
-  - `hearth fit`: does this model at this context fit right now?
-  - All of the above is available as `--json` and as an MCP server.
+  - MCP actions on runtimes hearth owns (restart, load, unload, drain) through the daemon's admin API. Runtimes it did not start are refused, with the reason.
+  - Notifications when a runtime is poisoned or restarted, or when memory pressure or descriptor and thread use turns dangerous.
 - **Platforms.** macOS on Apple Silicon first. Linux with NVIDIA (NVML), AMD (sysfs) and CPU.
 
 ## License
