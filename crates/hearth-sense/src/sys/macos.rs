@@ -546,22 +546,24 @@ pub fn process_args(pid: i32) -> Result<Vec<String>> {
 }
 
 /// `KERN_PROCARGS2` layout: argc as a native int, the executable path, NUL
-/// padding, then argc NUL-terminated arguments (the environment follows).
+/// padding of no fixed length, then argc NUL-terminated arguments (the
+/// environment follows). Like Apple's own `ps`, every NUL after the path is
+/// taken as padding, so an empty first argument cannot be told apart from
+/// it; the count then reaches into the environment, which is why the result
+/// is only used to find flags, never to rebuild a command.
 fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
     let count = usize::try_from(i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?)).ok()?;
     let rest = buf.get(4..)?;
-    let path_end = rest.iter().position(|&b| b == 0)?;
-    let mut at = path_end;
+    let mut at = rest.iter().position(|&b| b == 0)?;
     while rest.get(at) == Some(&0) {
         at += 1;
     }
-    let args: Vec<String> = rest
-        .get(at..)?
-        .split(|&b| b == 0)
-        .take(count)
-        .map(|a| String::from_utf8_lossy(a).into_owned())
-        .collect();
-    (args.len() == count).then_some(args)
+    let mut args = Vec::with_capacity(count);
+    let mut pieces = rest.get(at..)?.split(|&b| b == 0);
+    for _ in 0..count {
+        args.push(String::from_utf8_lossy(pieces.next()?).into_owned());
+    }
+    Some(args)
 }
 
 #[cfg(test)]
@@ -573,8 +575,12 @@ mod tests {
         let mine: Vec<String> = std::env::args().collect();
         assert_eq!(args, mine);
         let mut fake = 2i32.to_ne_bytes().to_vec();
-        fake.extend_from_slice(b"/bin/x\0\0\0x\0-c\0HOME=/\0");
-        assert_eq!(parse_procargs2(&fake).unwrap(), ["x", "-c"]);
+        fake.extend_from_slice(b"/bin/x\0\0\0x\0\0-c\0HOME=/\0");
+        // An empty argument after the first is kept as one.
+        let mut three = 3i32.to_ne_bytes().to_vec();
+        three.extend_from_slice(b"/bin/x\0\0\0x\0\0-c\0HOME=/\0");
+        assert_eq!(parse_procargs2(&three).unwrap(), ["x", "", "-c"]);
+        assert_eq!(parse_procargs2(&fake).unwrap(), ["x", ""]);
     }
 
     use super::*;

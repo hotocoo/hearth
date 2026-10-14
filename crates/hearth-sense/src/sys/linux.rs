@@ -523,9 +523,14 @@ pub fn process_args(pid: i32) -> Result<Vec<String>> {
         call: "read /proc/PID/cmdline",
         detail: e.to_string(),
     })?;
+    // Each argument ends in a NUL, empty ones included; only the last
+    // terminator is not an argument.
+    let raw = raw.strip_suffix(&[0]).unwrap_or(&raw);
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
     Ok(raw
         .split(|&b| b == 0)
-        .filter(|a| !a.is_empty())
         .map(|a| String::from_utf8_lossy(a).into_owned())
         .collect())
 }
