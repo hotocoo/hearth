@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 02:25 status names the real server process
+
+- `hearth status` showed the tether's pid. It now reports `server_pid`, the process listening on the server's port, with its `footprint_bytes`.
+- Metric `hearth_server_footprint_bytes{server}`.
+
 ### 2026-10-15 02:23 Prometheus metrics
 
 - With `[metrics] listen = "127.0.0.1:9469"` (new, off by default), hearthd serves `GET /metrics`. It reports each server's state and restarts, and the machine's memory, swap, pressure, open files and threads.
