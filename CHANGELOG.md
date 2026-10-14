@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 05:38 MLX fit and offload review fixes
+
+- **Latent attention.** `fit` on a DeepSeek or Kimi `config.json` costs the larger of the latent cache and MLX's expanded keys and values. Before, it costed far less than MLX holds.
+- **Gemma defaults.** Gemma configs that leave `head_dim` and the head counts to Transformers defaults now fit, and their `head_dim` is 256, not `hidden_size / heads`.
+- **Offload warnings.** `ports` no longer flags a model wholly on the CPU (a host without an accelerator, or `num_gpu 0`). Each model of one Ollama process is its own warning in `watch`.
+- `fit --port` on `mlx_lm.server` fits the `--model` it was started with, not the first cached model it lists.
+
 ### 2026-10-15 05:24 MLX and safetensors models in fit
 
 - `hearth fit DIR` fits an MLX or Transformers model directory (`config.json` plus `.safetensors`), with geometry read from the config.
