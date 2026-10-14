@@ -199,10 +199,13 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
                 ceiling.as_ref().map(|c| c.bytes),
             )
         })
-        // A model that could not be sized does not show it fits.
+        // A model that could not be read stays listed with its error; one
+        // that could but was not sized does not show it fits.
         .filter(|m| {
-            args.ctx
-                .is_none_or(|want| m.max_ctx_device.is_some_and(|n| n >= want))
+            m.error.is_some()
+                || args
+                    .ctx
+                    .is_none_or(|want| m.max_ctx_device.is_some_and(|n| n >= want))
         })
         .collect();
     let mut models = models;
@@ -238,6 +241,10 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     if json {
         return crate::to_json(&report);
     }
+    Ok(render(&report, args.ctx))
+}
+
+fn render(report: &Report, ctx: Option<u64>) -> String {
     let mut out = String::new();
     match (report.ceiling_bytes, &report.ceiling_source) {
         (Some(b), Some(s)) => {
@@ -248,10 +255,13 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         }
     }
     if report.models.is_empty() {
-        let _ = writeln!(
-            out,
-            "no models found in the Hugging Face cache, LM Studio or Ollama"
-        );
+        let _ = match ctx {
+            Some(n) => writeln!(out, "no model on disk fits at {n} tokens of context"),
+            None => writeln!(
+                out,
+                "no models found in the Hugging Face cache, LM Studio or Ollama"
+            ),
+        };
     }
     for m in &report.models {
         let line = match (&m.error, m.weights_bytes) {
@@ -284,5 +294,5 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     for e in &report.errors {
         let _ = writeln!(out, "store unreadable: {e}");
     }
-    Ok(out)
+    out
 }

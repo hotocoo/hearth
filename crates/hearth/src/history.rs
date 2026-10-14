@@ -518,7 +518,13 @@ pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
             n <= limit.get()
         });
     }
-    let (meanwhile, unreadable) = meanwhile(&journal, &from.id, &to.id)?;
+    let (mut meanwhile, unreadable) = meanwhile(&journal, &from.id, &to.id)?;
+    // --limit bounds these too, keeping the latest: a long span can hold
+    // many events.
+    if let Some(limit) = args.limit {
+        let extra = meanwhile.len().saturating_sub(limit.get());
+        meanwhile.drain(..extra);
+    }
     let report = DiffReport {
         kind: kind.name(),
         from: Side::from(&from),
@@ -841,7 +847,7 @@ mod tests {
         let said: Vec<&str> = entries.iter().map(|e| e.summary.as_str()).collect();
         assert_eq!(said, ["me: during"]);
         assert_eq!(entries[0].back, 1);
-        assert!(unreadable.is_empty());
+        assert_eq!(unreadable, Vec::<String>::new());
         // Either order of the two ends gives the same span.
         assert_eq!(meanwhile(&j, &to, &from).unwrap().0.len(), 1);
         std::fs::remove_dir_all(dir).unwrap();

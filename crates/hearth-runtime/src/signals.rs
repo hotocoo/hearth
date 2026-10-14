@@ -73,18 +73,19 @@ pub enum Cause {
 const CAUSES: &[(&str, Cause)] = &[
     // gguf.cpp: "%s: failed to open GGUF file '%s'"
     ("failed to open gguf file", Cause::ModelMissing),
-    // llama.cpp: "llama_model_load: error loading model: %s", then
-    // server.cpp: "failed to load model, '%s'"
-    ("error loading model", Cause::LoadFailed),
-    ("failed to load model", Cause::LoadFailed),
     // ggml backends: "failed to allocate buffer of size", "%s: failed to
     // allocate %s buffer", CUDA's "cudaMalloc failed: out of memory".
+    // Before the load failures: a load that failed to allocate is memory.
     ("failed to allocate", Cause::OutOfMemory),
     ("out of memory", Cause::OutOfMemory),
     (
         "kiogpucommandbuffercallbackerroroutofmemory",
         Cause::OutOfMemory,
     ),
+    // llama.cpp: "llama_model_load: error loading model: %s", then
+    // server.cpp: "failed to load model, '%s'"
+    ("error loading model", Cause::LoadFailed),
+    ("failed to load model", Cause::LoadFailed),
     // server.cpp: "couldn't bind HTTP server socket, hostname: %s, port: %d"
     ("couldn't bind http server socket", Cause::PortInUse),
     ("address already in use", Cause::PortInUse),

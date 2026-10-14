@@ -400,8 +400,12 @@ pub struct Supervised {
 struct Said {
     /// Compute buffers llama.cpp logged, summed over its backends.
     compute_bytes: u64,
-    /// The first line that says why it would stop.
-    cause: Option<(Cause, String)>,
+    /// Lines read so far.
+    lines: usize,
+    /// The first line of the latest stretch that says why it would stop,
+    /// with its line number: a cause is stale once more than the kept
+    /// output (`supervise.output_lines`) has followed it.
+    cause: Option<(Cause, String, usize)>,
     /// Output streams not yet read to their end.
     open: usize,
 }
@@ -641,9 +645,9 @@ impl Supervised {
             drop(child.stdin.take());
         }
         let (code, signal) = ended(status);
-        let decision = self.after_exit(ready_since);
         // Its last lines may still be in the pipe: wait for the readers to
-        // reach its end, as long as a stop would wait for the server.
+        // reach its end, as long as a stop would wait for the server. The
+        // restart's backoff starts after this wait.
         let (cause, cause_line) = {
             let guard = said(&self.log);
             let (guard, _) = self
@@ -651,8 +655,15 @@ impl Supervised {
                 .1
                 .wait_timeout_while(guard, self.settings.stop_grace, |s| s.open > 0)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.cause.clone().unzip()
+            let keep = self.settings.output_lines;
+            guard
+                .cause
+                .clone()
+                .filter(|(_, _, at)| guard.lines - at <= keep)
+                .map(|(c, line, _)| (c, line))
+                .unzip()
         };
+        let decision = self.after_exit(ready_since);
         Event::Exited {
             code,
             signal,
@@ -778,13 +789,18 @@ fn watch<R: Read + Send + 'static>(
             }
             {
                 let mut s = said(&log);
+                s.lines += 1;
                 if let Some(bytes) = compute_bytes(&text) {
                     s.compute_bytes = s.compute_bytes.saturating_add(bytes);
                 }
-                if s.cause.is_none()
-                    && let Some(c) = cause(&text)
-                {
-                    s.cause = Some((c, cut(text.trim_end(), line_bytes)));
+                // The first of a burst explains it; one long past does not.
+                let stale = s
+                    .cause
+                    .as_ref()
+                    .is_none_or(|(_, _, at)| s.lines - at > keep);
+                if stale && let Some(c) = cause(&text) {
+                    let at = s.lines;
+                    s.cause = Some((c, cut(text.trim_end(), line_bytes), at));
                 }
             }
             if let Some(signal) = classify(&text) {
