@@ -324,6 +324,23 @@ fn system_threads() -> Option<u64> {
     u64::try_from(info.thread_count).ok()
 }
 
+/// Where each [`SystemLimits`] field comes from on this platform.
+pub const LIMIT_SOURCES: &[(&str, &str)] = &[
+    ("files_open", "sysctl kern.num_files"),
+    (
+        "threads_total",
+        "processor_set_statistics: threads of the default set (what top shows)",
+    ),
+    ("files_max", "sysctl kern.maxfiles"),
+    ("files_per_process_max", "sysctl kern.maxfilesperproc"),
+    (
+        "threads_max",
+        "sysctl kern.num_threads (the kernel's thread limit)",
+    ),
+    ("threads_per_process_max", "sysctl kern.num_taskthreads"),
+    ("processes_max", "sysctl kern.maxproc"),
+];
+
 pub fn system_limits() -> Result<SystemLimits> {
     Ok(SystemLimits {
         files_open: sysctl_uint("kern.num_files").ok(),

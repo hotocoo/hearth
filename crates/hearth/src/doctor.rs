@@ -25,6 +25,104 @@ pub struct Args {
     /// resource would hit its limit at the measured rate.
     #[arg(long, value_name = "SECONDS")]
     watch: Option<u64>,
+    /// Also say where every number comes from: the kernel counter, sysctl
+    /// or file read, and the formula when one combines them.
+    #[arg(long)]
+    explain: bool,
+}
+
+/// One reported number and how it was obtained.
+#[derive(Serialize)]
+struct Derivation {
+    quantity: &'static str,
+    value: String,
+    source: String,
+}
+
+/// How each memory and limit figure in `h` was obtained on this platform.
+fn derivations(h: &BoxHealth) -> Vec<Derivation> {
+    let d = |quantity, value: String, source: String| Derivation {
+        quantity,
+        value,
+        source,
+    };
+    let m = &h.memory;
+    let mut out = vec![d(
+        "memory.total",
+        bytes(m.total_bytes),
+        "hw.memsize / MemTotal".into(),
+    )];
+    match &m.raw {
+        hearth_sense::RawHost::Macos(vm) => {
+            let page = |n: u64| bytes(n.saturating_mul(vm.page_size));
+            out.push(d(
+                "memory.available",
+                bytes(m.available_bytes),
+                format!(
+                    "total - (app + wired + compressed), app = internal - purgeable, the Activity Monitor definition: {} - ({} - {} + {} + {}) from host_statistics64 (page size {})",
+                    bytes(m.total_bytes),
+                    page(vm.internal),
+                    page(vm.purgeable),
+                    page(vm.wired),
+                    page(vm.compressor_occupied),
+                    vm.page_size
+                ),
+            ));
+            out.push(d(
+                "memory.pressure",
+                format!("{:?}", m.pressure),
+                format!(
+                    "sysctl kern.memorystatus_vm_pressure_level = {:?} (1 normal, 2 warn, 4 critical)",
+                    vm.vm_pressure_level
+                ),
+            ));
+        }
+        hearth_sense::RawHost::Linux(l) => {
+            out.push(d(
+                "memory.available",
+                bytes(m.available_bytes),
+                "/proc/meminfo MemAvailable".into(),
+            ));
+            out.push(d(
+                "memory.pressure",
+                format!("{:?}", m.pressure),
+                format!(
+                    "/proc/pressure/memory: some avg10 {:?}, full avg10 {:?}",
+                    l.psi_some_avg10, l.psi_full_avg10
+                ),
+            ));
+        }
+    }
+    out.push(d(
+        "memory.swap_used",
+        bytes(m.swap_used_bytes),
+        "vm.swapusage / SwapTotal - SwapFree".into(),
+    ));
+    let l = &h.limits;
+    let shown = |v: Option<u64>| v.map_or("unknown".into(), |n| n.to_string());
+    for (field, value) in [
+        ("files_open", l.files_open),
+        ("threads_total", l.threads_total),
+        ("files_max", l.files_max),
+        ("files_per_process_max", l.files_per_process_max),
+        ("threads_max", l.threads_max),
+        ("threads_per_process_max", l.threads_per_process_max),
+        ("processes_max", l.processes_max),
+    ] {
+        let source = hearth_sense::LIMIT_SOURCES
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map_or("not measured on this platform", |(_, s)| s);
+        out.push(d(
+            hearth_sense::LIMIT_SOURCES
+                .iter()
+                .find(|(f, _)| *f == field)
+                .map_or(field, |(f, _)| f),
+            shown(value),
+            source.to_string(),
+        ));
+    }
+    out
 }
 
 #[derive(Serialize)]
@@ -40,6 +138,9 @@ struct Report {
     nearest_file_limit: Option<Holder>,
     trend: Option<Trend>,
     findings: Vec<Finding>,
+    /// With `--explain`: where every number came from.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    explanation: Vec<Derivation>,
     /// Journal id this report was recorded under.
     snapshot: Option<String>,
     /// Why the report could not be recorded; the report is still complete.
@@ -198,12 +299,21 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         None => (first, None),
     };
     let mut report = build(health, trend);
+    if args.explain {
+        report.explanation = derivations(&report.health);
+    }
     record(&mut report);
     if json {
         crate::to_json(&report)
     } else {
-        Ok(render(&report)
-            + &crate::history::footer(report.snapshot.as_deref(), &report.state_errors))
+        let mut out = render(&report);
+        if !report.explanation.is_empty() {
+            out.push_str("\nwhere the numbers come from:\n");
+            for e in &report.explanation {
+                let _ = writeln!(out, "  {} = {}\n      {}", e.quantity, e.value, e.source);
+            }
+        }
+        Ok(out + &crate::history::footer(report.snapshot.as_deref(), &report.state_errors))
     }
 }
 
@@ -522,6 +632,7 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
         nearest_file_limit,
         trend,
         findings,
+        explanation: Vec::new(),
         snapshot: None,
         state_errors: Vec::new(),
     }

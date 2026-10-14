@@ -150,6 +150,26 @@ fn read_u64(path: &str) -> Option<u64> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+/// Where each [`SystemLimits`] field comes from on this platform.
+pub const LIMIT_SOURCES: &[(&str, &str)] = &[
+    (
+        "files_open",
+        "/proc/sys/fs/file-nr: allocated minus allocated-but-unused",
+    ),
+    (
+        "threads_total",
+        "/proc/loadavg fourth field: total scheduling entities",
+    ),
+    ("files_max", "/proc/sys/fs/file-nr third field"),
+    ("files_per_process_max", "/proc/sys/fs/nr_open"),
+    ("threads_max", "/proc/sys/kernel/threads-max"),
+    (
+        "threads_per_process_max",
+        "none: Linux bounds threads per user (RLIMIT_NPROC), not per process",
+    ),
+    ("processes_max", "/proc/sys/kernel/pid_max"),
+];
+
 pub fn system_limits() -> Result<SystemLimits> {
     // file-nr: allocated, allocated-but-unused, maximum.
     let file_nr: Vec<u64> = fs::read_to_string("/proc/sys/fs/file-nr")
