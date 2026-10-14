@@ -9,12 +9,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::http::{self, ProbeError};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Identity {
     Ollama {
@@ -63,24 +63,79 @@ pub enum Identity {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl Identity {
+    /// A model runtime answers here, rather than some other service or
+    /// nothing.
+    #[must_use]
+    pub fn is_runtime(&self) -> bool {
+        matches!(
+            self,
+            Self::Ollama { .. }
+                | Self::LlamaCpp { .. }
+                | Self::ComfyUi { .. }
+                | Self::StableDiffusionApi { .. }
+                | Self::LmStudio { .. }
+                | Self::OpenAiCompatible { .. }
+        )
+    }
+
+    /// Every model name this runtime reports: served, listed or loaded.
+    #[must_use]
+    pub fn models(&self) -> Vec<&str> {
+        match self {
+            Self::Ollama { models, loaded, .. } => models
+                .iter()
+                .map(String::as_str)
+                .chain(loaded.iter().map(|l| l.name.as_str()))
+                .collect(),
+            Self::LlamaCpp { model, models, .. } => {
+                model.iter().chain(models).map(String::as_str).collect()
+            }
+            Self::StableDiffusionApi { models } | Self::OpenAiCompatible { models } => {
+                models.iter().map(String::as_str).collect()
+            }
+            Self::LmStudio { models } => models.iter().map(|(m, _)| m.as_str()).collect(),
+            Self::ComfyUi { .. }
+            | Self::OtherHttp { .. }
+            | Self::NotHttp
+            | Self::Unresponsive { .. }
+            | Self::Refused
+            | Self::Error { .. } => Vec::new(),
+        }
+    }
+
+    /// Why a runtime that answers is not ready to serve yet: llama.cpp
+    /// reports loading through `/health`.
+    #[must_use]
+    pub fn not_ready(&self) -> Option<&str> {
+        match self {
+            Self::LlamaCpp { health, .. } if health != "ok" => Some(health),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Loaded {
     pub name: String,
     pub size_bytes: Option<u64>,
     pub size_vram_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fingerprint {
     pub addr: SocketAddr,
     #[serde(flatten)]
     pub identity: Identity,
-    /// Time of the first answer, which later probes learn deadlines from.
-    pub latency_ms: Option<u64>,
+    /// Time to the first answer, which later probes learn deadlines from.
+    /// Microseconds: a runtime on loopback answers in well under one.
+    pub latency_us: Option<u64>,
 }
 
 struct Prober {
     addr: SocketAddr,
+    /// Bounds the requests after the first, which ask runtimes for more
+    /// (model lists, slot state) and may take longer to answer.
     deadline: Duration,
     max_bytes: u64,
 }
@@ -92,7 +147,11 @@ enum Probe {
 
 impl Prober {
     fn get(&self, path: &str) -> Result<(Probe, Duration), ProbeError> {
-        let r = http::get(self.addr, path, self.deadline, self.max_bytes)?;
+        self.get_within(path, self.deadline)
+    }
+
+    fn get_within(&self, path: &str, deadline: Duration) -> Result<(Probe, Duration), ProbeError> {
+        let r = http::get(self.addr, path, deadline, self.max_bytes)?;
         let probe = if (200..300).contains(&r.status) {
             serde_json::from_slice(&r.body).map_or(Probe::Status(r.status), Probe::Json)
         } else {
@@ -121,6 +180,19 @@ fn strings(v: &Value, list: &str, field: &str) -> Vec<String> {
 /// Identifies what answers at `addr`. `deadline` bounds each request.
 #[must_use]
 pub fn fingerprint(addr: SocketAddr, deadline: Duration, max_bytes: u64) -> Fingerprint {
+    fingerprint_within(addr, deadline, deadline, max_bytes)
+}
+
+/// Like [`fingerprint`], with a separate deadline for the first request. That
+/// request is the one answer times are measured and learned on, so a learned
+/// deadline applies to it alone; the requests after it keep `deadline`.
+#[must_use]
+pub fn fingerprint_within(
+    addr: SocketAddr,
+    first_deadline: Duration,
+    deadline: Duration,
+    max_bytes: u64,
+) -> Fingerprint {
     let p = Prober {
         addr,
         deadline,
@@ -128,11 +200,11 @@ pub fn fingerprint(addr: SocketAddr, deadline: Duration, max_bytes: u64) -> Fing
     };
     // The first request also decides whether this is HTTP at all; nothing
     // more is sent to a port that answered something else or nothing.
-    let first = p.get("/api/version");
-    let latency_ms = first
+    let first = p.get_within("/api/version", first_deadline);
+    let latency_us = first
         .as_ref()
         .ok()
-        .map(|(_, d)| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        .map(|(_, d)| u64::try_from(d.as_micros()).unwrap_or(u64::MAX));
     let identity = match first {
         Err(ProbeError::Refused) => Identity::Refused,
         Err(ProbeError::NotHttp) => Identity::NotHttp,
@@ -149,7 +221,7 @@ pub fn fingerprint(addr: SocketAddr, deadline: Duration, max_bytes: u64) -> Fing
     Fingerprint {
         addr,
         identity,
-        latency_ms,
+        latency_us,
     }
 }
 
@@ -181,7 +253,7 @@ fn identify_http(p: &Prober, first: &Probe) -> Identity {
         let health = match p.get("/health") {
             Ok((Probe::Json(v), _)) => v["status"].as_str().unwrap_or("ok").to_string(),
             Ok((Probe::Status(s), _)) => format!("http {s}"),
-            Err(e) => format!("{e:?}"),
+            Err(e) => e.to_string(),
         };
         let models = p
             .json("/v1/models")

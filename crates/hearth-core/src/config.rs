@@ -16,6 +16,7 @@ pub const BASE: &str = include_str!("../config/hearth.toml");
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub discovery: Discovery,
+    pub state: State,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -23,6 +24,15 @@ pub struct Config {
 pub struct Discovery {
     pub first_contact_timeout_ms: u64,
     pub max_probe_response_bytes: u64,
+    pub learned_deadline_multiplier: f64,
+    pub learned_min_samples: usize,
+    pub learned_deadline_floor_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct State {
+    pub max_snapshots_per_kind: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +47,58 @@ pub enum ConfigError {
         origin: String,
         source: toml::de::Error,
     },
+    #[error("{key} = {value}: {reason}")]
+    Invalid {
+        key: &'static str,
+        value: String,
+        reason: &'static str,
+    },
+}
+
+impl Config {
+    /// Rejects values that parse but cannot mean anything.
+    fn validate(self) -> Result<Self, ConfigError> {
+        let invalid = |key, value: &dyn std::fmt::Display, reason| {
+            Err(ConfigError::Invalid {
+                key,
+                value: value.to_string(),
+                reason,
+            })
+        };
+        let d = &self.discovery;
+        if d.first_contact_timeout_ms == 0 {
+            return invalid(
+                "discovery.first_contact_timeout_ms",
+                &0,
+                "must be at least 1",
+            );
+        }
+        if !(d.learned_deadline_multiplier.is_finite() && d.learned_deadline_multiplier >= 1.0) {
+            return invalid(
+                "discovery.learned_deadline_multiplier",
+                &d.learned_deadline_multiplier,
+                "must be a finite number of at least 1: a deadline below the slowest recorded answer would call a healthy runtime slow",
+            );
+        }
+        if d.learned_deadline_floor_ms > d.first_contact_timeout_ms {
+            return invalid(
+                "discovery.learned_deadline_floor_ms",
+                &d.learned_deadline_floor_ms,
+                "must not exceed discovery.first_contact_timeout_ms",
+            );
+        }
+        if d.learned_min_samples == 0 {
+            return invalid("discovery.learned_min_samples", &0, "must be at least 1");
+        }
+        if self.state.max_snapshots_per_kind == 0 {
+            return invalid(
+                "state.max_snapshots_per_kind",
+                &0,
+                "must be at least 1, or a snapshot would be deleted as it is written",
+            );
+        }
+        Ok(self)
+    }
 }
 
 /// Where the user's file is looked for, most specific first.
@@ -81,11 +143,12 @@ pub fn from_layers(overlay: Option<(&str, &str)>) -> Result<Config, ConfigError>
     }
     let origin = overlay.map_or("built-in config/hearth.toml", |(o, _)| o);
     toml::Value::Table(table)
-        .try_into()
+        .try_into::<Config>()
         .map_err(|source| ConfigError::Parse {
             origin: origin.to_string(),
             source,
-        })
+        })?
+        .validate()
 }
 
 fn merge(base: &mut toml::Table, overlay: toml::Table) {
@@ -118,6 +181,25 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(cfg.discovery.first_contact_timeout_ms, wanted);
+    }
+
+    #[test]
+    fn meaningless_values_are_rejected() {
+        for bad in [
+            "[discovery]\nlearned_deadline_multiplier = 0.5\n",
+            "[discovery]\nlearned_deadline_multiplier = nan\n",
+            "[discovery]\nlearned_min_samples = 0\n",
+            "[state]\nmax_snapshots_per_kind = 0\n",
+            "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
+        ] {
+            assert!(
+                matches!(
+                    from_layers(Some(("test", bad))),
+                    Err(ConfigError::Invalid { .. })
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

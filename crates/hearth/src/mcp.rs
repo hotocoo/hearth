@@ -63,7 +63,8 @@ fn handle(msg: &Value) -> Option<Value> {
                         Use doctor before loading a model or when the machine is slow, \
                         incidents after a crash or reboot, fit before starting a model \
                         server, ports to find which runtimes run where and whether one is wedged, \
-                        process_memory to see what a server really uses."
+                        process_memory to see what a server really uses, \
+                        log and diff to see what changed on the machine since an earlier ports or doctor run."
                 }),
             )
         }
@@ -145,6 +146,30 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "log",
+            "description": "Snapshots hearth recorded of this machine, newest first, each with a one-line summary. ports and doctor record one on every full run, so this is the machine's history as hearth saw it. Refer to a snapshot by id or as ~N (N before the latest).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["ports", "doctor"], "description": "Which command's snapshots (default ports)." },
+                    "limit": { "type": "integer", "minimum": 1, "description": "Only the most recent N." }
+                }
+            }
+        },
+        {
+            "name": "diff",
+            "description": "What changed between two recorded snapshots. ports: listeners that appeared or vanished, runtimes that restarted (new pid), stopped answering, changed health or loaded models, and footprint movement. doctor: memory pressure changes, available memory, swap, kernel-wide open files and threads, and per-process open files, threads and CLOSE_WAIT movement (a leak shows as steady growth across snapshots). Defaults to the last two snapshots; run ports or doctor first to record a fresh one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["ports", "doctor"], "description": "Which command's snapshots (default ports)." },
+                    "from": { "type": "string", "description": "Older snapshot: an id from log, or ~N (default ~1)." },
+                    "to": { "type": "string", "description": "Newer snapshot, same forms (default ~0, the latest)." },
+                    "limit": { "type": "integer", "minimum": 1, "description": "Only the N largest movements." }
+                }
+            }
+        },
+        {
             "name": "process_memory",
             "description": "Memory the kernel charges to processes whose name or path contains a pattern, or to one pid: footprint (includes GPU allocations on Apple Silicon), resident, lifetime peak.",
             "inputSchema": {
@@ -199,6 +224,20 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         }
         "ports" => {
             argv_push_ports(&mut command_line, args);
+        }
+        "log" | "diff" => {
+            command_line.push(name.into());
+            if let Some(kind) = args["kind"].as_str() {
+                command_line.extend(["--kind".into(), kind.into()]);
+            }
+            if let Some(n) = args["limit"].as_u64() {
+                command_line.extend(["--limit".into(), n.to_string()]);
+            }
+            for key in ["from", "to"] {
+                if let Some(r) = args[key].as_str() {
+                    command_line.extend([format!("--{key}"), r.into()]);
+                }
+            }
         }
         "process_memory" => return process_memory(args),
         other => return Err(format!("unknown tool {other}")),

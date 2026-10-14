@@ -6,6 +6,7 @@
 
 mod doctor;
 mod fit;
+mod history;
 mod incidents;
 mod mcp;
 mod ports;
@@ -36,6 +37,13 @@ enum Command {
     /// Every listening port, the process behind it, and which model runtime
     /// answers there (Ollama, llama.cpp, ComfyUI, LM Studio, OpenAI-compatible).
     Ports(ports::Args),
+    /// Snapshots hearth recorded of this machine, newest first (`ports` records
+    /// one on every unfiltered run).
+    Log(history::LogArgs),
+    /// What changed between two recorded snapshots: ports that appeared or
+    /// vanished, runtimes that restarted, stopped answering or loaded other
+    /// models, and how their memory moved. Defaults to the last two.
+    Diff(history::DiffArgs),
     /// Serve these commands as tools to AI agents over the Model Context
     /// Protocol on stdin/stdout.
     Mcp,
@@ -47,6 +55,8 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Incidents(args) => incidents::run(args, cli.json),
         Command::Fit(args) => fit::run(args, cli.json),
         Command::Ports(args) => ports::run(args, cli.json),
+        Command::Log(args) => history::log(args, cli.json),
+        Command::Diff(args) => history::diff(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }

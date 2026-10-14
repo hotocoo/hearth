@@ -16,18 +16,22 @@ pub struct Response {
     pub elapsed: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProbeError {
     /// Nothing accepted the connection.
+    #[error("refused")]
     Refused,
-    /// Connected, but no complete answer before the deadline.
-    NoAnswer {
-        after: Duration,
-    },
+    /// Connected, but no complete answer before the deadline. The text
+    /// leaves out how long was waited, so it compares equal across probes.
+    #[error("no answer")]
+    NoAnswer { after: Duration },
     /// Something answered, but not with HTTP.
+    #[error("not HTTP")]
     NotHttp,
     /// The answer was larger than the caller allows.
+    #[error("answer too large")]
     TooLarge,
+    #[error("{0}")]
     Io(String),
 }
 

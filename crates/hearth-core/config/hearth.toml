@@ -10,9 +10,35 @@
 # How long to wait for an HTTP answer from a listening port that hearth has
 # never probed before. A server that accepts the connection and never answers
 # (a wedged scheduler, for example) is reported as unresponsive after this.
-# Once a runtime has answered, its measured latency replaces this value.
+# Once a runtime has answered often enough, a deadline learned from its
+# recorded answers replaces this value (see learned_deadline_multiplier).
 first_contact_timeout_ms = 2500
 
 # Most bytes read from one probe response. Probes ask runtimes for small JSON
 # documents; anything larger is not a runtime answering a probe.
 max_probe_response_bytes = 8388608
+
+# Once a runtime has answered on a port several times, its probe deadline is
+# learned from those answers instead of first_contact_timeout_ms: the slowest
+# answer recorded for that program on that port, times this multiplier,
+# never more than first_contact_timeout_ms. A runtime that misses its learned
+# deadline is asked again with the first-contact deadline before it is called
+# unresponsive, and is reported as slow if it then answers.
+learned_deadline_multiplier = 10.0
+
+# Recorded answers needed before the learned deadline replaces the
+# first-contact one.
+learned_min_samples = 3
+
+# Shortest learned deadline. Runtimes on loopback often answer in well under
+# a millisecond, and ten times that is less than the scheduling jitter of a
+# busy machine probing many ports at once; below this floor a healthy runtime
+# would be reported slow.
+learned_deadline_floor_ms = 50
+
+[state]
+# Snapshots kept per kind (ports, doctor) in the state directory:
+# $HEARTH_STATE, or $XDG_STATE_HOME/hearth (default ~/.local/state/hearth).
+# The oldest are deleted first. `hearth log` lists them, `hearth diff`
+# compares two.
+max_snapshots_per_kind = 200

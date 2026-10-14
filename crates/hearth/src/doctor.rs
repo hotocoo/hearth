@@ -8,10 +8,16 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
+use hearth_core::state::Journal;
 use hearth_sense::{BoxHealth, PressureLevel, ProcessLoad};
 use serde::Serialize;
+use serde_json::Value;
 
+use crate::history::{Change, Delta, Unit};
 use crate::units::{bytes, percent};
+
+/// The journal kind `doctor` records under.
+pub const KIND: &str = "doctor";
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -34,6 +40,10 @@ struct Report {
     nearest_file_limit: Option<Holder>,
     trend: Option<Trend>,
     findings: Vec<Finding>,
+    /// Journal id this report was recorded under.
+    snapshot: Option<String>,
+    /// Why the report could not be recorded; the report is still complete.
+    state_errors: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -83,12 +93,113 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         }
         None => (first, None),
     };
-    let report = build(health, trend);
+    let mut report = build(health, trend);
+    record(&mut report);
     if json {
         crate::to_json(&report)
     } else {
-        Ok(render(&report))
+        Ok(render(&report)
+            + &crate::history::footer(report.snapshot.as_deref(), &report.state_errors))
     }
+}
+
+fn record(report: &mut Report) {
+    let journal = hearth_core::config::load()
+        .map_err(|e| e.to_string())
+        .and_then(|c| Journal::open(c.state.max_snapshots_per_kind).map_err(|e| e.to_string()));
+    match journal.and_then(|j| j.record(KIND, &*report).map_err(|e| e.to_string())) {
+        Ok(r) => {
+            report.snapshot = Some(r.snapshot.id);
+            report
+                .state_errors
+                .extend(r.warnings.iter().map(ToString::to_string));
+        }
+        Err(e) => report.state_errors.push(e),
+    }
+}
+
+/// One line for `hearth log`.
+pub fn summary(body: &Value) -> String {
+    let h = &body["health"];
+    let of = |used: &Value, max: &Value| match (used.as_u64(), max.as_u64()) {
+        (Some(u), Some(m)) => format!("{u}/{m}"),
+        (Some(u), None) => u.to_string(),
+        _ => "?".into(),
+    };
+    format!(
+        "available {}, pressure {}, files {}, threads {}, {} findings",
+        h["memory"]["available_bytes"]
+            .as_u64()
+            .map_or("?".into(), bytes),
+        h["memory"]["pressure"].as_str().unwrap_or("?"),
+        of(&h["limits"]["files_open"], &h["limits"]["files_max"]),
+        of(&h["limits"]["threads_total"], &h["limits"]["threads_max"]),
+        body["findings"].as_array().map_or(0, Vec::len)
+    )
+}
+
+/// How host memory, kernel-wide counts and each surviving process's open
+/// files, threads and `CLOSE_WAIT` sockets moved between two recorded
+/// reports. Processes are matched by pid and name, so a reused pid is not
+/// mistaken for growth.
+pub fn diff(before: &Value, after: &Value) -> (Vec<Change>, Vec<Delta>) {
+    let (b, a) = (&before["health"], &after["health"]);
+    let mut changes = Vec::new();
+    let (was, now) = (&b["memory"]["pressure"], &a["memory"]["pressure"]);
+    if was != now {
+        changes.push(Change {
+            kind: "changed",
+            subject: "memory pressure".into(),
+            before: was.as_str().map(str::to_string),
+            after: now.as_str().map(str::to_string),
+        });
+    }
+    let mut deltas = Vec::new();
+    for (section, field, metric, unit) in [
+        ("memory", "available_bytes", "available", Unit::Bytes),
+        ("memory", "swap_used_bytes", "swap used", Unit::Bytes),
+        ("limits", "files_open", "open files", Unit::Count),
+        ("limits", "threads_total", "threads", Unit::Count),
+    ] {
+        if let (Some(x), Some(y)) = (b[section][field].as_u64(), a[section][field].as_u64()) {
+            deltas.push(Delta::new("machine".into(), metric, unit, x, y));
+        }
+    }
+    let processes = |h: &Value| -> BTreeMap<(i64, String), Value> {
+        h["processes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                Some((
+                    (p["pid"].as_i64()?, p["name"].as_str()?.to_string()),
+                    p.clone(),
+                ))
+            })
+            .collect()
+    };
+    let earlier = processes(b);
+    for ((pid, name), p) in processes(a) {
+        let Some(old) = earlier.get(&(pid, name.clone())) else {
+            continue;
+        };
+        for (field, metric) in [
+            ("open_files", "open files"),
+            ("threads", "threads"),
+            ("close_wait", "CLOSE_WAIT sockets"),
+        ] {
+            if let (Some(x), Some(y)) = (old[field].as_u64(), p[field].as_u64()) {
+                deltas.push(Delta::new(
+                    format!("{name} ({pid})"),
+                    metric,
+                    Unit::Count,
+                    x,
+                    y,
+                ));
+            }
+        }
+    }
+    (changes, deltas)
 }
 
 fn majority(processes: &[ProcessLoad], count: impl Fn(&ProcessLoad) -> Option<u64>) -> Vec<Holder> {
@@ -272,6 +383,8 @@ fn build(health: BoxHealth, trend: Option<Trend>) -> Report {
         nearest_file_limit,
         trend,
         findings,
+        snapshot: None,
+        state_errors: Vec::new(),
     }
 }
 

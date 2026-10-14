@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P1 in progress.** Shipped: `hearth-probe` (measurement instrument) and the `hearth` CLI (`doctor`, `incidents`, `fit`, `ports`, `log`, `diff`, `mcp`). The daemon is not built yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -52,11 +52,16 @@ cargo build --release -p hearth
 ./target/release/hearth incidents           # kernel panics (watchdog / GPU driver / other), jetsam, stalls
 ./target/release/hearth fit model.gguf --ctx 32768 --cache-type q8_0   # fits the device? fits now? max context?
 ./target/release/hearth ports --runtimes    # which model runtime answers on which port, with memory
+./target/release/hearth log                 # snapshots ports recorded, newest first (--kind doctor)
+./target/release/hearth diff                # what changed since the run before: restarts, wedges, models, memory
+./target/release/hearth diff --kind doctor --from ~5   # per-process file, thread, CLOSE_WAIT movement
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`.
 
-For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports` and `process_memory`. For Claude Code:
+Full runs of `ports` and `doctor` are recorded in hearth's journal (`$HEARTH_STATE`, else `$XDG_STATE_HOME/hearth`, else `~/.local/state/hearth`). `log` and `diff` read it back, so "what changed on this box since I last looked" is one command. `ports` also learns each runtime's probe deadline from its recorded answers, and flags a runtime that has become much slower than its own history.
+
+For AI agents, `hearth mcp` serves the same commands as MCP tools over stdio: `doctor`, `incidents`, `fit`, `ports`, `log`, `diff` and `process_memory`. For Claude Code:
 
 ```sh
 claude mcp add hearth -- /path/to/hearth mcp
