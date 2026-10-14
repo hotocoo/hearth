@@ -58,7 +58,7 @@
         },
         "cache_type": {
           "type": "string",
-          "description": "KV cache type: f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0 iq4_nl. With port, may be left out: the llama-server's own -ctk/-ctv are read (f16 when absent)."
+          "description": "KV cache type: f32 f16 bf16 q8_0 q5_1 q5_0 q4_1 q4_0 iq4_nl. May be left out with port, where the llama-server's own -ctk/-ctv are read, and for an MLX or safetensors model, whose config.json dtype is what MLX caches in."
         },
         "cache_type_v": {
           "type": "string",

@@ -24,8 +24,10 @@ pub struct Args {
     #[arg(required_unless_present = "port")]
     model: Option<PathBuf>,
     /// Instead of a model: the port of a running server on this machine,
-    /// asked which model it serves (llama.cpp reports its file; Ollama the
-    /// model loaded, given with --model when it has several).
+    /// asked which model it serves (llama.cpp reports its file; Ollama and
+    /// LM Studio the model loaded, and an OpenAI-compatible server such as
+    /// `mlx_lm.server` the --model it was started with, else the one it
+    /// lists; --model picks one when there are several).
     #[arg(long)]
     port: Option<u16>,
     /// Total tokens of KV cache the runtime will allocate (llama.cpp `-c`;
@@ -34,9 +36,10 @@ pub struct Args {
     ctx: Option<u64>,
     /// KV cache type for keys, and for values unless --cache-type-v is given
     /// (llama.cpp --cache-type-k, Ollama `OLLAMA_KV_CACHE_TYPE`).
-    /// With --port and no --cache-type, the server's own command line is
-    /// read for it (llama.cpp -ctk/-ctv; f16, its default, when absent).
-    #[arg(long, value_parser = parse_cache, required_unless_present = "port")]
+    /// Without it: with --port, the llama-server's own -ctk/-ctv; for an
+    /// MLX or safetensors directory, the model's dtype from config.json,
+    /// which is what MLX and Transformers cache in.
+    #[arg(long, value_parser = parse_cache)]
     cache_type: Option<CacheType>,
     #[arg(long, value_parser = parse_cache)]
     cache_type_v: Option<CacheType>,
@@ -326,15 +329,38 @@ fn alternatives(
 }
 
 /// The key and value cache types: as given, else the server's own.
-fn cache_types(args: &Args) -> Result<(CacheType, CacheType), String> {
+fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), String> {
     if let Some(k) = args.cache_type {
         return Ok((k, args.cache_type_v.unwrap_or(k)));
     }
     let (k, v) = args
         .port
         .and_then(server_cache_types)
-        .ok_or("give --cache-type: the server's command line does not say it")?;
+        .or_else(|| dtype_cache_type(model).map(|t| (t, t)))
+        .ok_or(if args.port.is_some() {
+            "give --cache-type: the server's command line does not say it"
+        } else {
+            "give --cache-type (llama.cpp's default is f16)"
+        })?;
     Ok((k, args.cache_type_v.unwrap_or(v)))
+}
+
+/// The cache type of a model directory whose runtime caches keys and
+/// values in the model's own dtype (MLX, Transformers): `torch_dtype`, or
+/// `dtype` in newer configs, of the language model.
+fn dtype_cache_type(model: &Path) -> Option<CacheType> {
+    let text = std::fs::read_to_string(model.join("config.json")).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&text).ok()?;
+    [&config["text_config"], &config]
+        .iter()
+        .flat_map(|c| [&c["torch_dtype"], &c["dtype"]])
+        .find_map(serde_json::Value::as_str)
+        .and_then(|d| match d {
+            "bfloat16" => Some(CacheType::Bf16),
+            "float16" => Some(CacheType::F16),
+            "float32" => Some(CacheType::F32),
+            _ => None,
+        })
 }
 
 /// The model's files, their total size, and its cache geometry: from the
@@ -422,7 +448,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .or(server_ctx)
         .ok_or("the server does not say its context; give --ctx (tokens of KV cache to fit)")?;
     let (files, weights_bytes, geometry) = weights_and_geometry(&model)?;
-    let (k, v) = cache_types(args)?;
+    let (k, v) = cache_types(args, &model)?;
     let swa = args
         .parallel
         .zip(args.ubatch)
@@ -886,6 +912,23 @@ mod port_tests {
         );
         std::fs::write(&index, r#"{"weight_map":{"x":"../a.safetensors"}}"#).unwrap();
         assert!(safetensors_weights(&dir).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn mlx_caches_in_the_model_dtype() {
+        let dir = std::env::temp_dir().join(format!("hearth-dtype-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(dtype_cache_type(&dir), None);
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"text_config":{"dtype":"bfloat16"},"torch_dtype":"float32"}"#,
+        )
+        .unwrap();
+        assert_eq!(dtype_cache_type(&dir), Some(CacheType::Bf16));
+        std::fs::write(dir.join("config.json"), r#"{"torch_dtype":"float16"}"#).unwrap();
+        assert_eq!(dtype_cache_type(&dir), Some(CacheType::F16));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
