@@ -391,6 +391,40 @@ fn render(r: &Report) -> String {
     out
 }
 
+/// Whether `model` at `ctx` tokens of `cache` KV cache fits the device at
+/// all, as `hearth fit` computes it. Only the device ceiling is checked: it
+/// does not move, while what is free now is provisional (ADR-000) and is
+/// the supervisor's to find out.
+pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Result<(), String> {
+    let line: Vec<String> = [
+        "hearth",
+        "--json",
+        "fit",
+        "--ctx",
+        &ctx.to_string(),
+        "--cache-type",
+        cache,
+        "--",
+        model,
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    let report: serde_json::Value = crate::dispatch(&line)
+        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        .map_err(|e| format!("fit check failed: {e}"))?;
+    if report["fits_device"] == false {
+        return Err(format!(
+            "{model} at {ctx} tokens needs {} but the device holds {} ({}); the largest context that fits is {}: lower ctx in the configuration",
+            crate::units::bytes(report["total_bytes"].as_u64().unwrap_or_default()),
+            crate::units::bytes(report["ceiling"]["bytes"].as_u64().unwrap_or_default()),
+            report["ceiling"]["source"].as_str().unwrap_or("device"),
+            report["max_ctx_device"]
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod port_tests {
     use super::*;

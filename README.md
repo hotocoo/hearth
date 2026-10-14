@@ -70,7 +70,8 @@ cargo build --release -p hearth
 ./target/release/hearth diff --kind doctor --from @2h  # against how the machine was two hours ago
 ./target/release/hearth log --since 30m     # only what was recorded in the last 30 minutes
 ./target/release/hearth log --stats         # how much history each kind keeps, how far back it reaches
-./target/release/hearth run --port 8081 --expect qwen3 -- llama-server -m qwen3.gguf --port 8081
+./target/release/hearth run --port 8081 --expect qwen3 --model qwen3.gguf --ctx 32768 --cache-type q8_0 \
+    -- llama-server -m qwen3.gguf -c 32768 -ctk q8_0 -ctv q8_0 --port 8081   # --model/--ctx/--cache-type: refuse what cannot fit
 #   keeps the server alive: restarts on exit, wedge, or a poisoned backend in its log (the latched
 #   Metal "recreate the backend" state that still answers /health), SIGTERM then SIGKILL, gives up on a crash loop,
 #   refuses a port someone else serves, and the server dies with hearth even on SIGKILL

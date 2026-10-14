@@ -28,6 +28,16 @@ pub struct Args {
     /// Address to probe the port on.
     #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     host: IpAddr,
+    /// The model the server loads (as `hearth fit` takes it), with --ctx
+    /// and --cache-type: checked to fit the device before every start.
+    #[arg(long, requires_all = ["ctx", "cache_type"])]
+    model: Option<String>,
+    /// Context the server is given, for the fit check.
+    #[arg(long, requires = "model")]
+    ctx: Option<u64>,
+    /// KV cache type the server uses, for the fit check.
+    #[arg(long, requires = "model")]
+    cache_type: Option<String>,
     /// Ready only when the runtime reports a model whose name contains this.
     /// Without it, any model runtime answering on the port counts.
     #[arg(long)]
@@ -290,7 +300,15 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         eprintln!("hearth: run events will not be recorded: {e}");
     }
     let mut sending = Vec::new();
+    let declared = args
+        .model
+        .clone()
+        .zip(args.ctx)
+        .zip(args.cache_type.clone());
     let make = Box::new(move || {
+        if let Some(((model, ctx), cache)) = &declared {
+            crate::fit::fits_device(model, *ctx, cache)?;
+        }
         let mut c = Command::new(&program);
         c.args(&rest);
         Ok(c)
