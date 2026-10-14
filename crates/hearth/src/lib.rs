@@ -21,6 +21,7 @@ mod mcp;
 mod metrics;
 mod notify;
 mod ports;
+mod pressure;
 mod run;
 #[cfg(unix)]
 mod service;

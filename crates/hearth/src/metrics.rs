@@ -98,7 +98,7 @@ pub fn render(servers: &[Value]) -> String {
 }
 
 fn machine(out: &mut String) {
-    if let Ok(m) = hearth_sense::host_memory() {
+    if let Ok(m) = crate::pressure::host_memory() {
         for (name, help, value) in [
             (
                 "hearth_memory_total_bytes",

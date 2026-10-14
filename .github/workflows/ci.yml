@@ -28,6 +28,11 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Linux memory pressure is derived from PSI
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p hearth --bin hearth
+          ./target/debug/hearth --json doctor | python3 -c "import json,sys; p=json.load(sys.stdin)['health']['memory']['pressure']; print('pressure', p); assert p in ('normal','warn','critical')"
       - name: completion scripts parse
         if: runner.os == 'Linux'
         run: |

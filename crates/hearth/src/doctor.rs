@@ -39,6 +39,23 @@ struct Derivation {
     source: String,
 }
 
+/// Where a Linux pressure level comes from: PSI, against the thresholds.
+fn linux_pressure_source(l: &hearth_sense::LinuxMem) -> String {
+    match hearth_core::config::load() {
+        Ok(c) => format!(
+            "/proc/pressure/memory: some avg10 {:?} (warn at pressure.psi_some_warn = {}), full avg10 {:?} (critical at pressure.psi_full_critical = {})",
+            l.psi_some_avg10,
+            c.pressure.psi_some_warn,
+            l.psi_full_avg10,
+            c.pressure.psi_full_critical
+        ),
+        Err(_) => format!(
+            "/proc/pressure/memory: some avg10 {:?}, full avg10 {:?}",
+            l.psi_some_avg10, l.psi_full_avg10
+        ),
+    }
+}
+
 /// How each memory and limit figure in `h` was obtained on this platform.
 fn derivations(h: &BoxHealth) -> Vec<Derivation> {
     let d = |quantity, value: String, source: String| Derivation {
@@ -95,10 +112,7 @@ fn derivations(h: &BoxHealth) -> Vec<Derivation> {
             out.push(d(
                 "memory.pressure",
                 level.clone(),
-                format!(
-                    "/proc/pressure/memory: some avg10 {:?}, full avg10 {:?}",
-                    l.psi_some_avg10, l.psi_full_avg10
-                ),
+                linux_pressure_source(l),
             ));
         }
     }
@@ -280,7 +294,7 @@ impl Observation {
 /// Measures the machine, with a trend from `previous` when given, and
 /// records the report.
 pub fn observe(previous: Option<&Observation>) -> Result<Observation, String> {
-    let health = hearth_sense::box_health().map_err(|e| e.to_string())?;
+    let health = crate::pressure::box_health()?;
     let at = Instant::now();
     let trend = previous.map(|p| {
         trend(
@@ -295,12 +309,12 @@ pub fn observe(previous: Option<&Observation>) -> Result<Observation, String> {
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
-    let first = hearth_sense::box_health().map_err(|e| e.to_string())?;
+    let first = crate::pressure::box_health()?;
     let (health, trend) = match args.watch {
         Some(secs) => {
             let started = Instant::now();
             std::thread::sleep(Duration::from_secs(secs));
-            let second = hearth_sense::box_health().map_err(|e| e.to_string())?;
+            let second = crate::pressure::box_health()?;
             let elapsed = started.elapsed().as_secs_f64();
             let trend = trend(&first, &second, elapsed);
             (second, Some(trend))
@@ -543,14 +557,14 @@ fn pressure(level: Option<PressureLevel>) -> Option<Finding> {
             severity: "warn",
             code: "memory_pressure",
             pid: None,
-            message: "the kernel reports memory pressure: warn".into(),
+            message: "memory pressure: warn".into(),
             remediation: "do not load more models; unload idle ones or reduce context sizes".into(),
         }),
         Some(PressureLevel::Critical) => Some(Finding {
             severity: "critical",
             code: "memory_pressure",
             pid: None,
-            message: "the kernel reports memory pressure: critical".into(),
+            message: "memory pressure: critical".into(),
             remediation:
                 "free memory now: stop the largest idle model server; jetsam kills are imminent"
                     .into(),

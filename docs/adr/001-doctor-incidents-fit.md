@@ -131,3 +131,13 @@ That is above Metal's recommended working set of 51.84 GiB, the memory pressure 
 - **Order.** These stores are searched before Ollama's, so an `org/repo:tag` name that one of them has is not mistaken for an Ollama namespace.
 - **LM Studio servers.** `fit --port` on an LM Studio server fits its loaded model the same way.
 
+## Addendum (2026-10-15): memory pressure on Linux
+
+Linux publishes no memory pressure level. It publishes how much of the last ten seconds tasks stalled waiting for memory (PSI, `/proc/pressure/memory`). hearth derives a level from that with two policy knobs:
+- **warn:** `pressure.psi_some_warn`, a percentage of time some task stalled;
+- **critical:** `pressure.psi_full_critical`, a percentage of time all tasks stalled at once.
+
+For comparison, systemd-oomd starts killing at 60. `doctor --explain` shows the PSI figures against the thresholds.
+
+A level the kernel declares (macOS) is always used as is. `doctor`, `watch`, `fit` and the metrics all use the same level. Findings no longer say "the kernel reports" for a level hearth derived.
+

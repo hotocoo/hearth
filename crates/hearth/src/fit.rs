@@ -207,7 +207,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let kv_bytes = geometry.kv_bytes(args.ctx, k, v, swa);
     let total_bytes = weights_bytes + kv_bytes;
 
-    let host = hearth_sense::host_memory().map_err(|e| e.to_string())?;
+    let host = crate::pressure::host_memory()?;
     let ceiling = device_ceiling()?;
     let under_pressure = matches!(
         host.pressure,
@@ -236,7 +236,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
             .into(),
     );
     if under_pressure {
-        notes.push("the kernel reports memory pressure; nothing should be loaded now".into());
+        notes.push("memory is under pressure; nothing should be loaded now".into());
     }
     if swa.is_none()
         && geometry

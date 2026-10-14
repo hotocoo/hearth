@@ -23,6 +23,14 @@ pub struct Config {
     pub servers: std::collections::BTreeMap<String, Server>,
     pub control: Control,
     pub metrics: Metrics,
+    pub pressure: Pressure,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pressure {
+    pub psi_some_warn: f64,
+    pub psi_full_critical: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -297,6 +305,15 @@ impl Config {
                 k,
                 "is not a kind hearth records (ports, doctor, run)",
             )?;
+        }
+        let p = &self.pressure;
+        for (key, v) in [
+            ("pressure.psi_some_warn", p.psi_some_warn),
+            ("pressure.psi_full_critical", p.psi_full_critical),
+        ] {
+            if !(v.is_finite() && (0.0..=100.0).contains(&v)) {
+                invalid(key, &v, "must be a percentage, 0 to 100")?;
+            }
         }
         let tiers = &self.state.tiers;
         if tiers.windows(2).any(|w| w[0].within_ms >= w[1].within_ms) {

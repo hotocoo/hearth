@@ -65,6 +65,17 @@ every_ms = 600000
 within_ms = 604800000
 every_ms = 3600000
 
+[pressure]
+# Linux publishes no memory pressure level, only how much of the last ten
+# seconds tasks stalled waiting for memory (PSI, /proc/pressure/memory). These
+# turn it into one, for doctor, watch and metrics; macOS's own level is used
+# as is. Warn when some task stalled at least this percent of the time.
+psi_some_warn = 10.0
+
+# Critical when all tasks stalled together at least this percent of the time.
+# For comparison, systemd-oomd's default is to start killing at 60.
+psi_full_critical = 20.0
+
 [supervise]
 # `hearth run` keeps one model server alive. These bound how hard it tries.
 # Defaults follow Aletheia's supervisor, which they were ported from.
