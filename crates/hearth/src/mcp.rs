@@ -170,6 +170,16 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "config",
+            "description": "Every hearth setting in effect: value, source (built-in or the user's file), and what it means. hearth keeps no numbers in code; use this to see why it waited, retried, restarted or reported something, and which key to change.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filter": { "type": "string", "description": "Only keys containing this, e.g. supervise or deadline." }
+                }
+            }
+        },
+        {
             "name": "process_memory",
             "description": "Memory the kernel charges to processes whose name or path contains a pattern, or to one pid: footprint (includes GPU allocations on Apple Silicon), resident, lifetime peak.",
             "inputSchema": {
@@ -237,6 +247,12 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
                 if let Some(r) = args[key].as_str() {
                     command_line.extend([format!("--{key}"), r.into()]);
                 }
+            }
+        }
+        "config" => {
+            command_line.push("config".into());
+            if let Some(f) = args["filter"].as_str() {
+                command_line.push(f.into());
             }
         }
         "process_memory" => return process_memory(args),

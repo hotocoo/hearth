@@ -4,6 +4,7 @@
 //! document meant for scripts and AI agents. Nothing here guesses: values are
 //! measured, read from files, or given on the command line.
 
+mod config_cmd;
 mod doctor;
 mod fit;
 mod history;
@@ -55,6 +56,9 @@ enum Command {
     /// notify) when memory pressure rises, a resource would reach its limit
     /// soon, or a model runtime vanishes, restarts or stops answering.
     Watch(watch::Args),
+    /// Every setting in effect: its value, whether it is built in or comes
+    /// from your file, and what it means.
+    Config(config_cmd::Args),
     /// Serve these commands as tools to AI agents over the Model Context
     /// Protocol on stdin/stdout.
     Mcp,
@@ -70,6 +74,7 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Diff(args) => history::diff(args, cli.json),
         Command::Run(args) => run::run(args, cli.json),
         Command::Watch(args) => watch::run(args, cli.json),
+        Command::Config(args) => config_cmd::run(args, cli.json),
         Command::Mcp => mcp::serve(),
     }
 }

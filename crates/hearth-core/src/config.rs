@@ -361,3 +361,152 @@ mod tests {
         assert!(err.to_string().contains("test"));
     }
 }
+
+/// One effective setting: its value, where that value came from, and what
+/// the shipped file says it means.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Setting {
+    pub key: String,
+    /// `None` for an optional key nobody set.
+    pub value: Option<toml::Value>,
+    /// `built-in`, or the user file that set it.
+    pub source: String,
+    pub doc: String,
+}
+
+/// Comments in the shipped file, by `section.key`. A comment documents the
+/// keys right below it, up to the next blank line, so keys that belong
+/// together share one comment; a commented-out assignment (`# key = value`)
+/// documents an optional key the same way.
+fn docs() -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut section = String::new();
+    let mut comment: Vec<&str> = Vec::new();
+    let key_of = |line: &str| -> Option<String> {
+        let (key, _) = line.split_once('=')?;
+        let key = key.trim();
+        (!key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+            .then(|| key.to_string())
+    };
+    for line in BASE.lines().map(str::trim) {
+        if line.is_empty() {
+            comment.clear();
+        } else if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.to_string();
+            comment.clear();
+        } else if let Some(text) = line.strip_prefix('#') {
+            let text = text.trim();
+            match key_of(text) {
+                Some(key) if !section.is_empty() && !comment.is_empty() => {
+                    out.insert(format!("{section}.{key}"), comment.join(" "));
+                }
+                _ => comment.push(text),
+            }
+        } else if let Some(key) = key_of(line) {
+            out.insert(format!("{section}.{key}"), comment.join(" "));
+        }
+    }
+    out
+}
+
+fn flatten(prefix: &str, table: &toml::Table, out: &mut Vec<(String, toml::Value)>) {
+    for (key, value) in table {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        match value {
+            toml::Value::Table(t) => flatten(&path, t, out),
+            v => out.push((path, v.clone())),
+        }
+    }
+}
+
+/// Every setting in effect, after the user's file has been merged and the
+/// result validated, sorted by key.
+pub fn explain() -> Result<Vec<Setting>, ConfigError> {
+    load()?;
+    let overlay = match user_path() {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => Some((path.display().to_string(), text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => return Err(ConfigError::Read { path, source }),
+        },
+        None => None,
+    };
+    let parse = |origin: &str, text: &str| {
+        text.parse::<toml::Table>()
+            .map_err(|source| ConfigError::Parse {
+                origin: origin.to_string(),
+                source,
+            })
+    };
+    let mut base = Vec::new();
+    flatten("", &parse("built-in config/hearth.toml", BASE)?, &mut base);
+    let mut user = Vec::new();
+    if let Some((origin, text)) = &overlay {
+        flatten("", &parse(origin, text)?, &mut user);
+    }
+    let docs = docs();
+    let user_value = |key: &str| user.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    let origin = overlay.as_ref().map_or("", |(o, _)| o.as_str());
+    let mut out: Vec<Setting> = base
+        .iter()
+        .map(|(key, value)| match user_value(key) {
+            Some(v) => Setting {
+                key: key.clone(),
+                value: Some(v),
+                source: origin.to_string(),
+                doc: docs.get(key).cloned().unwrap_or_default(),
+            },
+            None => Setting {
+                key: key.clone(),
+                value: Some(value.clone()),
+                source: "built-in".into(),
+                doc: docs.get(key).cloned().unwrap_or_default(),
+            },
+        })
+        .collect();
+    // Optional keys: documented in the shipped file but not set there, and
+    // keys only the user's file sets (validation has accepted them).
+    for (key, doc) in &docs {
+        if out.iter().any(|s| &s.key == key) {
+            continue;
+        }
+        out.push(Setting {
+            key: key.clone(),
+            source: if user_value(key).is_some() {
+                origin.to_string()
+            } else {
+                "unset".into()
+            },
+            value: user_value(key),
+            doc: doc.clone(),
+        });
+    }
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(out)
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::*;
+
+    #[test]
+    fn every_shipped_key_is_documented() {
+        let mut keys = Vec::new();
+        flatten("", &BASE.parse::<toml::Table>().unwrap(), &mut keys);
+        let docs = docs();
+        for (key, _) in keys {
+            assert!(
+                docs.get(&key).is_some_and(|d| !d.is_empty()),
+                "{key} has no comment in config/hearth.toml"
+            );
+        }
+        assert!(
+            docs.contains_key("notify.webhook_url"),
+            "optional keys are documented too"
+        );
+    }
+}
