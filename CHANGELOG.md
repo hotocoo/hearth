@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:05 what-can-i-run workflow
+
+- **New workflow.** `what-can-i-run CTX` is the eighth built-in workflow. It lists the models on disk that fit at that context and marks those already served. It then checks the best one with `fit` and says what would have to be unloaded first.
+- **CI.** It runs clippy on the beta toolchain as an early warning.
+
 ### 2026-10-15 07:58 VRAM per runtime fixes
 
 - **Which figure.** VRAM read from DRM fdinfo prefers resident device memory, when the kernel reports it.
