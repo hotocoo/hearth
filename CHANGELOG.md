@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 07:58 VRAM per runtime fixes
+
+- **Which figure.** VRAM read from DRM fdinfo prefers resident device memory, when the kernel reports it.
+- **Which descriptors.** Only descriptors open on `/dev/dri` are read.
+- **Failures.** A source that cannot be read is reported. The other source still counts.
+- **Reading the number.** The value is an upper bound per process. Do not sum it across ports or processes.
+
 ### 2026-10-15 07:53 exit cause metric
 
 - hearthd's metrics add `hearth_server_exit_cause{server,cause}`: 1 for why each server last exited, when its log said.
