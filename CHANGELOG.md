@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 09:24 tokens held
+
+- **Tokens held.** `ports` reads each llama.cpp server's `/slots` to see how many tokens its slots hold.
+- **The warning.** The oversized warning says how far that is from the context the device can hold.
+- **`overfull`.** A server already past that point gets a new finding, `overfull`, so `watch` reports it when it happens.
+
 ### 2026-10-15 09:14 current llama.cpp flag names
 
 - **Flag names.** Draft and projector settings now follow current llama.cpp, checked against `llama-server --help`: `--spec-draft-*`, `LLAMA_ARG_SPEC_DRAFT_*`, `LLAMA_ARG_MMPROJ_AUTO` and `LLAMA_ARG_MMPROJ_OFFLOAD`. Older names still work.
