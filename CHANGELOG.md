@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:55 files under 800 lines
+
+- **Split modules.** `ports`, `fit`, `history`, `doctor` and `supervise` are split by concern, and tests sit beside the files they cover.
+- **New check.** CI and `scripts/check.sh` fail when a source file passes 800 lines.
+
 ### 2026-10-15 08:45 draft model fixes
 
 - **Draft cache size.** It follows llama.cpp: `-cd` is per slot. Each cache type defaults to f16 on its own.
