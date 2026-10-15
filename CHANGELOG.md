@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 09:14 current llama.cpp flag names
+
+- **Flag names.** Draft and projector settings now follow current llama.cpp, checked against `llama-server --help`: `--spec-draft-*`, `LLAMA_ARG_SPEC_DRAFT_*`, `LLAMA_ARG_MMPROJ_AUTO` and `LLAMA_ARG_MMPROJ_OFFLOAD`. Older names still work.
+- **Auto values.** `-ngld auto` and `-np -1` are read as automatic, not as errors.
+- **Unreadable environment.** `fit` says when a server's environment cannot be read.
+
 ### 2026-10-15 09:00 LLAMA_ARG_* environment
 
 - **Settings from the environment.** `fit --port` and the `ports` oversized check now read a llama-server's `LLAMA_ARG_*` environment variables: cache types, projector and draft. A flag on the command line still overrides them, as in llama.cpp.
