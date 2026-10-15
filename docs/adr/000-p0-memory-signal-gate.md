@@ -47,6 +47,9 @@ These come from passive sampling of a running llama-server on 2026-10-14:
 - The machine was under memory pressure: level 2 (warn), swap 15.5 of 16.1 GB.
 - `proc_pidpath` failed for that server because Homebrew had replaced its binary while it ran, so process matching also uses `proc_name`.
 
+- 2026-10-15, idle (nothing loaded by the gate, a 27B llama-server serving a 262k context beside it): 180 samples at 500 ms over 90 s showed host available memory between 3.87 and 6.83 GiB, σ 0.82 GiB, so 3σ is 2.45 GiB. Step-to-step σ was 0.24 GiB. Pressure moved between normal and warn, swap was 19 of 20 GiB, and jetsam had killed a process that morning.
+- What that means for the gate: a load is only visible above that noise if its footprint is well over 2.45 GiB, while only 4 to 7 GiB was available. A small model would fail the gate on noise and record nothing about the signals; a model big enough to clear the noise could push this machine into jetsam. The gate waits for a quieter machine (the 27B server stopped, swap drained) and a model of several GiB, as the decision above says.
+
 ## Results
 
 Pending.

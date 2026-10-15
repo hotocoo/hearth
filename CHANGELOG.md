@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 18:50 gateway holds requests during a restart
+
+- **Served, not refused.** A request for a server that is starting or restarting waits up to `gateway.ready_wait_ms` (2 minutes) and goes through once the server is ready. Stopped and given-up servers are still refused at once.
+- **The P0 gate, measured.** ADR-000 records this machine's idle memory noise (3σ = 2.45 GiB over 90 s), which is why the gate cannot run here yet.
+
 ### 2026-10-15 18:20 dashboard findings and a browser check
 
 - **Growth projections on the dashboard.** Findings now include the last watch round's, which can project growth. Warnings join the list; info-level projections fold into one expandable group. `hearth top` prints the round's counts.

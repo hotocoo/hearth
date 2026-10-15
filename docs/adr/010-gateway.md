@@ -22,3 +22,10 @@ Not in this slice: API translation, retry before the first token, admission from
 - Clients stop knowing ports: a server can move or restart behind the same URL, and a stopped one says how to start it.
 - The end-to-end test forwards to the fake server, gets 404 and 503 with their remediations, and drops a streaming client mid-answer: the server sees its connection close.
 - Live, through a hearthd owning a real llama-server (llama.cpp b11429, Qwen2.5 0.5B Q4_K_M): an OpenAI chat completion and a streamed one came back, and so did an Anthropic `/v1/messages` call. A client that dropped a 1500-token stream mid-answer left llama.cpp's slot idle 0.07 s later. After `hearth stop`, the same URL answered 503 with `hearth start tiny`.
+
+## Addendum (2026-10-15): held while starting
+
+- A request for a server that is `starting`, or `waiting` out a restart hearthd decided, is held for up to `gateway.ready_wait_ms` (polling every `gateway.ready_poll_ms`) and forwarded once the server is ready. A client that arrives mid-restart, including one after a poisoned backend or a wedge, is then served late rather than refused.
+- A server that is `stopped`, `gave_up` or `unsupervised` does not come back by itself, so its request is still refused at once with what to do.
+- The request head is already read when it is held, and the body has not been read yet: it streams to the server once forwarding starts, so holding costs no buffering.
+- The end-to-end test restarts the server and sends a request through the gateway straight away; it is answered 200.

@@ -240,6 +240,40 @@ fn pipe(
     outcome
 }
 
+/// Whether the server this head names is coming up on its own: starting,
+/// or waiting out a restart hearthd decided. A request for it is held
+/// rather than refused; a stopped or given-up server never comes back by
+/// itself, so it is refused at once.
+fn coming_up(head: &str, servers: &[Value]) -> bool {
+    let target = head.split(' ').nth(1).unwrap_or_default();
+    split_target(target).is_some_and(|(name, _)| {
+        servers.iter().any(|s| {
+            s["name"] == name && matches!(s["state"].as_str(), Some("starting" | "waiting"))
+        })
+    })
+}
+
+/// Routes the request, holding it up to `gateway.ready_wait_ms` while its
+/// server comes up, so a client that arrives during a restart is served
+/// instead of refused.
+fn wait_for_ready(head: &str, config: &Gateway, servers: &Servers) -> Result<Forward, Refusal> {
+    let deadline = Instant::now() + Duration::from_millis(config.ready_wait_ms);
+    loop {
+        let now = servers();
+        match route(head, &now) {
+            Err(r) if coming_up(head, &now) && Instant::now() < deadline => {
+                drop(r);
+                std::thread::sleep(Duration::from_millis(config.ready_poll_ms));
+            }
+            Err(mut r) if coming_up(head, &now) => {
+                r.message = format!("{} after waiting {} ms", r.message, config.ready_wait_ms);
+                return Err(r);
+            }
+            other => return other,
+        }
+    }
+}
+
 fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io::Result<()> {
     let head_time = Duration::from_millis(config.head_timeout_ms);
     let head =
@@ -259,7 +293,7 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
             ),
         );
     }
-    let forward = match route(&head, &servers()) {
+    let forward = match wait_for_ready(&head, config, servers) {
         Ok(f) => f,
         Err(r) => return reply(&mut client, &r),
     };
@@ -364,6 +398,18 @@ mod tests {
             f.head,
             "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: close\r\n\r\n"
         );
+    }
+
+    #[test]
+    fn only_a_server_coming_up_is_waited_for() {
+        let at = |state: &str| vec![json!({ "name": "a", "state": state, "addr": "127.0.0.1:1" })];
+        let head = "GET /s/a/v1/models HTTP/1.1\r\n\r\n";
+        assert!(coming_up(head, &at("starting")));
+        assert!(coming_up(head, &at("waiting")));
+        for state in ["ready", "stopped", "gave_up", "unsupervised"] {
+            assert!(!coming_up(head, &at(state)), "{state}");
+        }
+        assert!(!coming_up("GET /s/b/ HTTP/1.1\r\n\r\n", &at("starting")));
     }
 
     #[test]

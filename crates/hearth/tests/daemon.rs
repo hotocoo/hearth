@@ -252,6 +252,14 @@ fn check_gateway(dir: &Path, gateway: u16) {
         "{ok}"
     );
     gateway_says(gateway, "/s/nope/v1/models", "HTTP/1.1 404", "servers: e2e");
+    // A request that arrives during a restart is held until the server is
+    // back, not refused.
+    let (_, before) = state(dir).unwrap();
+    hearth(dir, &["restart", "e2e"]).unwrap();
+    wait_until("the restart to begin", || {
+        state(dir).is_some_and(|(s, pid)| s != "ready" || pid != before)
+    });
+    gateway_says(gateway, "/s/e2e/v1/models", "HTTP/1.0 200", "e2e-model");
     let mut slow = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
     write!(slow, "GET /s/e2e/slow HTTP/1.1\r\nHost: test\r\n\r\n").unwrap();
     let mut first = [0u8; 64];

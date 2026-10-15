@@ -213,6 +213,15 @@ connect_timeout_ms = 2000
 # nothing until the first token.
 idle_timeout_ms = 600000
 
+# How long a request for a server that is starting, or waiting out a
+# restart hearthd decided, is held before it is refused. A client that
+# arrives during a restart is then served when the server is ready, not
+# turned away. A stopped or given-up server is refused at once.
+ready_wait_ms = 120000
+
+# How often a held request checks whether its server is ready.
+ready_poll_ms = 200
+
 # Requests forwarded at once; one beyond this is told the gateway is busy.
 max_clients = 64
 
