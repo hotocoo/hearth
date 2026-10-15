@@ -7,6 +7,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 ### 2026-10-15 21:10 start admission from learned footprints
 
 - **Held, not crashed.** hearthd holds a server's start while available memory is below that server's last measured footprint plus `supervise.admit_headroom_bytes` (1 GiB). It starts at the first poll where it fits. `hearth status` and the dashboard say why it is held.
+- **The gateway says so at once.** A request for a held server gets a 503 naming the reason, instead of waiting out `ready_wait_ms`.
 - **A lower bound, on purpose.** The footprint may leave out memory-mapped weights (ADR-000), so only starts that certainly would not fit are held. A server never measured starts; unreadable memory holds the start.
 
 ### 2026-10-15 20:45 Ollama's API in front of llama.cpp

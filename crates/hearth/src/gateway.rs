@@ -138,6 +138,14 @@ fn route(head: &str, servers: &[Value]) -> Result<Forward, Refusal> {
         ));
     };
     let state = server["state"].as_str().unwrap_or("unknown");
+    if let Some(held) = server["held"].as_str().filter(|_| state != "ready") {
+        return Err(refuse(
+            "503 Service Unavailable",
+            "not_ready",
+            format!("server {name} is held from starting: {held}"),
+            "it starts by itself once memory allows; free memory (stop another server), or lower supervise.admit_headroom_bytes".into(),
+        ));
+    }
     if state != "ready" {
         return Err(refuse(
             "503 Service Unavailable",
@@ -242,7 +250,9 @@ fn coming_up(head: &str, servers: &[Value]) -> bool {
     let target = head.split(' ').nth(1).unwrap_or_default();
     split_target(target).is_some_and(|(name, _)| {
         servers.iter().any(|s| {
-            s["name"] == name && matches!(s["state"].as_str(), Some("starting" | "waiting"))
+            s["name"] == name
+                && s["held"].is_null()
+                && matches!(s["state"].as_str(), Some("starting" | "waiting"))
         })
     })
 }
@@ -545,6 +555,15 @@ mod tests {
             assert!(!coming_up(head, &at(state)), "{state}");
         }
         assert!(!coming_up("GET /s/b/ HTTP/1.1\r\n\r\n", &at("starting")));
+        let memory_bound = vec![
+            json!({ "name": "a", "state": "waiting", "held": "too big", "addr": "127.0.0.1:1" }),
+        ];
+        assert!(
+            !coming_up(head, &memory_bound),
+            "a held start is not waited for"
+        );
+        let r = route(head, &memory_bound).unwrap_err();
+        assert!(r.message.contains("held from starting: too big"), "{r:?}");
     }
 
     #[test]

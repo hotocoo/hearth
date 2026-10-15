@@ -24,6 +24,9 @@ pub(crate) fn measured_compute(model: &Path, ctx: u64) -> (Option<u64>, Option<S
 /// The footprint server `name` had when it last became ready under
 /// hearthd, from the run journal: a lower bound of what it needs, since it
 /// may leave out memory-mapped weights (ADR-000).
+// shortcut: reads run events newest first until a match, so a server never
+// ready scans the whole run journal once per held wait; state.tiers keeps
+// that journal small. Index by server if it grows.
 pub(crate) fn last_footprint(journal: &hearth_core::state::Journal, name: &str) -> Option<u64> {
     let ids = journal.ids(crate::run::KIND).ok()?;
     ids.iter().rev().find_map(|id| {
