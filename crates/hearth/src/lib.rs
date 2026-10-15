@@ -13,18 +13,22 @@ mod control;
 #[cfg(unix)]
 pub mod daemon;
 mod doctor;
+mod draft;
 mod fit;
 mod history;
 mod incidents;
 mod mcp;
+mod measured;
 #[cfg(unix)]
 mod metrics;
+mod model_files;
 mod models;
 mod note;
 mod notify;
 mod ports;
 mod pressure;
 mod run;
+mod server_args;
 #[cfg(unix)]
 mod service;
 mod units;

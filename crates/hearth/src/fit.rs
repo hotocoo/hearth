@@ -8,10 +8,13 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use hearth_sense::PressureLevel;
 use hearth_sense::kv::{CacheType, Confidence, Geometry, Swa};
-use hearth_sense::{PressureLevel, gguf};
 use serde::Serialize;
 
+use crate::measured::measured_compute;
+use crate::model_files::{dtype_cache_type, from_name, weights_and_geometry};
+use crate::server_args::{cache_types_from_args, hf_projector_of, model_arg, projector_arg};
 use crate::units::bytes;
 
 #[derive(clap::Args)]
@@ -54,6 +57,18 @@ pub struct Args {
     /// counted with the weights. With --port, the server's own is read.
     #[arg(long)]
     mmproj: Option<PathBuf>,
+    /// A draft model for speculative decoding (llama.cpp -md), counted with
+    /// its own KV cache at --ctx (f16, llama.cpp's default). With --port,
+    /// the server's own -md, -cd and -ctkd/-ctvd are read.
+    #[arg(long)]
+    draft: Option<PathBuf>,
+    /// The draft's context (llama.cpp -cd), when not --ctx.
+    #[arg(long, requires = "draft")]
+    draft_ctx: Option<u64>,
+    /// The draft's KV cache type for keys and values (llama.cpp -ctkd), when
+    /// not f16.
+    #[arg(long, requires = "draft", value_parser = parse_cache)]
+    draft_cache_type: Option<CacheType>,
 }
 
 impl Args {
@@ -85,6 +100,9 @@ struct Report {
     /// model at this context (`hearth run`, hearthd); counted in the total.
     #[serde(skip_serializing_if = "Option::is_none")]
     compute_bytes: Option<u64>,
+    /// A speculative-decoding draft model's weights and KV cache; counted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    draft_bytes: Option<u64>,
     total_bytes: u64,
     /// What the total leaves out, if anything.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,81 +175,6 @@ fn listener_args(port: u16) -> Option<Vec<String>> {
                 .then_some(p.pid)
         })?;
     hearth_sense::process_args(pid).ok()
-}
-
-/// The value of `--model` (or `--model=VALUE`) on a command line, as
-/// `mlx_lm.server` and vLLM take the model they serve.
-fn model_arg(args: &[String]) -> Option<String> {
-    args.iter().enumerate().find_map(|(i, a)| {
-        a.strip_prefix("--model=").map(str::to_string).or_else(|| {
-            (a == "--model")
-                .then(|| args.get(i + 1).filter(|v| !v.starts_with('-')).cloned())
-                .flatten()
-        })
-    })
-}
-
-/// The multimodal projector a llama-server loads onto the accelerator
-/// beside its model (`--mmproj`/`-mm FILE`), from its command line. None
-/// when it is kept on the CPU (`--no-mmproj-offload`, `--mmproj-device
-/// none`) or not loaded (`--no-mmproj`). The last occurrence wins, as in
-/// llama.cpp. Only its weights are counted, not the compute it uses to
-/// encode images.
-pub(crate) fn projector_arg(args: &[String]) -> Option<PathBuf> {
-    let off_accelerator = args.iter().enumerate().any(|(i, a)| {
-        a == "--no-mmproj-offload"
-            || a == "--no-mmproj"
-            || a == "--mmproj-device=none"
-            || a == "-mmdev=none"
-            || (["--mmproj-device", "-mmdev"].contains(&a.as_str())
-                && args.get(i + 1).is_some_and(|v| v == "none"))
-    });
-    if off_accelerator {
-        return None;
-    }
-    args.iter()
-        .enumerate()
-        .rev()
-        .find_map(|(i, a)| {
-            a.strip_prefix("--mmproj=").map(str::to_string).or_else(|| {
-                ["--mmproj", "-mm"]
-                    .contains(&a.as_str())
-                    .then(|| args.get(i + 1).filter(|v| !v.starts_with('-')).cloned())
-                    .flatten()
-            })
-        })
-        .map(PathBuf::from)
-}
-
-/// See [`server_cache_types`]: only a llama-server's arguments say this.
-pub(crate) fn cache_types_from_args(args: &[String]) -> Option<(CacheType, CacheType)> {
-    let program = args.first()?;
-    if !std::path::Path::new(program)
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().contains("llama-server"))
-    {
-        return None;
-    }
-    // The last occurrence wins, as in llama.cpp; long flags may be spelt
-    // with `_`. An absent flag is not assumed to mean the f16 default: the
-    // server may take it from LLAMA_ARG_CACHE_TYPE_* in its environment,
-    // which is not read, so the type is then unknown.
-    let flag = |names: [&str; 3]| -> Option<CacheType> {
-        let value = args.iter().enumerate().rev().find_map(|(i, a)| {
-            names.iter().find_map(|n| {
-                if a == n {
-                    args.get(i + 1).cloned()
-                } else {
-                    a.strip_prefix(&format!("{n}=")).map(str::to_string)
-                }
-            })
-        })?;
-        CacheType::parse(&value)
-    };
-    Some((
-        flag(["-ctk", "--cache-type-k", "--cache_type_k"])?,
-        flag(["-ctv", "--cache-type-v", "--cache_type_v"])?,
-    ))
 }
 
 /// Asks the server on `port` which model it serves, read-only.
@@ -349,28 +292,6 @@ fn from_server(
     }
 }
 
-/// The path given, or the Ollama model of that name.
-pub(crate) fn from_name(model: &std::path::Path) -> Result<PathBuf, String> {
-    if model.exists() {
-        return Ok(model.to_path_buf());
-    }
-    let name = model.to_string_lossy();
-    // org/repo names live in the Hugging Face cache or LM Studio first:
-    // that is where `llama-server -hf` and LM Studio put them.
-    if let Some(found) = hearth_runtime::model_stores::find(&name) {
-        return found;
-    }
-    if hearth_runtime::ollama_store::parse_name(&name).is_none() {
-        return Err(format!("{}: no such file", model.display()));
-    }
-    hearth_runtime::ollama_store::weights(&name).map_err(|e| {
-        format!(
-            "{} is not a file, and as an Ollama model: {e}",
-            model.display()
-        )
-    })
-}
-
 /// The cache types that would bring the total under the device ceiling,
 /// when the requested one does not.
 fn alternatives(
@@ -389,94 +310,6 @@ fn alternatives(
         .collect()
 }
 
-/// The compute buffers llama.cpp logged the last time hearth started this
-/// model at `ctx` tokens, from the run journal's ready events, and a note
-/// saying where the number came from (or why none was used).
-fn measured_compute(model: &Path, ctx: u64) -> (Option<u64>, Option<String>) {
-    match hearth_core::config::load()
-        .map_err(|e| e.to_string())
-        .and_then(|c| hearth_core::state::Journal::open(&c.state).map_err(|e| e.to_string()))
-    {
-        Ok(journal) => measured_compute_in(&journal, model, ctx),
-        Err(e) => (
-            None,
-            Some(format!("no journal to learn compute buffers from: {e}")),
-        ),
-    }
-}
-
-fn measured_compute_in(
-    journal: &hearth_core::state::Journal,
-    model: &Path,
-    ctx: u64,
-) -> (Option<u64>, Option<String>) {
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let model = canon(model);
-    let ids = match journal.ids(crate::run::KIND) {
-        Ok(ids) => ids,
-        Err(e) => return (None, Some(format!("run journal unreadable: {e}"))),
-    };
-    let mut elsewhere = None;
-    let mut unreadable = 0usize;
-    let mut found = None;
-    for id in ids.iter().rev() {
-        let Ok(s) = journal.read(id) else {
-            unreadable += 1;
-            continue;
-        };
-        let event = &s.body["event"];
-        // Ready events of a start that logged compute buffers, of this model.
-        let Some(compute) = event["compute_bytes"].as_u64().filter(|&c| c > 0) else {
-            continue;
-        };
-        let identity = &event["identity"];
-        if identity["model"].as_str().map(|m| canon(Path::new(m))) != Some(model.clone()) {
-            continue;
-        }
-        let at = identity["n_ctx"]
-            .as_u64()
-            .map(|n| n.saturating_mul(identity["slots"].as_u64().unwrap_or(1).max(1)));
-        if at == Some(ctx) {
-            let footprint = s.body["footprint_at_ready"]["footprint_bytes"].as_u64();
-            found = Some((compute, footprint, s.id));
-            break;
-        }
-        elsewhere.get_or_insert((compute, at, s.id));
-    }
-    let skipped = if unreadable == 0 {
-        String::new()
-    } else {
-        format!("; {unreadable} run events could not be read")
-    };
-    if let Some((compute, footprint, id)) = found {
-        // Measured, not used in the verdict: whether a footprint counts the
-        // memory-mapped weights is what the P0 gate (ADR-000) settles.
-        let held = footprint.map_or_else(String::new, |f| {
-            format!(
-                "; at the moment it became ready, that server's footprint was {} (one reading; it may leave out memory-mapped weights, so it is not used in the verdict until ADR-000's gate says how they count)",
-                bytes(f)
-            )
-        });
-        return (
-            Some(compute),
-            Some(format!(
-                "compute buffers {} as llama.cpp logged them when hearth started this model at this context ({id}), with that start's batch and flash-attention settings; without flash attention they grow with the context, so a larger context needs more{held}{skipped}",
-                bytes(compute)
-            )),
-        );
-    }
-    let note = elsewhere
-        .map(|(compute, at, id)| {
-            format!(
-                "compute buffers were {} at {} tokens ({id}); not counted at another context{skipped}",
-                bytes(compute),
-                at.map_or_else(|| "an unknown context".to_string(), |n| n.to_string())
-            )
-        })
-        .or_else(|| (unreadable > 0).then(|| skipped.trim_start_matches("; ").to_string()));
-    (None, note)
-}
-
 /// The key and value cache types: as given, else the server's own.
 fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), String> {
     if let Some(k) = args.cache_type {
@@ -492,104 +325,6 @@ fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), Stri
             "give --cache-type (llama.cpp's default is f16)"
         })?;
     Ok((k, args.cache_type_v.unwrap_or(v)))
-}
-
-/// The cache type of a model directory whose runtime caches keys and
-/// values in the model's own dtype (MLX, Transformers): `torch_dtype`, or
-/// `dtype` in newer configs, of the language model.
-pub(crate) fn dtype_cache_type(model: &Path) -> Option<CacheType> {
-    let text = std::fs::read_to_string(model.join("config.json")).ok()?;
-    let config: serde_json::Value = serde_json::from_str(&text).ok()?;
-    [&config["text_config"], &config]
-        .iter()
-        .flat_map(|c| [&c["torch_dtype"], &c["dtype"]])
-        .find_map(serde_json::Value::as_str)
-        .and_then(|d| match d {
-            "bfloat16" => Some(CacheType::Bf16),
-            "float16" => Some(CacheType::F16),
-            "float32" => Some(CacheType::F32),
-            _ => None,
-        })
-}
-
-/// The model's files, their total size, and its cache geometry: from the
-/// GGUF header, or for a directory with `config.json` (MLX, safetensors)
-/// from that config and the `.safetensors` files beside it.
-pub(crate) fn weights_and_geometry(
-    model: &std::path::Path,
-) -> Result<(Vec<PathBuf>, u64, Geometry), String> {
-    let size = |files: &[PathBuf]| {
-        files
-            .iter()
-            .map(|f| {
-                std::fs::metadata(f)
-                    .map(|m| m.len())
-                    .map_err(|e| format!("{}: {e}", f.display()))
-            })
-            .sum::<Result<u64, String>>()
-    };
-    if model.is_dir() {
-        let config_path = model.join("config.json");
-        let text = std::fs::read_to_string(&config_path).map_err(|e| {
-            format!(
-                "{}: {e}; a model directory needs config.json",
-                config_path.display()
-            )
-        })?;
-        let config: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", config_path.display()))?;
-        let mut files = safetensors_weights(model)?;
-        files.sort();
-        files.dedup();
-        if files.is_empty() {
-            return Err(format!("{}: no .safetensors weights", model.display()));
-        }
-        let geometry = Geometry::from_hf_config(&config).map_err(|e| e.to_string())?;
-        return Ok((files.clone(), size(&files)?, geometry));
-    }
-    let files = gguf::model_files(model);
-    let weights = size(&files)?;
-    let header = gguf::read_header(&files[0]).map_err(|e| e.to_string())?;
-    let geometry = Geometry::from_header(&header).map_err(|e| e.to_string())?;
-    Ok((files, weights, geometry))
-}
-
-/// The weight files of a safetensors model directory: those its
-/// `model.safetensors.index.json` maps tensors to when it has one (so a
-/// `consolidated.safetensors` beside the shards is not counted twice),
-/// else every `.safetensors` file but a `LoRA` adapter's `adapters.safetensors`.
-fn safetensors_weights(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let index = dir.join("model.safetensors.index.json");
-    if index.is_file() {
-        let text =
-            std::fs::read_to_string(&index).map_err(|e| format!("{}: {e}", index.display()))?;
-        let json: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", index.display()))?;
-        let map = json["weight_map"]
-            .as_object()
-            .ok_or_else(|| format!("{}: no weight_map", index.display()))?;
-        return map
-            .values()
-            .map(|v| {
-                // Shards sit beside the index; a name is never a path.
-                v.as_str()
-                    .filter(|n| Path::new(n).file_name().is_some_and(|f| f == *n))
-                    .map(|n| dir.join(n))
-                    .ok_or_else(|| format!("{}: bad shard name {v}", index.display()))
-            })
-            .collect();
-    }
-    Ok(std::fs::read_dir(dir)
-        .and_then(Iterator::collect::<Result<Vec<_>, _>>)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .into_iter()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
-                && p.file_name().is_some_and(|n| n != "adapters.safetensors")
-        })
-        .collect())
 }
 
 /// Adds the projector to the files and weights, since it is on the
@@ -628,50 +363,6 @@ fn add_projector(
     Ok(None)
 }
 
-/// What `llama-server -hf org/repo` loads as its projector, unless told
-/// not to: the projector downloaded beside the model file, when its folder
-/// holds exactly one. `Err` says why none can be named.
-fn hf_projector_of(words: &[String], model: &Path) -> Result<Option<PathBuf>, String> {
-    let hf = words
-        .iter()
-        .any(|w| w == "-hf" || w == "--hf-repo" || w.starts_with("--hf-repo="));
-    let declined = words
-        .iter()
-        .any(|w| w.starts_with("--no-mmproj") || w == "-mm" || w.starts_with("--mmproj"));
-    let Some(dir) = model.parent().filter(|_| hf && !declined) else {
-        return Ok(None);
-    };
-    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let found: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.to_ascii_lowercase().contains("mmproj"))
-                && p.extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
-        })
-        .collect();
-    match found.as_slice() {
-        [] => Ok(None),
-        [one] => Ok(Some(one.clone())),
-        several => Err(format!(
-            "{} projectors beside the model and -hf loads one of them",
-            several.len()
-        )),
-    }
-}
-
-/// The projector a llama-server with command line `words` serving `model`
-/// loads onto the accelerator: its `--mmproj`, else what `-hf` loaded.
-/// Only a file readable from here.
-pub(crate) fn served_projector(words: &[String], model: &Path) -> Option<PathBuf> {
-    projector_arg(words)
-        .or_else(|| hf_projector_of(words, model).ok().flatten())
-        .filter(|p| p.is_file())
-}
-
 /// [`hf_projector_of`] for `fit --port`, counted, with a note either way.
 fn hf_projector(
     args: &Args,
@@ -702,6 +393,45 @@ fn hf_projector(
     }
 }
 
+/// The draft model's weights and KV: `--draft`, else the `--port` server's
+/// own `-md`. A server's draft not readable from here is an error, since
+/// leaving it out would understate what the server holds.
+fn draft_of(args: &Args, ctx: u64) -> Result<Option<u64>, String> {
+    let draft = match &args.draft {
+        Some(model) => Some(crate::draft::Draft {
+            model: model.clone(),
+            ctx: args.draft_ctx,
+            cache: args.draft_cache_type.map(|t| (t, t)),
+        }),
+        None => args
+            .port
+            .and_then(listener_args)
+            .as_deref()
+            .and_then(crate::draft::from_args),
+    };
+    draft
+        .map(|d| crate::draft::bytes(&d, ctx).map(|(w, kv)| w.saturating_add(kv)))
+        .transpose()
+}
+
+/// The machine's memory, the device ceiling, whether memory is under
+/// pressure, and what is available now: on a discrete GPU the model goes
+/// into the device's own memory, so what is free there decides; otherwise
+/// it is the host's memory.
+fn room() -> Result<(hearth_sense::HostMemory, Option<Ceiling>, bool, u64), String> {
+    let host = crate::pressure::host_memory()?;
+    let ceiling = device_ceiling()?;
+    let under_pressure = matches!(
+        host.pressure,
+        Some(PressureLevel::Warn | PressureLevel::Critical)
+    );
+    let available_now = ceiling
+        .as_ref()
+        .and_then(|c| c.free_bytes)
+        .unwrap_or(host.available_bytes);
+    Ok((host, ceiling, under_pressure, available_now))
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
@@ -714,23 +444,15 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let swa = args.swa();
     let kv_bytes = geometry.kv_bytes(ctx, k, v, swa);
     let (compute_bytes, compute_note) = measured_compute(&model, ctx);
-    // What does not grow with the context: the weights, and the compute
-    // buffers when a start of this model at this context logged them.
-    let fixed = weights_bytes.saturating_add(compute_bytes.unwrap_or(0));
+    let draft_bytes = draft_of(args, ctx)?;
+    // What the context search holds fixed: the weights, the compute buffers
+    // when a start of this model at this context logged them, and a draft.
+    let fixed = weights_bytes
+        .saturating_add(compute_bytes.unwrap_or(0))
+        .saturating_add(draft_bytes.unwrap_or(0));
     let total_bytes = fixed.saturating_add(kv_bytes);
 
-    let host = crate::pressure::host_memory()?;
-    let ceiling = device_ceiling()?;
-    let under_pressure = matches!(
-        host.pressure,
-        Some(PressureLevel::Warn | PressureLevel::Critical)
-    );
-    // On a discrete GPU the model goes into the device's own memory, so
-    // what is free there decides; otherwise it is the host's memory.
-    let available_now = ceiling
-        .as_ref()
-        .and_then(|c| c.free_bytes)
-        .unwrap_or(host.available_bytes);
+    let (host, ceiling, under_pressure, available_now) = room()?;
     let fits_now = !under_pressure && total_bytes <= available_now;
     // Beyond the trained context a model is not expected to work, so the
     // largest useful context is capped there even when memory allows more.
@@ -775,6 +497,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         kv_bytes,
         total_bytes,
         compute_bytes,
+        draft_bytes,
         excludes: if compute_bytes.is_some() {
             None
         } else {
@@ -865,7 +588,9 @@ fn render(r: &Report) -> String {
         r.cache_type_k,
         r.cache_type_v,
         r.compute_bytes
-            .map_or_else(String::new, |c| format!(" + compute {}", bytes(c))),
+            .map_or_else(String::new, |c| format!(" + compute {}", bytes(c)))
+            + &r.draft_bytes
+                .map_or_else(String::new, |d| format!(" + draft {}", bytes(d))),
         bytes(r.total_bytes),
         r.excludes
             .map_or_else(String::new, |e| format!(" (excludes {e})"))
@@ -1029,48 +754,6 @@ pub(crate) fn start_check(
 }
 
 #[cfg(test)]
-mod args_tests {
-    use super::*;
-
-    #[test]
-    fn cache_types_come_from_a_llama_server_command_line() {
-        let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            cache_types_from_args(&args(&[
-                "/x/llama-server",
-                "-c",
-                "8",
-                "--cache-type-k",
-                "q8_0",
-                "-ctv=q4_0"
-            ])),
-            Some((CacheType::Q8_0, CacheType::Q4_0))
-        );
-        assert_eq!(cache_types_from_args(&args(&["llama-server"])), None);
-        assert_eq!(
-            cache_types_from_args(&args(&[
-                "llama-server",
-                "-ctk",
-                "f16",
-                "-ctv",
-                "f16",
-                "-ctk",
-                "q8_0",
-                "--cache_type_v",
-                "q8_0"
-            ])),
-            Some((CacheType::Q8_0, CacheType::Q8_0)),
-            "the last flag wins"
-        );
-        assert_eq!(cache_types_from_args(&args(&["ollama", "serve"])), None);
-        assert_eq!(
-            cache_types_from_args(&args(&["llama-server", "-ctk", "nonsense"])),
-            None
-        );
-    }
-}
-
-#[cfg(test)]
 mod alternative_tests {
     use super::*;
 
@@ -1160,158 +843,5 @@ mod port_tests {
         ]);
         let e = from_server(port, None).unwrap_err();
         assert!(e.contains("a:1, b:2"), "{e}");
-    }
-
-    #[test]
-    fn the_model_a_server_was_started_with() {
-        let line = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
-        assert_eq!(
-            model_arg(&line("python -m mlx_lm.server --model org/m --port 8081")).as_deref(),
-            Some("org/m")
-        );
-        assert_eq!(
-            model_arg(&line("vllm serve --model=/m")).as_deref(),
-            Some("/m")
-        );
-        assert_eq!(model_arg(&line("python -m mlx_lm.server --model")), None);
-        assert_eq!(model_arg(&line("mlx_lm.server --model --port 8081")), None);
-        assert_eq!(
-            projector_arg(&line("llama-server -m m.gguf --mmproj a.gguf -mm b.gguf")),
-            Some(PathBuf::from("b.gguf"))
-        );
-        assert_eq!(
-            projector_arg(&line("llama-server --mmproj=p.gguf")),
-            Some(PathBuf::from("p.gguf"))
-        );
-        assert_eq!(projector_arg(&line("llama-server -m m.gguf")), None);
-        for cpu in [
-            "--no-mmproj-offload",
-            "-mmdev none",
-            "--mmproj-device=none",
-            "--no-mmproj",
-        ] {
-            assert_eq!(
-                projector_arg(&line(&format!("llama-server --mmproj p.gguf {cpu}"))),
-                None,
-                "{cpu}"
-            );
-        }
-        assert_eq!(model_arg(&line("python -m mlx_lm.server")), None);
-    }
-
-    #[test]
-    fn safetensors_weights_follow_the_index() {
-        let dir = std::env::temp_dir().join(format!("hearth-st-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for f in [
-            "a.safetensors",
-            "b.safetensors",
-            "consolidated.safetensors",
-            "adapters.safetensors",
-        ] {
-            std::fs::write(dir.join(f), "").unwrap();
-        }
-        let names = |v: Vec<PathBuf>| {
-            let mut n: Vec<String> = v
-                .iter()
-                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-                .collect();
-            n.sort();
-            n.dedup();
-            n
-        };
-        assert_eq!(
-            names(safetensors_weights(&dir).unwrap()),
-            ["a.safetensors", "b.safetensors", "consolidated.safetensors"]
-        );
-        let index = dir.join("model.safetensors.index.json");
-        std::fs::write(
-            &index,
-            r#"{"weight_map":{"x":"a.safetensors","y":"b.safetensors","z":"a.safetensors"}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            names(safetensors_weights(&dir).unwrap()),
-            ["a.safetensors", "b.safetensors"]
-        );
-        std::fs::write(&index, r#"{"weight_map":{"x":"../a.safetensors"}}"#).unwrap();
-        assert!(safetensors_weights(&dir).is_err());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn mlx_caches_in_the_model_dtype() {
-        let dir = std::env::temp_dir().join(format!("hearth-dtype-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(dtype_cache_type(&dir), None);
-        std::fs::write(
-            dir.join("config.json"),
-            r#"{"text_config":{"dtype":"bfloat16"},"torch_dtype":"float32"}"#,
-        )
-        .unwrap();
-        assert_eq!(dtype_cache_type(&dir), Some(CacheType::Bf16));
-        std::fs::write(dir.join("config.json"), r#"{"torch_dtype":"float16"}"#).unwrap();
-        assert_eq!(dtype_cache_type(&dir), Some(CacheType::F16));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn compute_buffers_are_learned_from_a_ready_event_at_the_same_context() {
-        let dir = std::env::temp_dir().join(format!("hearth-compute-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let journal = hearth_core::state::Journal::at(dir.clone(), 10).unwrap();
-        let ready = |n_ctx: u64, compute: u64| {
-            serde_json::json!({"event": {"event": "ready", "compute_bytes": compute,
-                "identity": {"kind": "llama_cpp", "model": "/m/q.gguf", "n_ctx": n_ctx, "slots": 2}},
-                "footprint_at_ready": {"footprint_bytes": 1_073_741_824_u64}})
-        };
-        let model = Path::new("/m/q.gguf");
-        assert_eq!(measured_compute_in(&journal, model, 8192), (None, None));
-        journal.record(crate::run::KIND, &ready(4096, 300)).unwrap();
-        // A start that logged no compute buffers measured nothing.
-        journal.record(crate::run::KIND, &ready(4096, 0)).unwrap();
-        journal.record(crate::run::KIND, &ready(1024, 100)).unwrap();
-        // 4096 per slot × 2 slots.
-        let (compute, note) = measured_compute_in(&journal, model, 8192);
-        assert_eq!(compute, Some(300));
-        assert!(note.unwrap().contains("footprint was 1.00 GiB"));
-        let (learned, note) = measured_compute_in(&journal, model, 4096);
-        assert_eq!(learned, None);
-        assert!(note.unwrap().contains("2048 tokens"));
-        assert_eq!(
-            measured_compute_in(&journal, Path::new("/other.gguf"), 8192),
-            (None, None)
-        );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn the_projector_hf_loads_is_the_one_beside_the_model() {
-        let dir = std::env::temp_dir().join(format!("hearth-hfproj-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let model = dir.join("m-Q6_K.gguf");
-        std::fs::write(&model, "").unwrap();
-        let words = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
-        let hf = words("llama-server -hf org/repo -c 4096");
-        assert_eq!(hf_projector_of(&hf, &model), Ok(None));
-        std::fs::write(dir.join("mmproj-BF16.gguf"), "").unwrap();
-        assert_eq!(
-            hf_projector_of(&hf, &model),
-            Ok(Some(dir.join("mmproj-BF16.gguf")))
-        );
-        assert_eq!(
-            hf_projector_of(&words("llama-server -hf org/repo --no-mmproj"), &model),
-            Ok(None)
-        );
-        assert_eq!(
-            hf_projector_of(&words("llama-server -m m-Q6_K.gguf"), &model),
-            Ok(None)
-        );
-        std::fs::write(dir.join("mmproj-F16.gguf"), "").unwrap();
-        assert!(hf_projector_of(&hf, &model).is_err());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

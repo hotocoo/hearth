@@ -212,3 +212,12 @@ Only the compute lines are read, and only a start that logged a non-zero amount 
 
 Each `ready` event that `hearth run` and hearthd record now carries `footprint_at_ready`: the footprint, resident and peak memory of the server's listening process once it serves. On macOS this is `phys_footprint`, and on Linux it is `Pss`. `fit` reports it in the same note as the learned compute buffers, but does not use it in its verdict. Whether a memory-mapped model's weights count in that number is exactly what the P0 gate (ADR-000) measures, so until the gate runs this is recorded evidence, not an input.
 
+## Addendum (2026-10-15): projectors and draft models
+
+A llama-server can hold more than its model on the accelerator.
+
+- **Multimodal projector.** `fit` counts the projector's weights. It is `--mmproj` as given, else the server's own `--mmproj`/`-mm`, else the projector `-hf` downloads beside the model (when that folder holds exactly one). A projector kept on the CPU (`--no-mmproj-offload`, `--mmproj-device none`) or not loaded (`--no-mmproj`) is not counted. Only its weights are counted, not the compute it uses to encode images.
+- **Draft model.** For speculative decoding, `fit` counts the draft's weights and its own KV cache. That is `--draft` with `--draft-ctx` and `--draft-cache-type`, or the server's `-md`, `-cd` and `-ctkd`/`-ctvd`. Its context defaults to the main one, and its cache type defaults to f16, as in llama.cpp.
+- **What reads these.** The `ports` oversized check passes both on. On the development machine, the user's `-hf` server loads an 888 MiB projector, which lowers its largest context from 223,620 to 217,037 tokens.
+- **Code layout.** The command-line readers live in `server_args.rs`, model files in `model_files.rs`, and journal measurements in `measured.rs`, so `fit.rs` stays one concern.
+

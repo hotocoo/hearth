@@ -228,7 +228,7 @@ fn fit_check(
         .iter()
         .map(|w| w.to_string_lossy().into_owned())
         .collect();
-    let projector = crate::fit::projector_arg(&words).filter(|p| p.is_file());
+    let projector = crate::server_args::projector_arg(&words).filter(|p| p.is_file());
     args.model
         .clone()
         .zip(args.ctx)

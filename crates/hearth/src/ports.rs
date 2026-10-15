@@ -564,7 +564,7 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
             };
             let ctx = n_ctx.saturating_mul(slots.unwrap_or(1).max(1));
             let argv = hearth_sense::process_args(p.pid).ok()?;
-            let (k, v) = crate::fit::cache_types_from_args(&argv)?;
+            let (k, v) = crate::server_args::cache_types_from_args(&argv)?;
             let mut line: Vec<String> = [
                 "hearth",
                 "--json",
@@ -582,8 +582,14 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
             // Its projector is on the accelerator beside the model.
             // One not readable from here (relative to the server's own
             // directory) cannot be counted.
-            if let Some(projector) = crate::fit::served_projector(&argv, std::path::Path::new(model)) {
+            if let Some(projector) = crate::server_args::served_projector(&argv, std::path::Path::new(model)) {
                 line.push(format!("--mmproj={}", projector.display()));
+            }
+            // So is a draft model, with its own context and cache.
+            if let Some(d) = crate::draft::from_args(&argv).filter(|d| d.model.is_file()) {
+                line.push(format!("--draft={}", d.model.display()));
+                line.extend(d.ctx.map(|c| format!("--draft-ctx={c}")));
+                line.extend(d.cache.map(|(k, _)| format!("--draft-cache-type={}", k.name())));
             }
             line.extend(["--".to_string(), model.clone()]);
             let r: Value = serde_json::from_str(&crate::dispatch(&line).ok()?).ok()?;

@@ -127,9 +127,9 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
         path: None,
         canonical: None,
     };
-    let found = source
-        .locate(&model.name)
-        .and_then(|path| crate::fit::weights_and_geometry(&path).map(|(_, w, g)| (path, w, g)));
+    let found = source.locate(&model.name).and_then(|path| {
+        crate::model_files::weights_and_geometry(&path).map(|(_, w, g)| (path, w, g))
+    });
     let (path, weights, geometry) = match found {
         Ok(f) => f,
         Err(e) => {
@@ -137,7 +137,7 @@ fn survey(source: Source, name: String, cache: Option<CacheType>, ceiling: Optio
             return model;
         }
     };
-    let cache = cache.or_else(|| crate::fit::dtype_cache_type(&path));
+    let cache = cache.or_else(|| crate::model_files::dtype_cache_type(&path));
     // A path that cannot be resolved matches no server: it is not served.
     model.canonical = std::fs::canonicalize(&path).ok();
     model.path = Some(path);

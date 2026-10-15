@@ -83,6 +83,19 @@
         "mmproj": {
           "type": "string",
           "description": "A multimodal projector file loaded beside the model (llama.cpp --mmproj), counted with the weights. With port, the server's own --mmproj is read."
+        },
+        "draft": {
+          "type": "string",
+          "description": "A speculative-decoding draft model (llama.cpp -md), counted with its own KV cache. With port, the server's own -md, -cd and -ctkd are read."
+        },
+        "draft_ctx": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The draft's context (llama.cpp -cd), when not ctx."
+        },
+        "draft_cache_type": {
+          "type": "string",
+          "description": "The draft's KV cache type (llama.cpp -ctkd), when not f16."
         }
       }
     },

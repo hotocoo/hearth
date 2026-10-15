@@ -338,7 +338,7 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
         }
     });
     // The projector the command loads counts too, where it can be found.
-    let projector = crate::fit::projector_arg(&command)
+    let projector = crate::server_args::projector_arg(&command)
         .map(|p| match &server.dir {
             Some(d) if p.is_relative() => d.join(p),
             _ => p,
