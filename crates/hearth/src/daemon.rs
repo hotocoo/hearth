@@ -737,6 +737,9 @@ pub fn run() -> Result<(), String> {
     if let Some(addr) = crate::gateway::start(&config.gateway, &servers)? {
         log(&format!("hearthd: gateway on http://{addr}/s/NAME/"));
     }
+    if let Some(addr) = crate::dashboard::start(&config.dashboard)? {
+        log(&format!("hearthd: dashboard on http://{addr}/"));
+    }
     log(&format!(
         "hearthd: keeping {} server(s); control socket {}",
         count,

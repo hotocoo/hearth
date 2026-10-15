@@ -281,35 +281,15 @@ pub fn serve(
     config: &hearth_core::config::Control,
     servers: &std::sync::Arc<dyn Fn() -> Vec<Value> + Send + Sync>,
 ) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    let busy = std::sync::Arc::new(AtomicU64::new(0));
-    for stream in listener.incoming() {
-        let stream = match stream {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = writeln!(std::io::stdout(), "metrics: {e}");
-                std::thread::sleep(Duration::from_millis(config.timeout_ms));
-                continue;
-            }
-        };
-        if busy.fetch_add(1, Ordering::SeqCst) >= config.max_clients {
-            busy.fetch_sub(1, Ordering::SeqCst);
-            continue;
-        }
-        let (config, servers, done) = (config.clone(), servers.clone(), busy.clone());
-        let spawned = std::thread::Builder::new()
-            .name("metrics scrape".into())
-            .spawn(move || {
-                if let Err(e) = answer(stream, &config, &*servers) {
-                    let _ = writeln!(std::io::stdout(), "metrics: {e}");
-                }
-                done.fetch_sub(1, Ordering::SeqCst);
-            });
-        if let Err(e) = spawned {
-            busy.fetch_sub(1, Ordering::SeqCst);
-            let _ = writeln!(std::io::stdout(), "metrics: no thread for a scrape: {e}");
-        }
-    }
+    let (control, servers) = (config.clone(), servers.clone());
+    crate::listen::serve(
+        "metrics",
+        listener,
+        config.max_clients,
+        Duration::from_millis(config.timeout_ms),
+        &(std::sync::Arc::new(move |stream| answer(stream, &control, &*servers)) as _),
+        drop,
+    );
 }
 
 #[cfg(test)]

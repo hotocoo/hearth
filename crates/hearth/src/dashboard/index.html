@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>hearth</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#servers">Skip to servers</a>
+
+<header class="bar" id="bar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="word">hearth</span>
+  </div>
+  <p class="link" id="link" role="status" aria-live="polite">
+    <span class="pulse" aria-hidden="true"></span><span id="link-text">connecting</span>
+  </p>
+  <button class="ghost" type="button" id="help-open" aria-haspopup="dialog" aria-controls="help">
+    <kbd>?</kbd><span class="hide-narrow">Shortcuts</span>
+  </button>
+</header>
+
+<main id="main">
+  <section class="machine reveal" aria-labelledby="machine-h">
+    <h2 id="machine-h" class="visually-hidden">Machine</h2>
+    <div class="memory">
+      <p class="label split"><span>Memory available</span><span id="mem-used"></span></p>
+      <p class="figure"><span id="mem-avail">-</span><span class="of" id="mem-total"></span></p>
+      <div class="meter" id="mem-meter" role="meter" aria-label="Memory in use" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <span class="fill" id="mem-fill"></span>
+      </div>
+      <dl class="facts">
+        <div><dt>Pressure</dt><dd><span class="badge" id="pressure">-</span></dd></div>
+        <div><dt>Swap</dt><dd id="swap">-</dd></div>
+        <div><dt>Device</dt><dd id="device">-</dd></div>
+      </dl>
+    </div>
+    <div class="limits">
+      <div class="limit">
+        <p class="label">Open files</p>
+        <p class="small-figure" id="files">-</p>
+        <div class="meter thin" id="files-meter"><span class="fill" id="files-fill"></span></div>
+      </div>
+      <div class="limit">
+        <p class="label">Threads</p>
+        <p class="small-figure" id="threads">-</p>
+        <div class="meter thin" id="threads-meter"><span class="fill" id="threads-fill"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="servers reveal" id="servers" aria-labelledby="servers-h" tabindex="-1">
+    <div class="section-head">
+      <h2 id="servers-h">Servers</h2>
+      <p class="hint hide-narrow"><kbd>↑</kbd><kbd>↓</kbd> select · <kbd>r</kbd> restart · <kbd>s</kbd> stop · <kbd>S</kbd> start · <kbd>l</kbd> output</p>
+    </div>
+    <ol class="server-list" id="server-list" aria-label="Servers hearthd keeps"></ol>
+    <div class="empty" id="servers-empty" hidden>
+      <p class="empty-title">No servers yet</p>
+      <p>Add <code>[servers.NAME]</code> with a <code>port</code> and <code>command</code> to your hearth config, then run <code>hearth reload</code>. hearthd still watches the machine meanwhile.</p>
+    </div>
+    <p class="problem" id="servers-error" hidden></p>
+  </section>
+
+  <div class="lower">
+    <section class="findings reveal" aria-labelledby="findings-h">
+      <div class="section-head"><h2 id="findings-h">Findings</h2><span class="count" id="findings-count"></span></div>
+      <ul class="finding-list" id="finding-list"></ul>
+      <p class="quiet" id="findings-none" hidden>Nothing needs attention.</p>
+    </section>
+
+    <section class="journal reveal" aria-labelledby="journal-h">
+      <div class="section-head"><h2 id="journal-h">Journal</h2><span class="count" id="journal-count"></span></div>
+      <ol class="timeline" id="timeline"></ol>
+      <p class="problem" id="journal-error" hidden></p>
+    </section>
+  </div>
+</main>
+
+<aside class="drawer" id="drawer" aria-labelledby="drawer-h" aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <p class="label">Output</p>
+      <h2 id="drawer-h">-</h2>
+    </div>
+    <button class="ghost" type="button" id="drawer-close" aria-label="Close output">Close <kbd class="hide-narrow">Esc</kbd></button>
+  </div>
+  <pre class="log" id="log" tabindex="0" aria-label="Last lines the server printed"></pre>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<dialog class="help" id="help" aria-labelledby="help-h">
+  <h2 id="help-h">Shortcuts</h2>
+  <dl class="keys">
+    <div><dt><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>k</kbd> <kbd>j</kbd></dt><dd>Select a server</dd></div>
+    <div><dt><kbd>r</kbd></dt><dd>Restart it</dd></div>
+    <div><dt><kbd>s</kbd> twice</dt><dd>Stop it: frees its memory until started</dd></div>
+    <div><dt><kbd>S</kbd></dt><dd>Start it</dd></div>
+    <div><dt><kbd>l</kbd></dt><dd>Show or hide its output</dd></div>
+    <div><dt><kbd>Esc</kbd></dt><dd>Close this, or the output</dd></div>
+  </dl>
+  <form method="dialog"><button class="solid" type="submit">Done</button></form>
+</dialog>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

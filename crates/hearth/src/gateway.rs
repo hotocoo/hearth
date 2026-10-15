@@ -15,7 +15,6 @@ use std::fmt::Write as _;
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use hearth_core::config::Gateway;
@@ -287,19 +286,17 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
 /// Forwards on `listener` until hearthd ends: a thread per request, up to
 /// `max_clients`; one beyond that is told the gateway is busy.
 fn serve(listener: &TcpListener, config: &Gateway, servers: &Servers) {
-    let busy = Arc::new(AtomicU64::new(0));
-    for stream in listener.incoming() {
-        let mut stream = match stream {
-            Ok(s) => s,
-            Err(e) => {
-                println!("gateway: {e}");
-                std::thread::sleep(Duration::from_millis(config.connect_timeout_ms));
-                continue;
-            }
-        };
-        if busy.fetch_add(1, Ordering::SeqCst) >= config.max_clients {
-            busy.fetch_sub(1, Ordering::SeqCst);
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(config.head_timeout_ms)));
+    let (handler_config, servers) = (config.clone(), servers.clone());
+    let busy_config = config.clone();
+    crate::listen::serve(
+        "gateway",
+        listener,
+        config.max_clients,
+        Duration::from_millis(config.connect_timeout_ms),
+        &(Arc::new(move |stream| handle(stream, &handler_config, &servers)) as _),
+        move |mut stream| {
+            let _ =
+                stream.set_write_timeout(Some(Duration::from_millis(busy_config.head_timeout_ms)));
             let _ = reply(
                 &mut stream,
                 &refuse(
@@ -307,27 +304,13 @@ fn serve(listener: &TcpListener, config: &Gateway, servers: &Servers) {
                     "busy",
                     format!(
                         "{} requests are already being forwarded",
-                        config.max_clients
+                        busy_config.max_clients
                     ),
                     "retry shortly, or raise gateway.max_clients".into(),
                 ),
             );
-            continue;
-        }
-        let (config, servers, done) = (config.clone(), servers.clone(), busy.clone());
-        let spawned = std::thread::Builder::new()
-            .name("gateway".into())
-            .spawn(move || {
-                if let Err(e) = handle(stream, &config, &servers) {
-                    println!("gateway: {e}");
-                }
-                done.fetch_sub(1, Ordering::SeqCst);
-            });
-        if let Err(e) = spawned {
-            busy.fetch_sub(1, Ordering::SeqCst);
-            println!("gateway: no thread for a request: {e}");
-        }
-    }
+        },
+    );
 }
 
 /// Starts the gateway when `gateway.listen` is set; the address it serves.

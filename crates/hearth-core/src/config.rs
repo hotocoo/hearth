@@ -24,6 +24,7 @@ pub struct Config {
     pub control: Control,
     pub metrics: Metrics,
     pub gateway: Gateway,
+    pub dashboard: Dashboard,
     pub pressure: Pressure,
     pub accelerators: Accelerators,
     pub bundle: Bundle,
@@ -63,6 +64,43 @@ pub struct Gateway {
     pub connect_timeout_ms: u64,
     pub idle_timeout_ms: u64,
     pub max_clients: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dashboard {
+    pub listen: Option<std::net::SocketAddr>,
+    pub refresh_ms: u64,
+    pub journal: u64,
+    pub max_head_bytes: u64,
+    pub timeout_ms: u64,
+    pub max_clients: u64,
+}
+
+impl Dashboard {
+    fn check(&self) -> Result<(), ConfigError> {
+        for (key, value) in [
+            ("dashboard.refresh_ms", self.refresh_ms),
+            ("dashboard.journal", self.journal),
+            ("dashboard.max_head_bytes", self.max_head_bytes),
+            ("dashboard.timeout_ms", self.timeout_ms),
+            ("dashboard.max_clients", self.max_clients),
+        ] {
+            if value == 0 {
+                return invalid(key, &0, AT_LEAST_ONE);
+            }
+        }
+        match self.listen {
+            // The page restarts and stops servers and has no login, so only
+            // this machine may reach it.
+            Some(addr) if !addr.ip().is_loopback() => invalid(
+                "dashboard.listen",
+                &addr,
+                "must be a loopback address (127.0.0.1 or ::1): the dashboard has no login",
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl Gateway {
@@ -298,6 +336,7 @@ impl Config {
     /// Counts and durations for which zero means nothing.
     fn positive(&self) -> Result<(), ConfigError> {
         self.gateway.positive()?;
+        self.dashboard.check()?;
         let (d, v, w) = (&self.discovery, &self.supervise, &self.watch);
         let gone = "must be at least 1, or a snapshot would be deleted as it is written";
         for (key, value, reason) in [

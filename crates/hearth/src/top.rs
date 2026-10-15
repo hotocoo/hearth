@@ -37,6 +37,11 @@ pub struct Args {
 /// What one refresh read. A part that could not be read holds
 /// `{"error": ...}`, so the rest still shows.
 fn frame(args: &Args) -> Value {
+    frame_of(args.journal)
+}
+
+/// The frame with the newest `journal` entries; the dashboard reads it too.
+pub(crate) fn frame_of(journal: u64) -> Value {
     let or_error = |r: Result<Value, String>| r.unwrap_or_else(|e| json!({ "error": e }));
     let journal = crate::dispatch(&[
         "hearth".into(),
@@ -44,7 +49,7 @@ fn frame(args: &Args) -> Value {
         "log".into(),
         "--all".into(),
         "--limit".into(),
-        args.journal.to_string(),
+        journal.to_string(),
     ])
     .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|e| e.to_string()))
     .map(|log| log["snapshots"].clone());

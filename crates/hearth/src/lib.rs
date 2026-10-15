@@ -12,6 +12,8 @@ mod config_cmd;
 mod control;
 #[cfg(unix)]
 pub mod daemon;
+#[cfg(unix)]
+mod dashboard;
 mod doctor;
 mod draft;
 mod fit;
@@ -19,6 +21,8 @@ mod fit;
 mod gateway;
 mod history;
 mod incidents;
+#[cfg(unix)]
+mod listen;
 mod mcp;
 mod measured;
 #[cfg(unix)]

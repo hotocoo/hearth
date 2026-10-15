@@ -68,16 +68,18 @@ const CONTROL_TIMEOUT_MS: u64 = 1000;
 const DOCTOR_INTERVAL_MS: u64 = 200;
 const PORTS_INTERVAL_MS: u64 = 1000;
 
-/// `metrics` is where hearthd serves `/metrics`, `gateway` its gateway.
+/// `metrics` is where hearthd serves `/metrics`, `gateway` its gateway; the
+/// dashboard listens one port above the gateway's.
 fn config(dir: &Path, port: u16, metrics: u16, gateway: u16) {
     let script = dir.join("server.py");
     std::fs::write(&script, SERVER).unwrap();
     std::fs::write(
         dir.join("hearth.toml"),
         format!(
-            "[control]\ntimeout_ms = {CONTROL_TIMEOUT_MS}\nmax_message_bytes = {MAX_MESSAGE_BYTES}\n[watch]\ndoctor_interval_ms = {DOCTOR_INTERVAL_MS}\nports_interval_ms = {PORTS_INTERVAL_MS}\n[metrics]\nlisten = \"127.0.0.1:{metrics}\"\n[gateway]\nlisten = \"127.0.0.1:{gateway}\"\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
+            "[control]\ntimeout_ms = {CONTROL_TIMEOUT_MS}\nmax_message_bytes = {MAX_MESSAGE_BYTES}\n[watch]\ndoctor_interval_ms = {DOCTOR_INTERVAL_MS}\nports_interval_ms = {PORTS_INTERVAL_MS}\n[metrics]\nlisten = \"127.0.0.1:{metrics}\"\n[gateway]\nlisten = \"127.0.0.1:{gateway}\"\n[dashboard]\nlisten = \"127.0.0.1:{dashboard}\"\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
             script.display(),
-            dir.display()
+            dir.display(),
+            dashboard = dashboard_port(gateway),
         ),
     )
     .unwrap();
@@ -138,6 +140,73 @@ fn gauge(port: u16, server: &str, state: &str) -> bool {
     reply.contains(&format!(
         "hearth_server_state{{server=\"{server}\",state=\"{state}\"}} 1"
     ))
+}
+
+/// Where the test's dashboard listens: beside the gateway, so `config` need
+/// not grow another argument. Bound by hearthd, so a clash fails loudly.
+fn dashboard_port(gateway: u16) -> u16 {
+    gateway.checked_add(1).unwrap_or(gateway - 1)
+}
+
+/// One raw request with these extra header lines; the whole reply.
+fn raw(port: u16, method: &str, path: &str, host: &str, extra: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\n{extra}Content-Length: 0\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    s.read_to_string(&mut reply).unwrap();
+    reply
+}
+
+/// The dashboard serves its page under a CSP, reports the servers, and
+/// acts only for a request from its own page.
+fn check_dashboard(dir: &Path, port: u16) {
+    let host = format!("127.0.0.1:{port}");
+    let page = raw(port, "GET", "/", &host, "");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(
+        page.contains("Content-Security-Policy: default-src 'none'"),
+        "{page}"
+    );
+    let frame = raw(port, "GET", "/api/frame", &host, "");
+    let body: Value = serde_json::from_str(frame.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["servers"][0]["name"], "e2e", "{body}");
+    assert!(body["machine"]["health"].is_object(), "{body}");
+    let rebound = raw(
+        port,
+        "GET",
+        "/api/frame",
+        &format!("evil.example:{port}"),
+        "",
+    );
+    assert!(rebound.starts_with("HTTP/1.1 403"), "{rebound}");
+    let restart = "/api/servers/e2e/restart";
+    let unmarked = raw(port, "POST", restart, &host, "");
+    assert!(unmarked.starts_with("HTTP/1.1 403"), "{unmarked}");
+    let cross = raw(
+        port,
+        "POST",
+        restart,
+        &host,
+        "X-Hearth: 1\r\nOrigin: https://evil.example\r\n",
+    );
+    assert!(cross.starts_with("HTTP/1.1 403"), "{cross}");
+    let (_, before) = state(dir).unwrap();
+    let own = raw(
+        port,
+        "POST",
+        restart,
+        &host,
+        &format!("X-Hearth: 1\r\nOrigin: http://{host}\r\n"),
+    );
+    assert!(own.starts_with("HTTP/1.1 200"), "{own}");
+    wait_until("a restart from the dashboard", || {
+        state(dir).is_some_and(|(s, pid)| s == "ready" && pid != before)
+    });
 }
 
 /// One request through hearthd's gateway, as raw HTTP.
@@ -384,6 +453,7 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     // comes back.
     // Metrics say the same as status, at every step.
     check_gateway(&dir, gateway);
+    check_dashboard(&dir, dashboard_port(gateway));
     assert!(gauge(metrics, "e2e", "ready"), "metrics while ready");
     check_stopped(&dir, port, metrics, gateway);
     hearth(&dir, &["start", "e2e"]).unwrap();

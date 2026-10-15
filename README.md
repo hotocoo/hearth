@@ -103,6 +103,7 @@ cargo build --release -p hearth
 ./target/release/hearth --json top          # the same frame as one document, for scripts and agents
 ./target/release/hearth service install     # run hearthd at login: launchd on macOS, systemd user unit on Linux
 #   [metrics] listen = "127.0.0.1:9469" in your config: hearthd serves Prometheus metrics at /metrics
+#   [dashboard] listen = "127.0.0.1:9471": open it in a browser; servers, memory, findings, journal, with restart/stop/start
 #   [gateway] listen = "127.0.0.1:9470": clients use http://127.0.0.1:9470/s/NAME/v1 as their base URL;
 #   a stopped or unknown server gets a JSON error with a remediation, and a client that leaves cancels its request
 ```

@@ -216,6 +216,32 @@ idle_timeout_ms = 600000
 # Requests forwarded at once; one beyond this is told the gateway is busy.
 max_clients = 64
 
+[dashboard]
+# Where hearthd serves its dashboard: a web page with the servers it keeps,
+# the machine's memory and findings, and the journal, with buttons to
+# restart, stop and start servers and read their output. Unset means off.
+# Loopback only: the page acts on servers and has no login, so any other
+# address is refused. Open http://LISTEN/ in a browser on this machine.
+# listen = "127.0.0.1:9471"
+
+# How often an open dashboard asks for a fresh view. A hidden tab asks
+# less often.
+refresh_ms = 2000
+
+# Journal entries the dashboard shows, newest first.
+journal = 30
+
+# Most bytes of one request's line and headers. The page sends small
+# requests with no body; anything longer is cut off and refused.
+max_head_bytes = 16384
+
+# How long one request to the dashboard may take, from connecting to the
+# last byte of the answer.
+timeout_ms = 5000
+
+# Requests answered at once; one beyond this is closed.
+max_clients = 16
+
 # Servers hearthd starts and keeps alive, one table each, named
 # [servers.NAME] in your own file: port (where it listens), command (the
 # program and its arguments, as a list), and optionally host (the address to

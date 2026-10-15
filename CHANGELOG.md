@@ -4,6 +4,14 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 17:30 dashboard
+
+- **A web dashboard.** Set `[dashboard] listen = "127.0.0.1:9471"` and open it in a browser. It shows the servers hearthd keeps, the machine's memory, pressure, swap and limits, findings, and the journal, and refreshes on its own.
+- **Act from the page.** Restart, stop (asks once more) and start a server, and read its output in a drawer. The keys match `hearth top`, and `?` lists them.
+- **Every screen.** Desktop, tablet and phone layouts, light and dark, keyboard focus everywhere, and no motion when the system asks for reduced motion.
+- **Safe on loopback.** It refuses a non-loopback address, a foreign `Host` or `Origin`, and actions without the page's own header. It loads nothing from the network.
+- **Shared plumbing.** `/metrics`, the gateway and the dashboard share one accept loop.
+
 ### 2026-10-15 16:30 gateway
 
 - **One address for hearthd's servers.** Set `[gateway] listen` and point a client's base URL at `http://LISTEN/s/NAME/v1`: requests reach server NAME unchanged, streaming included.
