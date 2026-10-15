@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:38 draft models
+
+- `fit --draft FILE` counts a speculative-decoding draft model's weights and its own KV cache. `fit --port` and the `ports` oversized check read the server's `-md`, `-cd` and `-ctkd`.
+
 ### 2026-10-15 08:32 -hf projectors
 
 - **`-hf` projectors.** `fit --port` and the `ports` oversized check count the multimodal projector that `llama-server -hf` downloads beside the model and loads.
