@@ -395,6 +395,7 @@ fn supervise(
     output: hearth_runtime::supervise::Output,
 ) {
     let _watchman = Watchman { board, name };
+    let mut gate = loads::Gate::new(name, config.supervise.serialize_loads);
     let mut supervised = supervised(server, config).sharing_output(output);
     let mut halted = false;
     let journal = Journal::open(&config.state)
@@ -414,12 +415,12 @@ fn supervise(
             Ok(Order::Restart) => {
                 halted = false;
                 events.push(supervised.restart());
-                events.extend(supervised.poll());
+                events.extend(gate.poll(&mut supervised));
             }
             Ok(Order::Start) if halted || supervised.gave_up() => {
                 halted = false;
                 events.push(supervised.restart());
-                events.extend(supervised.poll());
+                events.extend(gate.poll(&mut supervised));
             }
             Ok(Order::Stop) if !halted => {
                 halted = true;
@@ -427,7 +428,7 @@ fn supervise(
             }
             // Starting what runs, or stopping what is stopped: nothing to do.
             Ok(Order::Start | Order::Stop) => {}
-            Err(()) => events.extend(supervised.poll()),
+            Err(()) => events.extend(gate.poll(&mut supervised)),
         }
         for event in events {
             use hearth_runtime::supervise::Event as E;
@@ -478,6 +479,7 @@ fn supervise(
         // After the events, so status never shows a state whose details
         // (the server's pid, the last event) are not there yet.
         let (state, pid) = supervised.status();
+        gate.settle(state);
         let state = if halted { "stopped" } else { state };
         let restarts = supervised.restarts();
         update(board, name, |s| {
@@ -766,6 +768,8 @@ pub fn run() -> Result<(), String> {
     }
     Ok(())
 }
+
+mod loads;
 
 #[cfg(test)]
 mod tests;

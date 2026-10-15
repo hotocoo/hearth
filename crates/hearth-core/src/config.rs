@@ -200,6 +200,7 @@ pub struct Supervise {
     pub unresponsive_probes: u32,
     pub output_lines: usize,
     pub output_line_bytes: usize,
+    pub serialize_loads: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

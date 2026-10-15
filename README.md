@@ -139,7 +139,7 @@ INTERVAL_MS=100 CTX=8192 BASELINE_S=60 SETTLE_S=20 RECLAIM_S=30 FILL_TOKENS=4096
 
 All of this is design, not shipped code. The design is in the ADRs as each phase lands.
 
-- **Admission from measurement.** Blocked on the P0 gate (ADR-000), which has not run yet; until it does, `hearth fit`'s "fits right now" is marked provisional.
+- **Admission from measurement.** Blocked on the P0 gate (ADR-000), which has not run yet; until it does, `hearth fit`'s "fits right now" is marked provisional. Its fallback ships: hearthd starts one server at a time, and refuses a model that can never fit the device.
   - Each memory pool gets a budget from the device ceiling, the measured resident footprints and a measured reserve.
   - Load cost comes from GGUF geometry and is corrected by the footprint learned per model.
   - If measurement fails, hearth serializes. It never fails open.
@@ -147,8 +147,8 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - A classifier sorts failures as transient, capacity, poisoned, wedged or model-missing. It uses latency signatures, stderr and HTTP evidence.
   - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit, wedge or a poisoned backend, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` and `hearthd` (ADR-004, ADR-007). The gateway retries a request before its first byte when hearthd restarts the server under it (ADR-010); a finer request-level classifier is still to come.
   - Runtimes hearth did not start are never killed.
-- **Gateway, beyond forwarding.** Forwarding by name, typed errors, structural cancellation, holding requests through a restart and retry before the first byte, all under one deadline, ship (ADR-010). Still to come:
-  - OpenAI, Anthropic Messages and Ollama APIs, translated as needed.
+- **Gateway, beyond forwarding.** Forwarding by name, typed errors, structural cancellation, holding requests through a restart, retry before the first byte and fair queuing across apps, all under one deadline, ship (ADR-010). OpenAI and Anthropic clients need no translation in front of llama.cpp, which answers both APIs itself; this was checked through the gateway. Still to come:
+  - Translation for Ollama-API clients (`/api/chat`, NDJSON streaming) in front of runtimes that do not speak it.
 - **Scheduling, beyond fair queuing.** A per-server limit with round-robin queuing across apps ships (ADR-010). Priority classes, quotas and deadline-aware shedding are still to come.
 - **For people and agents.**
   - MCP `load`, `unload` and `drain` on runtimes hearth owns, next to the `restart` that ships. Runtimes hearth did not start are refused, with the reason.

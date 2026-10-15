@@ -50,6 +50,10 @@ These come from passive sampling of a running llama-server on 2026-10-14:
 - 2026-10-15, idle (nothing loaded by the gate, a 27B llama-server serving a 262k context beside it): 180 samples at 500 ms over 90 s showed host available memory between 3.87 and 6.83 GiB, σ 0.82 GiB, so 3σ is 2.45 GiB. Step-to-step σ was 0.24 GiB. Pressure moved between normal and warn, swap was 19 of 20 GiB, and jetsam had killed a process that morning.
 - What that means for the gate: a load is only visible above that noise if its footprint is well over 2.45 GiB, while only 4 to 7 GiB was available. A small model would fail the gate on noise and record nothing about the signals; a model big enough to clear the noise could push this machine into jetsam. The gate waits for a quieter machine (the 27B server stopped, swap drained) and a model of several GiB, as the decision above says.
 
+## Fallback in place (2026-10-15)
+
+The fallback named above ships for loads: hearthd starts one server at a time (`supervise.serialize_loads`, on by default). A server about to start waits while another it keeps is still loading, so two models never fill memory at the same moment. The start-time fit check (ADR-007) still refuses a model that can never fit the device. Learned per-model footprints are already recorded at each ready event (`footprint_at_ready`). Admitting from measured free memory waits for this gate.
+
 ## Results
 
 Pending.

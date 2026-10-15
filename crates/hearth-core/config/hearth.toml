@@ -125,6 +125,13 @@ output_lines = 200
 # progress bars without newlines would otherwise make one line of anything.
 output_line_bytes = 1024
 
+# hearthd starts one server at a time: a server about to start waits
+# while another it keeps is still loading (not yet ready), so two models
+# never fill memory at the same moment, the commonest way several local
+# models take a machine down. Measured admission (ADR-000) is the way past
+# this once its gate has run.
+serialize_loads = true
+
 [notify]
 # Who hears about a server hearth gave up on, one it found wedged, or one
 # whose backend poisoned itself. Both channels are off by default.
@@ -229,8 +236,10 @@ ready_poll_ms = 200
 retries = 2
 
 # Largest request body kept so it can be sent again. Larger bodies, and
-# chunked ones, stream through once and are never retried.
-retry_body_bytes = 8388608
+# chunked ones, stream through once and are never retried. At most
+# max_clients bodies are held at once, so the worst case is this times
+# max_clients (128 MiB at the defaults); raise it for large base64 images.
+retry_body_bytes = 2097152
 
 # After a 5xx, how long to watch for hearthd restarting the server before
 # passing the 5xx on as the application's own answer.

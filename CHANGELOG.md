@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 20:15 one load at a time
+
+- **Serialized loads.** hearthd starts one server at a time: a server about to start waits while another is still loading, so two models never fill memory together. `supervise.serialize_loads`, on by default. This is ADR-000's fallback until its measurement gate can run.
+- **Smaller retry buffer.** `gateway.retry_body_bytes` defaults to 2 MiB (128 MiB worst case at 64 clients).
+- **Tests.** End-to-end helpers move to `tests/common`; a new test starts two slow servers and checks the second waits for the first.
+
 ### 2026-10-15 19:45 fair queuing
 
 - **Per-server limit.** `gateway.per_server_concurrency` caps the requests a server runs at once through the gateway. It is off by default.
