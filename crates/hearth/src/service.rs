@@ -176,11 +176,12 @@ fn run_tool(program: &str, args: &[&str]) -> Result<(), String> {
 
 fn install(u: &Unit) -> Result<String, String> {
     // The service manager restarts hearthd whenever it exits; one with
-    // nothing to keep would exit and be restarted forever.
+    // nothing to keep and nothing to watch would exit and be restarted
+    // forever.
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
-    if config.servers.is_empty() {
+    if config.servers.is_empty() && !config.watch.in_hearthd {
         return Err(
-            "no servers to keep: add [servers.NAME] to your config before installing the service"
+            "nothing for hearthd to do: add [servers.NAME] to your config or set watch.in_hearthd = true before installing the service"
                 .into(),
         );
     }

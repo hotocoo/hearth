@@ -695,9 +695,9 @@ fn bind() -> Result<(UnixListener, File), String> {
 
 pub fn run() -> Result<(), String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
-    if config.servers.is_empty() {
+    if config.servers.is_empty() && !config.watch.in_hearthd {
         return Err(
-            "no servers to keep: add [servers.NAME] with port and command to your config (hearth config servers)"
+            "nothing to do: no servers to keep and watch.in_hearthd is false; add [servers.NAME] with port and command (hearth config servers) or turn watching on"
                 .into(),
         );
     }

@@ -111,7 +111,7 @@ hearthd has no shutdown handler, and needs none. However hearthd ends, SIGKILL i
 
 The rules:
 - The unit names the `hearthd` beside the running `hearth`, and carries this shell's `HEARTH_CONFIG`, `HEARTH_STATE` and `PATH`, quoted for the unit's syntax. Service managers start agents with a minimal `PATH`, in which `llama-server` or a Homebrew `python3` would not be found.
-- `install` refuses when no servers are configured. The service manager would otherwise restart a hearthd with nothing to keep, forever.
+- `install` refuses when no servers are configured and watching is off (ADR-008). The service manager would otherwise restart a hearthd with nothing to do, forever.
 - `service` is not an MCP tool: installing something that runs at every login is for a person to decide.
 
 ## Consequences

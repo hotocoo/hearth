@@ -11,6 +11,7 @@
 
 - **hearthd runs the watch.** When `watch.in_hearthd` is true (the default), hearthd runs the same watch loop on its own thread: the same rounds, journal records, problem tracking and `[notify]` deliveries. Its findings go to hearthd's log, prefixed by source like `hearth watch` prints them.
 - **One watcher.** `hearth watch` refuses to run while hearthd holds `hearthd.lock` with watching on, and says where the findings are. Two watchers would record every round twice and notify every problem twice. The check takes a shared lock for an instant and never keeps it. Setting `watch.in_hearthd = false` hands watching back to `hearth watch`.
+- **Watching alone is enough.** hearthd with no `[servers]` starts and only watches, as long as `watch.in_hearthd` is true; `hearth service install` accepts that too. It refuses only when there is nothing to keep and nothing to watch. Servers can be added later with `hearth reload`.
 - **Logging.** Inside hearthd a closed stdout loses the log, never the watching. The command stops when its output closes, because its reader is gone.
 
 ## Consequences

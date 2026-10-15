@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 15:40 hearthd watches without servers
+
+- **No servers needed.** hearthd with no `[servers]` now starts and only watches the machine, recording doctor and ports rounds. Before, it refused, so a box with no hearth-owned server could not keep history without a terminal open on `hearth watch`.
+- **Service.** `hearth service install` accepts such a config. Both refuse only when there are no servers and `watch.in_hearthd` is false.
+
 ### 2026-10-15 15:20 fit --port counts the server's own memory
 
 - **Room for a running server.** `fit --port` now counts the memory the server already holds as available, since a restart at another size frees it first. Before, a loaded model was judged against what was left beside it, so "fits right now" said no to the model already running. A note says how much was counted. On a discrete GPU, where the host footprint is not the device's memory, nothing is added.

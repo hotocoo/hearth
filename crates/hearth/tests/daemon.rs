@@ -440,6 +440,39 @@ fn journal_has_the_run(dir: &Path) {
     assert!(held.as_u64().is_some_and(|b| b > 0), "{held}");
 }
 
+/// With no servers hearthd still watches: it starts, answers on its
+/// socket and records rounds. With watching off too it has nothing to do
+/// and says so.
+#[test]
+fn hearthd_without_servers_only_watches() {
+    let dir = home("watch-only");
+    std::fs::write(
+        dir.join("hearth.toml"),
+        format!("[watch]\ndoctor_interval_ms = {DOCTOR_INTERVAL_MS}\nports_interval_ms = {PORTS_INTERVAL_MS}\n"),
+    )
+    .unwrap();
+    let _daemon = Killed(
+        hearthd(&dir)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_until("status with no servers", || {
+        hearth(&dir, &["status"]).is_ok_and(|v| v["servers"].as_array().is_some_and(Vec::is_empty))
+    });
+    check_watching(&dir);
+
+    let idle = home("idle");
+    std::fs::write(idle.join("hearth.toml"), "[watch]\nin_hearthd = false\n").unwrap();
+    let out = hearthd(&idle).output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("nothing to do"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn hearthd_never_removes_what_is_not_its_socket() {
     let dir = home("notsock");
