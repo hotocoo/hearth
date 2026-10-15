@@ -180,7 +180,7 @@ fn listener_args(port: u16) -> Option<Vec<String>> {
                 .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
                 .then_some(p.pid)
         })?;
-    hearth_sense::process_args(pid).ok()
+    crate::server_args::server_words(pid)
 }
 
 /// Asks the server on `port` which model it serves, read-only.

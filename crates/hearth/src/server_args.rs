@@ -6,6 +6,55 @@ use std::path::{Path, PathBuf};
 
 use hearth_sense::kv::CacheType;
 
+/// The `LLAMA_ARG_*` environment variables llama.cpp reads in place of
+/// flags hearth looks at, with the flag each stands for (llama.cpp's
+/// common/arg.cpp), and whether it takes a value; a switch is on for the
+/// values llama.cpp reads as true.
+const ENV_FLAGS: &[(&str, &str, bool)] = &[
+    ("LLAMA_ARG_MODEL", "--model", true),
+    ("LLAMA_ARG_CTX_SIZE", "--ctx-size", true),
+    ("LLAMA_ARG_N_PARALLEL", "--parallel", true),
+    ("LLAMA_ARG_CACHE_TYPE_K", "--cache-type-k", true),
+    ("LLAMA_ARG_CACHE_TYPE_V", "--cache-type-v", true),
+    ("LLAMA_ARG_MMPROJ", "--mmproj", true),
+    ("LLAMA_ARG_NO_MMPROJ", "--no-mmproj", false),
+    ("LLAMA_ARG_NO_MMPROJ_OFFLOAD", "--no-mmproj-offload", false),
+    ("LLAMA_ARG_HF_REPO", "--hf-repo", true),
+    ("LLAMA_ARG_MODEL_DRAFT", "--model-draft", true),
+    ("LLAMA_ARG_CTX_SIZE_DRAFT", "--ctx-size-draft", true),
+    ("LLAMA_ARG_CACHE_TYPE_K_DRAFT", "--cache-type-k-draft", true),
+    ("LLAMA_ARG_CACHE_TYPE_V_DRAFT", "--cache-type-v-draft", true),
+    ("LLAMA_ARG_N_GPU_LAYERS_DRAFT", "--gpu-layers-draft", true),
+];
+
+/// A command line with what its `LLAMA_ARG_*` environment says put in as
+/// flags, right after the program: llama.cpp lets a flag on the command
+/// line override its variable, and later flags win here too.
+pub(crate) fn with_env(args: Vec<String>, env: &[(String, String)]) -> Vec<String> {
+    let mut words = args.into_iter();
+    let mut out: Vec<String> = words.next().into_iter().collect();
+    for (name, flag, takes_value) in ENV_FLAGS {
+        let Some((_, value)) = env.iter().find(|(n, _)| n == name) else {
+            continue;
+        };
+        if *takes_value {
+            out.extend([(*flag).to_string(), value.clone()]);
+        } else if ["1", "true", "on", "enabled"].contains(&value.to_ascii_lowercase().as_str()) {
+            out.push((*flag).to_string());
+        }
+    }
+    out.extend(words);
+    out
+}
+
+/// What a running llama-server was told: its command line, and its
+/// `LLAMA_ARG_*` environment where readable.
+pub(crate) fn server_words(pid: i32) -> Option<Vec<String>> {
+    let args = hearth_sense::process_args(pid).ok()?;
+    let env = hearth_sense::process_env(pid, "LLAMA_ARG_").unwrap_or_default();
+    Some(with_env(args, &env))
+}
+
 /// The value of `--model` (or `--model=VALUE`) on a command line, as
 /// `mlx_lm.server` and vLLM take the model they serve.
 pub(crate) fn model_arg(args: &[String]) -> Option<String> {
@@ -65,9 +114,9 @@ pub(crate) fn cache_types_from_args(args: &[String]) -> Option<(CacheType, Cache
         return None;
     }
     // The last occurrence wins, as in llama.cpp; long flags may be spelt
-    // with `_`. An absent flag is not assumed to mean the f16 default: the
-    // server may take it from LLAMA_ARG_CACHE_TYPE_* in its environment,
-    // which is not read, so the type is then unknown.
+    // with `_`. An absent flag (with its LLAMA_ARG_CACHE_TYPE_* already
+    // put in by `with_env` where the environment was readable) is not
+    // assumed to mean the f16 default: the type is then unknown.
     let flag = |names: [&str; 3]| -> Option<CacheType> {
         let value = args.iter().enumerate().rev().find_map(|(i, a)| {
             names.iter().find_map(|n| {
@@ -166,6 +215,20 @@ mod tests {
             "the last flag wins"
         );
         assert_eq!(cache_types_from_args(&args(&["ollama", "serve"])), None);
+        // The environment stands in for an absent flag; a flag overrides it.
+        let env = vec![
+            ("LLAMA_ARG_CACHE_TYPE_K".to_string(), "q8_0".to_string()),
+            ("LLAMA_ARG_CACHE_TYPE_V".to_string(), "q4_0".to_string()),
+        ];
+        assert_eq!(
+            cache_types_from_args(&with_env(args(&["llama-server", "-ctv", "f16"]), &env)),
+            Some((CacheType::Q8_0, CacheType::F16))
+        );
+        let off = vec![("LLAMA_ARG_NO_MMPROJ".to_string(), "0".to_string())];
+        assert_eq!(
+            with_env(args(&["llama-server"]), &off),
+            args(&["llama-server"])
+        );
         assert_eq!(
             cache_types_from_args(&args(&["llama-server", "-ctk", "nonsense"])),
             None

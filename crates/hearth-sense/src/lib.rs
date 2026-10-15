@@ -16,8 +16,21 @@ use serde::Serialize;
 pub use sys::effective_uid;
 pub use sys::{
     LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
-    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
+    process_args, process_counts, process_env, process_footprint, process_group, system_limits,
+    tcp_sockets,
 };
+
+/// `NAME=value` entries whose name starts with `prefix`, split.
+fn env_with_prefix(entries: Vec<String>, prefix: &str) -> Vec<(String, String)> {
+    entries
+        .into_iter()
+        .filter_map(|e| {
+            let (name, value) = e.split_once('=')?;
+            name.starts_with(prefix)
+                .then(|| (name.to_string(), value.to_string()))
+        })
+        .collect()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SenseError {

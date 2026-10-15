@@ -8,7 +8,8 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
     LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
-    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
+    process_args, process_counts, process_env, process_footprint, process_group, system_limits,
+    tcp_sockets,
 };
 
 #[cfg(target_os = "linux")]
@@ -16,7 +17,8 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
     LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
-    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
+    process_args, process_counts, process_env, process_footprint, process_group, system_limits,
+    tcp_sockets,
 };
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -63,9 +65,13 @@ mod unsupported {
     pub fn process_group(_pid: i32) -> Result<i32> {
         Err(SenseError::Unsupported("process groups"))
     }
+    pub fn process_env(_pid: i32, _prefix: &str) -> Result<Vec<(String, String)>> {
+        Err(SenseError::Unsupported("process environment"))
+    }
 }
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub use unsupported::{
     LIMIT_SOURCES, accelerator_process_bytes, accelerators, host_memory, list_processes,
-    process_args, process_counts, process_footprint, process_group, system_limits, tcp_sockets,
+    process_args, process_counts, process_env, process_footprint, process_group, system_limits,
+    tcp_sockets,
 };

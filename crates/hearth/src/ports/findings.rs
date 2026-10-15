@@ -77,7 +77,7 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
                 return None;
             };
             let ctx = n_ctx.saturating_mul(slots.unwrap_or(1).max(1));
-            let argv = hearth_sense::process_args(p.pid).ok()?;
+            let argv = crate::server_args::server_words(p.pid)?;
             let (k, v) = crate::server_args::cache_types_from_args(&argv)?;
             let mut line: Vec<String> = [
                 "hearth",

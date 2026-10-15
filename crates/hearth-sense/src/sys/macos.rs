@@ -518,6 +518,29 @@ pub fn process_group(pid: i32) -> Result<i32> {
 /// The arguments `pid` was started with, its program first. Readable for
 /// this user's processes; another user's are refused by the kernel.
 pub fn process_args(pid: i32) -> Result<Vec<String>> {
+    let buf = procargs2(pid)?;
+    parse_procargs2(&buf)
+        .map(|(args, _)| args)
+        .ok_or_else(|| SenseError::Parse {
+            what: "KERN_PROCARGS2",
+            detail: format!("unexpected layout for pid {pid}"),
+        })
+}
+
+/// The environment variables of `pid` whose names start with `prefix`
+/// (`LLAMA_ARG_`), and only those: others may hold secrets. Readable for
+/// this user's processes.
+pub fn process_env(pid: i32, prefix: &str) -> Result<Vec<(String, String)>> {
+    let buf = procargs2(pid)?;
+    let (_, env) = parse_procargs2(&buf).ok_or_else(|| SenseError::Parse {
+        what: "KERN_PROCARGS2",
+        detail: format!("unexpected layout for pid {pid}"),
+    })?;
+    Ok(crate::env_with_prefix(env, prefix))
+}
+
+/// The raw `KERN_PROCARGS2` of `pid`.
+fn procargs2(pid: i32) -> Result<Vec<u8>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut size: libc::size_t = 0;
     // SAFETY: a null buffer with a valid mib asks only for the size.
@@ -550,10 +573,7 @@ pub fn process_args(pid: i32) -> Result<Vec<String>> {
         return Err(os_error("sysctl KERN_PROCARGS2"));
     }
     buf.truncate(size);
-    parse_procargs2(&buf).ok_or_else(|| SenseError::Parse {
-        what: "KERN_PROCARGS2",
-        detail: format!("unexpected layout for pid {pid}"),
-    })
+    Ok(buf)
 }
 
 /// `KERN_PROCARGS2` layout: argc as a native int, the executable path, NUL
@@ -562,7 +582,7 @@ pub fn process_args(pid: i32) -> Result<Vec<String>> {
 /// taken as padding, so an empty first argument cannot be told apart from
 /// it; the count then reaches into the environment, which is why the result
 /// is only used to find flags, never to rebuild a command.
-fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
+fn parse_procargs2(buf: &[u8]) -> Option<(Vec<String>, Vec<String>)> {
     let count = usize::try_from(i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?)).ok()?;
     let rest = buf.get(4..)?;
     let mut at = rest.iter().position(|&b| b == 0)?;
@@ -574,7 +594,12 @@ fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
     for _ in 0..count {
         args.push(String::from_utf8_lossy(pieces.next()?).into_owned());
     }
-    Some(args)
+    // The environment runs to the first empty string.
+    let env = pieces
+        .take_while(|p| !p.is_empty())
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .collect();
+    Some((args, env))
 }
 
 #[cfg(test)]
@@ -590,8 +615,12 @@ mod tests {
         // An empty argument after the first is kept as one.
         let mut three = 3i32.to_ne_bytes().to_vec();
         three.extend_from_slice(b"/bin/x\0\0\0x\0\0-c\0HOME=/\0");
-        assert_eq!(parse_procargs2(&three).unwrap(), ["x", "", "-c"]);
-        assert_eq!(parse_procargs2(&fake).unwrap(), ["x", ""]);
+        assert_eq!(parse_procargs2(&three).unwrap().0, ["x", "", "-c"]);
+        assert_eq!(parse_procargs2(&fake).unwrap().0, ["x", ""]);
+        assert_eq!(parse_procargs2(&three).unwrap().1, ["HOME=/"]);
+        // Only the asked-for names leave the process's environment.
+        let here = process_env(pid, "PATH").unwrap();
+        assert!(here.iter().all(|(k, _)| k.starts_with("PATH")));
     }
 
     use super::*;

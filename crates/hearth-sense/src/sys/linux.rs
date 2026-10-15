@@ -696,5 +696,21 @@ pub fn process_args(pid: i32) -> Result<Vec<String>> {
         .collect())
 }
 
+/// The environment variables of `pid` whose names start with `prefix`
+/// (`LLAMA_ARG_`), and only those: others may hold secrets. Readable for
+/// this user's processes, from `/proc/PID/environ`.
+pub fn process_env(pid: i32, prefix: &str) -> Result<Vec<(String, String)>> {
+    let raw = fs::read(format!("/proc/{pid}/environ")).map_err(|e| SenseError::Os {
+        call: "read /proc/PID/environ",
+        detail: e.to_string(),
+    })?;
+    let entries = raw
+        .split(|&b| b == 0)
+        .filter(|e| !e.is_empty())
+        .map(|e| String::from_utf8_lossy(e).into_owned())
+        .collect();
+    Ok(crate::env_with_prefix(entries, prefix))
+}
+
 #[cfg(test)]
 mod tests;
