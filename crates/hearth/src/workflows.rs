@@ -260,7 +260,7 @@ mod tests {
         }
     }
 
-    /// A field or argument a built-in workflow names (snake_case, so it is
+    /// A field or argument a built-in workflow names (in `snake_case`, so it is
     /// an identifier, not prose) exists: as a tool's argument or in its
     /// description, or as a field hearth reports. A renamed field cannot
     /// leave a workflow pointing at nothing.
