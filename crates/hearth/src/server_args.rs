@@ -6,26 +6,60 @@ use std::path::{Path, PathBuf};
 
 use hearth_sense::kv::CacheType;
 
+/// How an environment variable stands for a flag.
+#[derive(Clone, Copy)]
+enum Takes {
+    /// `--flag VALUE`.
+    Value,
+    /// `--flag` when the value is false: the variable names the default
+    /// (`LLAMA_ARG_MMPROJ_AUTO=0` is `--no-mmproj`).
+    Unless,
+}
+
 /// The `LLAMA_ARG_*` environment variables llama.cpp reads in place of
 /// flags hearth looks at, with the flag each stands for (llama.cpp's
-/// common/arg.cpp), and whether it takes a value; a switch is on for the
-/// values llama.cpp reads as true.
-const ENV_FLAGS: &[(&str, &str, bool)] = &[
-    ("LLAMA_ARG_MODEL", "--model", true),
-    ("LLAMA_ARG_CTX_SIZE", "--ctx-size", true),
-    ("LLAMA_ARG_N_PARALLEL", "--parallel", true),
-    ("LLAMA_ARG_CACHE_TYPE_K", "--cache-type-k", true),
-    ("LLAMA_ARG_CACHE_TYPE_V", "--cache-type-v", true),
-    ("LLAMA_ARG_MMPROJ", "--mmproj", true),
-    ("LLAMA_ARG_NO_MMPROJ", "--no-mmproj", false),
-    ("LLAMA_ARG_NO_MMPROJ_OFFLOAD", "--no-mmproj-offload", false),
-    ("LLAMA_ARG_HF_REPO", "--hf-repo", true),
-    ("LLAMA_ARG_MODEL_DRAFT", "--model-draft", true),
-    ("LLAMA_ARG_CTX_SIZE_DRAFT", "--ctx-size-draft", true),
-    ("LLAMA_ARG_CACHE_TYPE_K_DRAFT", "--cache-type-k-draft", true),
-    ("LLAMA_ARG_CACHE_TYPE_V_DRAFT", "--cache-type-v-draft", true),
-    ("LLAMA_ARG_N_GPU_LAYERS_DRAFT", "--gpu-layers-draft", true),
+/// common/arg.cpp; older names kept for older builds).
+const ENV_FLAGS: &[(&str, &str, Takes)] = &[
+    ("LLAMA_ARG_MODEL", "--model", Takes::Value),
+    ("LLAMA_ARG_CTX_SIZE", "--ctx-size", Takes::Value),
+    ("LLAMA_ARG_N_PARALLEL", "--parallel", Takes::Value),
+    ("LLAMA_ARG_CACHE_TYPE_K", "--cache-type-k", Takes::Value),
+    ("LLAMA_ARG_CACHE_TYPE_V", "--cache-type-v", Takes::Value),
+    ("LLAMA_ARG_MMPROJ", "--mmproj", Takes::Value),
+    ("LLAMA_ARG_MMPROJ_AUTO", "--no-mmproj", Takes::Unless),
+    (
+        "LLAMA_ARG_MMPROJ_OFFLOAD",
+        "--no-mmproj-offload",
+        Takes::Unless,
+    ),
+    ("LLAMA_ARG_HF_REPO", "--hf-repo", Takes::Value),
+    ("LLAMA_ARG_MODEL_DRAFT", "--model-draft", Takes::Value),
+    ("LLAMA_ARG_SPEC_DRAFT_MODEL", "--model-draft", Takes::Value),
+    (
+        "LLAMA_ARG_SPEC_DRAFT_HF_REPO",
+        "--hf-repo-draft",
+        Takes::Value,
+    ),
+    ("LLAMA_ARG_CTX_SIZE_DRAFT", "--ctx-size-draft", Takes::Value),
+    (
+        "LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K",
+        "--cache-type-k-draft",
+        Takes::Value,
+    ),
+    (
+        "LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V",
+        "--cache-type-v-draft",
+        Takes::Value,
+    ),
+    (
+        "LLAMA_ARG_N_GPU_LAYERS_DRAFT",
+        "--gpu-layers-draft",
+        Takes::Value,
+    ),
 ];
+
+/// The values llama.cpp reads as false (`is_falsey`), case as written.
+const FALSE: &[&str] = &["0", "false", "off", "disabled"];
 
 /// A command line with what its `LLAMA_ARG_*` environment says put in as
 /// flags, right after the program: llama.cpp lets a flag on the command
@@ -33,14 +67,14 @@ const ENV_FLAGS: &[(&str, &str, bool)] = &[
 pub(crate) fn with_env(args: Vec<String>, env: &[(String, String)]) -> Vec<String> {
     let mut words = args.into_iter();
     let mut out: Vec<String> = words.next().into_iter().collect();
-    for (name, flag, takes_value) in ENV_FLAGS {
+    for (name, flag, takes) in ENV_FLAGS {
         let Some((_, value)) = env.iter().find(|(n, _)| n == name) else {
             continue;
         };
-        if *takes_value {
-            out.extend([(*flag).to_string(), value.clone()]);
-        } else if ["1", "true", "on", "enabled"].contains(&value.to_ascii_lowercase().as_str()) {
-            out.push((*flag).to_string());
+        match takes {
+            Takes::Value => out.extend([(*flag).to_string(), value.clone()]),
+            Takes::Unless if FALSE.contains(&value.as_str()) => out.push((*flag).to_string()),
+            Takes::Unless => {}
         }
     }
     out.extend(words);
@@ -51,8 +85,18 @@ pub(crate) fn with_env(args: Vec<String>, env: &[(String, String)]) -> Vec<Strin
 /// `LLAMA_ARG_*` environment where readable.
 pub(crate) fn server_words(pid: i32) -> Option<Vec<String>> {
     let args = hearth_sense::process_args(pid).ok()?;
+    // Unreadable (another user's, on Linux): the command line alone, and
+    // `env_problem` says so where a report has room for it.
     let env = hearth_sense::process_env(pid, "LLAMA_ARG_").unwrap_or_default();
     Some(with_env(args, &env))
+}
+
+/// Why a server's `LLAMA_ARG_*` environment could not be read, if it
+/// could not: what it configures that way is then not seen.
+pub(crate) fn env_problem(pid: i32) -> Option<String> {
+    hearth_sense::process_env(pid, "LLAMA_ARG_").err().map(|e| {
+        format!("the server's LLAMA_ARG_* environment is not readable ({e}): settings made there are not seen")
+    })
 }
 
 /// The value of `--model` (or `--model=VALUE`) on a command line, as
@@ -224,9 +268,15 @@ mod tests {
             cache_types_from_args(&with_env(args(&["llama-server", "-ctv", "f16"]), &env)),
             Some((CacheType::Q8_0, CacheType::F16))
         );
-        let off = vec![("LLAMA_ARG_NO_MMPROJ".to_string(), "0".to_string())];
+        // A variable naming a default turns it off only when false.
+        let off = vec![("LLAMA_ARG_MMPROJ_AUTO".to_string(), "0".to_string())];
         assert_eq!(
             with_env(args(&["llama-server"]), &off),
+            args(&["llama-server", "--no-mmproj"])
+        );
+        let on = vec![("LLAMA_ARG_MMPROJ_AUTO".to_string(), "1".to_string())];
+        assert_eq!(
+            with_env(args(&["llama-server"]), &on),
             args(&["llama-server"])
         );
         assert_eq!(

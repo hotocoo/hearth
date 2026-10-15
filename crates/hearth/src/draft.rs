@@ -66,20 +66,31 @@ fn cache(words: &[String], names: &[&str]) -> Result<CacheType, String> {
 
 /// The draft model a llama-server command line loads.
 pub fn from_args(words: &[String]) -> Result<Found, String> {
-    if last_value(words, &["-hfd", "--hf-repo-draft"]).is_some() {
+    if last_value(
+        words,
+        &["-hfd", "-hfrd", "--hf-repo-draft", "--spec-draft-hf"],
+    )
+    .is_some()
+    {
         return Ok(Found::NotCounted(
             "the server's draft comes from -hfd, which names no file here: not counted".into(),
         ));
     }
-    let Some(model) = last_value(words, &["-md", "--model-draft"]) else {
+    let Some(model) = last_value(words, &["-md", "--model-draft", "--spec-draft-model"]) else {
         return Ok(Found::None);
     };
-    let layers = number(
+    // A count, or `auto` or `all`: only 0 keeps it off the accelerator.
+    let layers = last_value(
         words,
-        &["-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"],
-    )?;
-    let device = last_value(words, &["-devd", "--device-draft"]);
-    if layers == Some(0) || device.as_deref() == Some("none") {
+        &[
+            "-ngld",
+            "--gpu-layers-draft",
+            "--n-gpu-layers-draft",
+            "--spec-draft-ngl",
+        ],
+    );
+    let device = last_value(words, &["-devd", "--device-draft", "--spec-draft-device"]);
+    if layers.as_deref() == Some("0") || device.as_deref() == Some("none") {
         return Ok(Found::NotCounted(format!(
             "the draft {model} is kept on the CPU (-ngld 0 or -devd none): not counted"
         )));
@@ -88,8 +99,14 @@ pub fn from_args(words: &[String]) -> Result<Found, String> {
         model: PathBuf::from(model),
         ctx: number(words, &["-cd", "--ctx-size-draft"])?.filter(|&n| n > 0),
         cache: (
-            cache(words, &["-ctkd", "--cache-type-k-draft"])?,
-            cache(words, &["-ctvd", "--cache-type-v-draft"])?,
+            cache(
+                words,
+                &["-ctkd", "--cache-type-k-draft", "--spec-draft-type-k"],
+            )?,
+            cache(
+                words,
+                &["-ctvd", "--cache-type-v-draft", "--spec-draft-type-v"],
+            )?,
         ),
         slots: number(words, &["-np", "--parallel"])?
             .filter(|&n| n > 0)
@@ -144,7 +161,12 @@ mod tests {
         );
         // The last occurrence wins, whatever its value.
         assert!(from_args(&words("llama-server -md s.gguf -cd 4096 -cd x")).is_err());
-        for cpu in ["-ngld 0", "--gpu-layers-draft=0", "-devd none"] {
+        for cpu in [
+            "-ngld 0",
+            "--gpu-layers-draft=0",
+            "-devd none",
+            "--spec-draft-ngl 0",
+        ] {
             assert!(
                 matches!(
                     from_args(&words(&format!("llama-server -md s.gguf {cpu}"))),
@@ -157,5 +179,12 @@ mod tests {
             from_args(&words("llama-server -hfd org/draft")),
             Ok(Found::NotCounted(_))
         ));
+        // Current llama.cpp spellings, and a layer count of auto.
+        let Ok(Found::Draft(d)) = from_args(&words(
+            "llama-server --spec-draft-model s.gguf --spec-draft-ngl auto --spec-draft-type-v q8_0",
+        )) else {
+            panic!()
+        };
+        assert_eq!(d.cache, (CacheType::F16, CacheType::Q8_0));
     }
 }

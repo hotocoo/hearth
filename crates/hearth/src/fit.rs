@@ -170,7 +170,12 @@ fn server_cache_types(port: u16) -> Option<(CacheType, CacheType)> {
 
 /// The command line of the process listening on `port`, when readable.
 fn listener_args(port: u16) -> Option<Vec<String>> {
-    let pid = hearth_sense::list_processes()
+    crate::server_args::server_words(listener_pid(port)?)
+}
+
+/// The pid listening on `port`, when one is found.
+fn listener_pid(port: u16) -> Option<i32> {
+    hearth_sense::list_processes()
         .ok()?
         .into_iter()
         .find_map(|p| {
@@ -179,8 +184,7 @@ fn listener_args(port: u16) -> Option<Vec<String>> {
                 .iter()
                 .any(|s| s.state == hearth_sense::TcpState::Listen && s.local.port() == port)
                 .then_some(p.pid)
-        })?;
-    crate::server_args::server_words(pid)
+        })
 }
 
 /// Asks the server on `port` which model it serves, read-only.
@@ -385,6 +389,11 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     notes.extend(compute_note);
     notes.extend(projector_note);
     notes.extend(draft_note);
+    notes.extend(
+        args.port
+            .and_then(listener_pid)
+            .and_then(crate::server_args::env_problem),
+    );
     if let Some(trained) = geometry.trained_context
         && ctx > trained
     {
