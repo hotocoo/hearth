@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:14 review fixes
+
+- **`what-can-i-run`.** It sizes each model with its own cache type unless one is given.
+- **`log --full`.** It marks unreadable entries with `kind: unreadable`.
+- **DRM fdinfo.** An unknown size unit is reported as an error instead of being read as zero.
+
 ### 2026-10-15 08:09 log --full
 
 - `hearth log --full` writes each snapshot in full as one JSON line, oldest first. `hearth log --all --since 1d --full > day.jsonl` archives a day of the journal.
