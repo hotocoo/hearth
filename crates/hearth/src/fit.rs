@@ -355,6 +355,29 @@ fn room() -> Result<(hearth_sense::HostMemory, Option<Ceiling>, bool, u64), Stri
     Ok((host, ceiling, under_pressure, available_now))
 }
 
+/// Sliding-window layers are costed as full unless --parallel and --ubatch
+/// bound them.
+fn sliding_note(swa: Option<&Swa>, geometry: &Geometry) -> Option<String> {
+    (swa.is_none()
+        && geometry
+            .layers
+            .iter()
+            .any(|l| matches!(l, hearth_sense::kv::Layer::Sliding { .. })))
+    .then(|| {
+        "sliding-window layers costed as full; pass --parallel and --ubatch for the bounded size"
+            .into()
+    })
+}
+
+/// What the server asked about with --port holds now: a restart at another
+/// size frees that first. Unified memory only; a discrete GPU's free memory
+/// is not where the host footprint lives.
+fn resident_bytes(pid: Option<i32>, ceiling: Option<&Ceiling>) -> Option<u64> {
+    pid.filter(|_| ceiling.is_none_or(|c| c.free_bytes.is_none()))
+        .and_then(|p| hearth_sense::process_footprint(p).ok())
+        .map(|f| f.footprint_bytes)
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
@@ -376,6 +399,9 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let total_bytes = fixed.saturating_add(kv_bytes);
 
     let (host, ceiling, under_pressure, available_now) = room()?;
+    let pid = args.port.and_then(listener_pid);
+    let resident = resident_bytes(pid, ceiling.as_ref());
+    let available_now = available_now.saturating_add(resident.unwrap_or(0));
     let fits_now = !under_pressure && total_bytes <= available_now;
     // Beyond the trained context a model is not expected to work, so the
     // largest useful context is capped there even when memory allows more.
@@ -389,11 +415,13 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     notes.extend(compute_note);
     notes.extend(projector_note);
     notes.extend(draft_note);
-    notes.extend(
-        args.port
-            .and_then(listener_pid)
-            .and_then(crate::server_args::env_problem),
-    );
+    notes.extend(pid.and_then(crate::server_args::env_problem));
+    notes.extend(resident.map(|r| {
+        format!(
+            "available counts the {} the server holds now: restarting it frees that first",
+            crate::units::bytes(r)
+        )
+    }));
     if let Some(trained) = geometry.trained_context
         && ctx > trained
     {
@@ -408,14 +436,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     if under_pressure {
         notes.push("memory is under pressure; nothing should be loaded now".into());
     }
-    if swa.is_none()
-        && geometry
-            .layers
-            .iter()
-            .any(|l| matches!(l, hearth_sense::kv::Layer::Sliding { .. }))
-    {
-        notes.push("sliding-window layers costed as full; pass --parallel and --ubatch for the bounded size".into());
-    }
+    notes.extend(sliding_note(swa.as_ref(), &geometry));
     let report = Report {
         model: model.clone(),
         files,
