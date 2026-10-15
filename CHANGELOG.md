@@ -8,6 +8,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 - **Colour that means something.** State dots, severity tags, a bold selection and clear section titles on a terminal. `NO_COLOR` turns it off; `--once` and `--json` stay plain.
 - **Stop asks twice.** `s` once says what stopping does, `s` again stops. Any other key cancels.
+- **Dashboard contrast.** Light-mode secondary text and state badges now meet WCAG AA.
 - **Gateway wording.** With no servers configured, a gateway error says "none configured yet".
 
 ### 2026-10-15 17:30 dashboard

@@ -365,6 +365,10 @@
   });
 
   $("help-open").addEventListener("click", () => $("help").showModal());
+  $("help").querySelector("form").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    $("help").close();
+  });
   $("drawer-close").addEventListener("click", closeDrawer);
   $("scrim").addEventListener("click", closeDrawer);
 

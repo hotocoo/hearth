@@ -27,6 +27,7 @@ ADR-009 chose a terminal app for `hearth top` and said "not a webpage". The user
   - Refreshes patch the page in place, so nothing re-animates every two seconds.
   - `prefers-reduced-motion` turns all of this off.
   - There is no parallax: on an instrument panel it would move data the reader is trying to read.
+- **Contrast.** Text and badge colours meet WCAG AA (4.5:1) in both themes; the ratios were computed, not eyeballed.
 - **Keyboard.** The keys of `top` (arrows or j/k, r, s, S, l), Esc, and `?` for a shortcuts dialog. Stop asks once more ("Confirm stop") before it frees a model's memory. Buttons are real buttons with visible focus rings, and there is a skip link.
 - **Refresh.** Every `dashboard.refresh_ms`, five times slower while the tab is hidden, and three times slower after a failure. The top bar says whether hearthd is answering.
 
@@ -34,4 +35,5 @@ ADR-009 chose a terminal app for `hearth top` and said "not a webpage". The user
 
 - `open http://127.0.0.1:9471/` is a live view of the box that anyone at the machine can act from, including on a phone through a tunnel they set up themselves; hearth opens nothing beyond loopback.
 - The end-to-end test fetches the page and checks its CSP, reads the frame, is refused for a foreign `Host`, a missing `X-Hearth` and a foreign `Origin`, and restarts the server from the API.
+- The findings show one sample. Growth projections need two, so they appear in hearthd's recorded watch rounds (the journal) but not in the findings list. Showing the latest recorded round's findings there is the next step.
 - Checked by eye in headless Chrome at 1440, 820, 390 and 375 px, light and dark, with the drawer open. That is a look, not a test: no browser automation runs in CI.
