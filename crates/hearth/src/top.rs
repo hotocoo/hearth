@@ -52,7 +52,22 @@ pub(crate) fn frame_of(journal: u64) -> Value {
     ])
     .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|e| e.to_string()))
     .map(|log| log["snapshots"].clone());
+    // The latest recorded doctor round: hearthd's watch measures twice, so
+    // its findings include growth projections one sample cannot make.
+    let watched = crate::dispatch(&[
+        "hearth".into(),
+        "--json".into(),
+        "show".into(),
+        "--kind".into(),
+        "doctor".into(),
+        "~0".into(),
+    ])
+    .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|e| e.to_string()))
+    .map(
+        |snap| json!({ "taken_at_ms": snap["taken_at_ms"], "findings": snap["body"]["findings"] }),
+    );
     json!({
+        "watched": or_error(watched),
         "servers": or_error(call(&json!({ "op": "status" })).map(|a| a["servers"].clone())),
         "machine": or_error(crate::doctor::measure()),
         "journal": or_error(journal),
@@ -119,6 +134,26 @@ fn section(out: &mut Vec<String>, view: &View, title: &str) {
     ));
 }
 
+/// The last recorded watch round's findings, counted: it measured twice,
+/// so it can project growth that one sample cannot.
+fn watched_line(frame: &Value, view: &View) -> Option<String> {
+    let found = frame["watched"]["findings"].as_array()?;
+    let count = |sev: &str| found.iter().filter(|f| f["severity"] == sev).count();
+    Some(format!(
+        "  {}",
+        view.paint(
+            DIM,
+            &format!(
+                "last watch round {}: {} critical, {} warn, {} info (hearth show --kind doctor ~0)",
+                crate::history::age(frame["watched"]["taken_at_ms"].as_u64().unwrap_or_default()),
+                count("critical"),
+                count("warn"),
+                count("info"),
+            )
+        )
+    ))
+}
+
 /// The frame as lines of text; `keys` adds the selection marker and help.
 fn render(frame: &Value, view: &View, keys: bool) -> Vec<String> {
     let mut out = vec![if keys {
@@ -180,6 +215,7 @@ fn render(frame: &Value, view: &View, keys: bool) -> Vec<String> {
             ));
         }
     }
+    out.extend(watched_line(frame, view));
     section(&mut out, view, "journal");
     match frame["journal"].as_array() {
         Some(entries) => {

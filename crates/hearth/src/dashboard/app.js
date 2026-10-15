@@ -118,21 +118,37 @@
     meter("files-fill", "files-meter", lim.files_open || 0, lim.files_max || 0);
     meter("threads-fill", "threads-meter", lim.threads_total || 0, lim.threads_max || 0);
 
-    const findings = machine.findings || [];
-    setText($("findings-count"), findings.length ? String(findings.length) : "");
-    $("findings-none").hidden = findings.length > 0;
+  }
+
+  const findingItem = (f) => {
+    const li = el("li", "finding");
+    li.dataset.tone = f.severity === "critical" ? "bad" : f.severity === "info" ? "info" : "wait";
+    li.append(el("p", "", `${f.severity}: ${f.message}`));
+    if (f.remediation) li.append(el("p", "fix", f.remediation));
+    return li;
+  };
+
+  // Findings: this moment's, plus the last watch round's, which measured
+  // twice and so can project growth. Info-level projections fold away.
+  function renderFindings(machine, watched) {
+    const now = (machine && !machine.error && machine.findings) || [];
+    const recorded = (watched && !watched.error && watched.findings) || [];
+    const seen = new Set(now.map((f) => `${f.code}|${f.message}`));
+    const fromWatch = recorded.filter((f) => !seen.has(`${f.code}|${f.message}`));
+    const main = [...now, ...fromWatch.filter((f) => f.severity !== "info")];
+    const info = fromWatch.filter((f) => f.severity === "info");
+    setText($("findings-count"), main.length ? String(main.length) : "");
+    $("findings-none").hidden = main.length + info.length > 0;
     const list = $("finding-list");
-    const key = JSON.stringify(findings.map((f) => [f.severity, f.message, f.remediation]));
-    if (list.dataset.key !== key) {
-      list.dataset.key = key;
-      list.replaceChildren(...findings.map((f) => {
-        const li = el("li", "finding");
-        li.dataset.tone = f.severity === "critical" ? "bad" : "wait";
-        li.append(el("p", "", `${f.severity}: ${f.message}`));
-        if (f.remediation) li.append(el("p", "fix", f.remediation));
-        return li;
-      }));
-    }
+    const key = JSON.stringify([main, info].map((g) => g.map((f) => [f.severity, f.message])));
+    if (list.dataset.key === key) return;
+    list.dataset.key = key;
+    list.replaceChildren(...main.map(findingItem));
+    const more = $("projections");
+    more.hidden = info.length === 0;
+    setText($("projections-summary"),
+      `${info.length} growth projection${info.length === 1 ? "" : "s"} from the last watch round, ${age(watched && watched.taken_at_ms)}`);
+    $("projection-list").replaceChildren(...info.map(findingItem));
   }
 
   // Servers
@@ -387,6 +403,7 @@
       view.frame = frame;
       if (typeof frame.refresh_ms === "number") refreshMs = frame.refresh_ms;
       renderMachine(frame.machine);
+      renderFindings(frame.machine, frame.watched);
       renderServers(frame.servers);
       renderJournal(frame.journal);
       if (view.drawer) fillLog(view.drawer);

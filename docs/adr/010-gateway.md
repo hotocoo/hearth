@@ -21,4 +21,4 @@ Not in this slice: API translation, retry before the first token, admission from
 
 - Clients stop knowing ports: a server can move or restart behind the same URL, and a stopped one says how to start it.
 - The end-to-end test forwards to the fake server, gets 404 and 503 with their remediations, and drops a streaming client mid-answer: the server sees its connection close.
-- Live, through a hearthd whose owned server was a TCP relay to a real llama-server: `/v1/models` came back from llama.cpp and an unknown name got its 404. A chat completion was not completed: the server's only slot was busy with another client's long context, so the request queued. Completions through the gateway on a real runtime are still to be shown.
+- Live, through a hearthd owning a real llama-server (llama.cpp b11429, Qwen2.5 0.5B Q4_K_M): an OpenAI chat completion and a streamed one came back, and so did an Anthropic `/v1/messages` call. A client that dropped a 1500-token stream mid-answer left llama.cpp's slot idle 0.07 s later. After `hearth stop`, the same URL answered 503 with `hearth start tiny`.

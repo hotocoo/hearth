@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 18:20 dashboard findings and a browser check
+
+- **Growth projections on the dashboard.** Findings now include the last watch round's, which can project growth. Warnings join the list; info-level projections fold into one expandable group. `hearth top` prints the round's counts.
+- **Tested in a real browser.** `scripts/dashboard-check.mjs` drives the dashboard in headless Chrome: keys, stop asked twice, output drawer, dialog, phone width, reduced motion, no errors. `scripts/check.sh` runs it when Chrome and node are present.
+- **Gateway on a real model.** Completions (OpenAI and Anthropic APIs), streaming, cancellation (llama.cpp's slot freed 0.07 s after the client left) and the stopped-server answer were checked against a real llama-server (ADR-010).
+
 ### 2026-10-15 17:50 hearth top polish
 
 - **Colour that means something.** State dots, severity tags, a bold selection and clear section titles on a terminal. `NO_COLOR` turns it off; `--once` and `--json` stay plain.

@@ -374,6 +374,25 @@ main {
   border-radius: 0 3px 3px 0; background: var(--wait);
 }
 .finding[data-tone="bad"]::before { background: var(--bad); }
+.finding[data-tone="info"]::before { background: var(--line-strong); }
+.finding[data-tone="info"] p:first-child { font-weight: 400; color: var(--ink-2); font-size: var(--step--1); }
+
+.projections { margin-top: 12px; }
+.projections summary {
+  cursor: pointer; list-style: none;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; color: var(--ink-3); font-size: var(--step--1);
+}
+.projections summary::-webkit-details-marker { display: none; }
+.projections summary::before {
+  content: ""; width: 7px; height: 7px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--fast) var(--ease-out);
+}
+.projections[open] summary::before { transform: rotate(45deg); }
+.projections summary:hover { color: var(--ink); }
+.projections .finding-list { max-height: 420px; overflow: auto; padding-right: 4px; }
 .finding p:first-child { font-weight: 560; }
 .finding .fix { color: var(--ink-2); font-size: var(--step--1); margin-top: 4px; }
 

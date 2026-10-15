@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>hearth</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
@@ -70,6 +71,10 @@
     <section class="findings reveal" aria-labelledby="findings-h">
       <div class="section-head"><h2 id="findings-h">Findings</h2><span class="count" id="findings-count"></span></div>
       <ul class="finding-list" id="finding-list"></ul>
+      <details class="projections" id="projections" hidden>
+        <summary id="projections-summary"></summary>
+        <ul class="finding-list" id="projection-list"></ul>
+      </details>
       <p class="quiet" id="findings-none" hidden>Nothing needs attention.</p>
     </section>
 
