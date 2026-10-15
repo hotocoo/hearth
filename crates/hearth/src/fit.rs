@@ -50,6 +50,19 @@ pub struct Args {
     /// sliding-window caches.
     #[arg(long, requires = "parallel")]
     ubatch: Option<u64>,
+    /// A multimodal projector loaded beside the model (llama.cpp --mmproj),
+    /// counted with the weights. With --port, the server's own is read.
+    #[arg(long)]
+    mmproj: Option<PathBuf>,
+}
+
+impl Args {
+    /// The sliding-window bound, when both of its parts are given.
+    fn swa(&self) -> Option<Swa> {
+        self.parallel
+            .zip(self.ubatch)
+            .map(|(sequences, ubatch)| Swa { sequences, ubatch })
+    }
 }
 
 pub(crate) fn parse_cache(s: &str) -> Result<CacheType, String> {
@@ -156,6 +169,24 @@ fn model_arg(args: &[String]) -> Option<String> {
                 .flatten()
         })
     })
+}
+
+/// The multimodal projector a llama-server loads beside its model
+/// (`--mmproj`/`-mm FILE`), from its command line: its weights are on the
+/// accelerator too. The last occurrence wins, as in llama.cpp.
+pub(crate) fn projector_arg(args: &[String]) -> Option<PathBuf> {
+    args.iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, a)| {
+            a.strip_prefix("--mmproj=").map(str::to_string).or_else(|| {
+                ["--mmproj", "-mm"]
+                    .contains(&a.as_str())
+                    .then(|| args.get(i + 1).filter(|v| !v.starts_with('-')).cloned())
+                    .flatten()
+            })
+        })
+        .map(PathBuf::from)
 }
 
 /// See [`server_cache_types`]: only a llama-server's arguments say this.
@@ -547,18 +578,51 @@ fn safetensors_weights(dir: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
+/// Adds the projector to the files and weights, since it is on the
+/// accelerator beside the model: `--mmproj` as given (which must exist),
+/// else the one the server on `--port` loads. A server's that cannot be
+/// found from here (a path relative to its own directory) is not counted,
+/// and the note says so.
+fn add_projector(
+    args: &Args,
+    files: &mut Vec<PathBuf>,
+    weights_bytes: &mut u64,
+) -> Result<Option<String>, String> {
+    let given = args.mmproj.is_some();
+    let from_server = || {
+        args.port
+            .and_then(listener_args)
+            .as_deref()
+            .and_then(projector_arg)
+    };
+    let Some(projector) = args.mmproj.clone().or_else(from_server) else {
+        return Ok(None);
+    };
+    let size = match std::fs::metadata(&projector) {
+        Ok(m) => m.len(),
+        Err(e) if !given => {
+            return Ok(Some(format!(
+                "the server loads the projector {} but it is not readable from here ({e}): not counted",
+                projector.display()
+            )));
+        }
+        Err(e) => return Err(format!("{}: {e}", projector.display())),
+    };
+    *weights_bytes = weights_bytes.saturating_add(size);
+    files.push(projector);
+    Ok(None)
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
         .ctx
         .or(server_ctx)
         .ok_or("the server does not say its context; give --ctx (tokens of KV cache to fit)")?;
-    let (files, weights_bytes, geometry) = weights_and_geometry(&model)?;
+    let (mut files, mut weights_bytes, geometry) = weights_and_geometry(&model)?;
+    let projector_note = add_projector(args, &mut files, &mut weights_bytes)?;
     let (k, v) = cache_types(args, &model)?;
-    let swa = args
-        .parallel
-        .zip(args.ubatch)
-        .map(|(sequences, ubatch)| Swa { sequences, ubatch });
+    let swa = args.swa();
     let kv_bytes = geometry.kv_bytes(ctx, k, v, swa);
     let (compute_bytes, compute_note) = measured_compute(&model, ctx);
     // What does not grow with the context: the weights, and the compute
@@ -589,6 +653,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     };
     let mut notes = geometry.notes.clone();
     notes.extend(compute_note);
+    notes.extend(projector_note);
     if let Some(trained) = geometry.trained_context
         && ctx > trained
     {
@@ -1015,6 +1080,15 @@ mod port_tests {
         );
         assert_eq!(model_arg(&line("python -m mlx_lm.server --model")), None);
         assert_eq!(model_arg(&line("mlx_lm.server --model --port 8081")), None);
+        assert_eq!(
+            projector_arg(&line("llama-server -m m.gguf --mmproj a.gguf -mm b.gguf")),
+            Some(PathBuf::from("b.gguf"))
+        );
+        assert_eq!(
+            projector_arg(&line("llama-server --mmproj=p.gguf")),
+            Some(PathBuf::from("p.gguf"))
+        );
+        assert_eq!(projector_arg(&line("llama-server -m m.gguf")), None);
         assert_eq!(model_arg(&line("python -m mlx_lm.server")), None);
     }
 

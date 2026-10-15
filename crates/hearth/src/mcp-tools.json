@@ -79,6 +79,10 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Instead of model (or with an Ollama model name): the port of a running server on this machine, asked which model it serves. Answers whether that server could take a different context."
+        },
+        "mmproj": {
+          "type": "string",
+          "description": "A multimodal projector file loaded beside the model (llama.cpp --mmproj), counted with the weights. With port, the server's own --mmproj is read."
         }
       }
     },

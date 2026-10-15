@@ -563,10 +563,9 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                 return None;
             };
             let ctx = n_ctx.saturating_mul(slots.unwrap_or(1).max(1));
-            let (k, v) = crate::fit::cache_types_from_args(
-                &hearth_sense::process_args(p.pid).ok()?,
-            )?;
-            let line: Vec<String> = [
+            let argv = hearth_sense::process_args(p.pid).ok()?;
+            let (k, v) = crate::fit::cache_types_from_args(&argv)?;
+            let mut line: Vec<String> = [
                 "hearth",
                 "--json",
                 "fit",
@@ -576,12 +575,17 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
                 k.name(),
                 "--cache-type-v",
                 v.name(),
-                "--",
-                model,
             ]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
+            // Its projector is on the accelerator beside the model.
+            // One not readable from here (relative to the server's own
+            // directory) cannot be counted.
+            if let Some(projector) = crate::fit::projector_arg(&argv).filter(|p| p.is_file()) {
+                line.push(format!("--mmproj={}", projector.display()));
+            }
+            line.extend(["--".to_string(), model.clone()]);
             let r: Value = serde_json::from_str(&crate::dispatch(&line).ok()?).ok()?;
             if r["fits_device"] != false {
                 return None;
