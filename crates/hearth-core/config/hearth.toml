@@ -222,6 +222,20 @@ ready_wait_ms = 120000
 # How often a held request checks whether its server is ready.
 ready_poll_ms = 200
 
+# How many times a request is sent again when its server fails before
+# answering: the connection refused or closed, or a 5xx after which hearthd
+# restarts it (a poisoned backend). Only while nothing has reached the
+# client, and within ready_wait_ms in all. 0 turns retrying off.
+retries = 2
+
+# Largest request body kept so it can be sent again. Larger bodies, and
+# chunked ones, stream through once and are never retried.
+retry_body_bytes = 8388608
+
+# After a 5xx, how long to watch for hearthd restarting the server before
+# passing the 5xx on as the application's own answer.
+retry_grace_ms = 3000
+
 # Requests forwarded at once; one beyond this is told the gateway is busy.
 max_clients = 64
 

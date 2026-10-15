@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (inspection, history, supervision, workflows and an MCP server; `hearth --help` lists every command) and `hearthd`, which keeps configured model servers alive, checks they fit before starting them, and watches the machine. Its gateway forwards requests to those servers by name, with typed errors and cancellation; translation, retry, admission and scheduling are not built yet, and nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (inspection, history, supervision, workflows and an MCP server; `hearth --help` lists every command) and `hearthd`, which keeps configured model servers alive, checks they fit before starting them, and watches the machine. Its gateway forwards requests to those servers by name, with typed errors, cancellation and retry before the first byte; translation, admission and scheduling are not built yet, and nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -145,11 +145,10 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - If measurement fails, hearth serializes. It never fails open.
 - **Recovery.**
   - A classifier sorts failures as transient, capacity, poisoned, wedged or model-missing. It uses latency signatures, stderr and HTTP evidence.
-  - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit, wedge or a poisoned backend, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` and `hearthd` (ADR-004, ADR-007). The request-level classifier and the retry come with the gateway.
+  - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit, wedge or a poisoned backend, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` and `hearthd` (ADR-004, ADR-007). The gateway retries a request before its first byte when hearthd restarts the server under it (ADR-010); a finer request-level classifier is still to come.
   - Runtimes hearth did not start are never killed.
-- **Gateway, beyond forwarding.** Forwarding by name, typed errors and structural cancellation ship (ADR-010). Still to come:
+- **Gateway, beyond forwarding.** Forwarding by name, typed errors, structural cancellation, holding requests through a restart and retry before the first byte, all under one deadline, ship (ADR-010). Still to come:
   - OpenAI, Anthropic Messages and Ollama APIs, translated as needed.
-  - Retry after a failure, with one deadline covering queue time and every retry. Requests that arrive while a server restarts are already held until it is ready.
 - **Scheduling.** Priority classes, fair queuing across apps, quotas and deadline-aware shedding.
 - **For people and agents.**
   - MCP `load`, `unload` and `drain` on runtimes hearth owns, next to the `restart` that ships. Runtimes hearth did not start are refused, with the reason.

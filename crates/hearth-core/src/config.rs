@@ -65,6 +65,9 @@ pub struct Gateway {
     pub idle_timeout_ms: u64,
     pub ready_wait_ms: u64,
     pub ready_poll_ms: u64,
+    pub retries: u64,
+    pub retry_body_bytes: u64,
+    pub retry_grace_ms: u64,
     pub max_clients: u64,
 }
 
@@ -114,6 +117,7 @@ impl Gateway {
             ("gateway.idle_timeout_ms", self.idle_timeout_ms),
             ("gateway.ready_wait_ms", self.ready_wait_ms),
             ("gateway.ready_poll_ms", self.ready_poll_ms),
+            ("gateway.retry_grace_ms", self.retry_grace_ms),
             ("gateway.max_clients", self.max_clients),
         ] {
             if value == 0 {

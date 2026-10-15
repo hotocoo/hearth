@@ -29,3 +29,16 @@ Not in this slice: API translation, retry before the first token, admission from
 - A server that is `stopped`, `gave_up` or `unsupervised` does not come back by itself, so its request is still refused at once with what to do.
 - The request head is already read when it is held, and the body has not been read yet: it streams to the server once forwarding starts, so holding costs no buffering.
 - The end-to-end test restarts the server and sends a request through the gateway straight away; it is answered 200.
+
+## Addendum (2026-10-15): retry before the first byte
+
+- **What is retried.** A request whose body has a `Content-Length` within `gateway.retry_body_bytes` is read whole before it is sent, so it can be sent again. Chunked and larger bodies stream through once, as before.
+- **When.** Only while nothing has reached the client:
+  - the connection is refused, reset or closed before an answer;
+  - or the answer is a 5xx and hearthd then restarts the server, which is how a poisoned Metal backend shows.
+- **Only when hearthd notices.** The gateway retries only when hearthd, within `gateway.retry_grace_ms`, reports the server out of `ready` or back with a new pid. Then it waits for the server to be ready and sends the request again, at most `gateway.retries` times.
+  - A failure hearthd never notices is not one a retry can fix, so it is reported.
+  - A 5xx from a server that stays as it was is the application's answer, and is passed on.
+- **Silence is not retried.** A server silent past `idle_timeout_ms` gets the 504. It is wedged, and hearthd's restart of it should not double the client's wait.
+- **One deadline.** `gateway.ready_wait_ms` covers waiting for the server and every retry.
+- **Test.** In the end-to-end test the fake server exits on its first `POST /flaky`. hearthd restarts it, and the client receives 200 with its own body echoed back, from the second attempt.

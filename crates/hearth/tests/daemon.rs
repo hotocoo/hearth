@@ -31,6 +31,13 @@ class H(BaseHTTPRequestHandler):
             return
         b = json.dumps({"data": [{"id": "e2e-model"}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path == "/flaky" and not os.path.exists("flaked"):
+            open("flaked", "w").close()
+            os._exit(1)
+        b = json.dumps({"got": body.decode()}).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def log_message(self, *a): pass
 ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 "#;
@@ -235,6 +242,28 @@ fn check_stopped(dir: &Path, port: u16, metrics: u16, gateway: u16) {
     );
 }
 
+/// A server that dies before answering gets the request again, body and
+/// all, once hearthd has it back.
+fn check_retry(dir: &Path, gateway: u16) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
+    write!(
+        s,
+        "POST /s/e2e/flaky HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    s.read_to_string(&mut reply).unwrap();
+    assert!(
+        reply.starts_with("HTTP/1.0 200") && reply.contains(r#""got": "hello""#),
+        "{reply}"
+    );
+    assert!(
+        dir.join("flaked").exists(),
+        "the first attempt reached the server"
+    );
+}
+
 /// The gateway answers `path` with `status` and a reply mentioning `says`.
 fn gateway_says(gateway: u16, path: &str, status: &str, says: &str) {
     let reply = http(gateway, path);
@@ -252,6 +281,7 @@ fn check_gateway(dir: &Path, gateway: u16) {
         "{ok}"
     );
     gateway_says(gateway, "/s/nope/v1/models", "HTTP/1.1 404", "servers: e2e");
+    check_retry(dir, gateway);
     // A request that arrives during a restart is held until the server is
     // back, not refused.
     let (_, before) = state(dir).unwrap();

@@ -18,6 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hearth_core::config::Gateway;
+
+mod retry;
 use serde_json::{Value, json};
 
 /// The servers hearthd keeps, as `hearth status` reports them.
@@ -187,10 +189,15 @@ fn pipe(
     mut upstream: TcpStream,
     forward: &Forward,
     idle: Duration,
+    first: &[u8],
 ) -> std::io::Result<()> {
     client.set_read_timeout(None)?;
     upstream.set_read_timeout(Some(idle))?;
-    upstream.write_all(forward.head.as_bytes())?;
+    if first.is_empty() {
+        upstream.write_all(forward.head.as_bytes())?;
+    } else {
+        client.write_all(first)?;
+    }
     let (mut from_client, mut to_upstream) = (client.try_clone()?, upstream.try_clone()?);
     // shortcut: a client that half-closes after its body counts as gone,
     // which no HTTP client waiting for its answer does.
@@ -201,7 +208,7 @@ fn pipe(
             let _ = to_upstream.shutdown(Shutdown::Both);
         })?;
     let mut buf = [0u8; 16 * 1024];
-    let mut sent = 0usize;
+    let mut sent = first.len();
     let outcome = loop {
         match upstream.read(&mut buf) {
             Ok(0) => break Ok(()),
@@ -218,22 +225,7 @@ fn pipe(
         && sent == 0
         && matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
     {
-        let _ = reply(
-            &mut client,
-            &refuse(
-                "504 Gateway Timeout",
-                "timeout",
-                format!(
-                    "server {} sent nothing for {} ms",
-                    forward.name,
-                    idle.as_millis()
-                ),
-                format!(
-                    "hearth status {0}; a wedged server is restarted by hearthd, or raise gateway.idle_timeout_ms for very long prompts",
-                    forward.name
-                ),
-            ),
-        );
+        let _ = pipe_silent(&mut client, forward, idle);
     }
     let _ = client.shutdown(Shutdown::Both);
     let _ = upstream.shutdown(Shutdown::Both);
@@ -256,8 +248,12 @@ fn coming_up(head: &str, servers: &[Value]) -> bool {
 /// Routes the request, holding it up to `gateway.ready_wait_ms` while its
 /// server comes up, so a client that arrives during a restart is served
 /// instead of refused.
-fn wait_for_ready(head: &str, config: &Gateway, servers: &Servers) -> Result<Forward, Refusal> {
-    let deadline = Instant::now() + Duration::from_millis(config.ready_wait_ms);
+fn wait_for_ready(
+    head: &str,
+    config: &Gateway,
+    servers: &Servers,
+    deadline: Instant,
+) -> Result<Forward, Refusal> {
     loop {
         let now = servers();
         match route(head, &now) {
@@ -293,10 +289,16 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
             ),
         );
     }
-    let forward = match wait_for_ready(&head, config, servers) {
+    // One deadline covers waiting for the server and every retry.
+    let deadline = Instant::now() + Duration::from_millis(config.ready_wait_ms);
+    let forward = match wait_for_ready(&head, config, servers, deadline) {
         Ok(f) => f,
         Err(r) => return reply(&mut client, &r),
     };
+    if let Some(length) = retry::keepable_length(&head, config.retry_body_bytes) {
+        let body = retry::read_body(&mut client, length, head_time)?;
+        return with_retries(client, &head, forward, &body, config, servers, deadline);
+    }
     match TcpStream::connect_timeout(
         &forward.addr,
         Duration::from_millis(config.connect_timeout_ms),
@@ -308,6 +310,7 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
                 upstream,
                 &forward,
                 Duration::from_millis(config.idle_timeout_ms),
+                &[],
             )
         }
         Err(e) => reply(
@@ -320,6 +323,74 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
             ),
         ),
     }
+}
+
+/// Sends a request whose body is in hand, again when its server fails
+/// before answering and comes back within `deadline`; `gateway.retries`
+/// times at most.
+fn with_retries(
+    mut client: TcpStream,
+    head: &str,
+    mut forward: Forward,
+    body: &[u8],
+    config: &Gateway,
+    servers: &Servers,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    let idle = Duration::from_millis(config.idle_timeout_ms);
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let before = retry::pid(servers, &forward.name);
+        let why = match retry::attempt(&forward, body, config) {
+            retry::Attempt::Answered(upstream, first)
+                if !(retry::server_error(&first)
+                    && retry::hearthd_restarts(servers, &forward.name, before, config)) =>
+            {
+                client.set_write_timeout(None)?;
+                return pipe(client, upstream, &forward, idle, &first);
+            }
+            retry::Attempt::Answered(..) => "a 5xx, and hearthd is restarting it".to_string(),
+            retry::Attempt::Silent => return pipe_silent(&mut client, &forward, idle),
+            retry::Attempt::Retry(why) => {
+                if !retry::hearthd_restarts(servers, &forward.name, before, config) {
+                    return reply(&mut client, &retry::exhausted(&forward, tries, &why));
+                }
+                why
+            }
+        };
+        if tries > config.retries || Instant::now() >= deadline {
+            return reply(&mut client, &retry::exhausted(&forward, tries, &why));
+        }
+        println!(
+            "gateway: {} failed before answering ({why}); retrying when it is back",
+            forward.name
+        );
+        forward = match wait_for_ready(head, config, servers, deadline) {
+            Ok(f) => f,
+            Err(r) => return reply(&mut client, &r),
+        };
+    }
+}
+
+/// The 504 for a server that sent nothing for `idle`.
+fn pipe_silent(client: &mut TcpStream, forward: &Forward, idle: Duration) -> std::io::Result<()> {
+    reply(
+        client,
+        &refuse(
+            "504 Gateway Timeout",
+            "timeout",
+            format!(
+                "server {} sent nothing for {} ms",
+                forward.name,
+                idle.as_millis()
+            ),
+            format!(
+                "hearth status {0}; a wedged server is restarted by hearthd, or raise gateway.idle_timeout_ms for very long prompts",
+                forward.name
+            ),
+        ),
+    )
 }
 
 /// Forwards on `listener` until hearthd ends: a thread per request, up to

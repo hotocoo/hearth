@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 19:20 gateway retries before the first byte
+
+- **Transparent retry.** A request is sent again when its server dies, drops the connection or fails with a 5xx that hearthd restarts it for (a poisoned backend). This happens only while nothing has reached the client, at most `gateway.retries` times, and within the same deadline as waiting for the server.
+- **Bodies kept for it.** Bodies up to `gateway.retry_body_bytes` (8 MiB) are kept so they can be sent again; larger or chunked ones stream once.
+- **Errors still pass.** A 5xx from a server hearthd does not restart is the application's answer and is passed on.
+
 ### 2026-10-15 18:50 gateway holds requests during a restart
 
 - **Served, not refused.** A request for a server that is starting or restarting waits up to `gateway.ready_wait_ms` (2 minutes) and goes through once the server is ready. Stopped and given-up servers are still refused at once.
