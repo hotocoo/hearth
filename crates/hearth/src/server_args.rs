@@ -185,7 +185,7 @@ pub(crate) fn cache_types_from_args(args: &[String]) -> Option<(CacheType, Cache
 pub(crate) fn hf_projector_of(words: &[String], model: &Path) -> Result<Option<PathBuf>, String> {
     let hf = words
         .iter()
-        .any(|w| w == "-hf" || w == "--hf-repo" || w.starts_with("--hf-repo="));
+        .any(|w| w == "-hf" || w == "-hfr" || w == "--hf-repo" || w.starts_with("--hf-repo="));
     let declined = projector_off_accelerator(words)
         || words
             .iter()

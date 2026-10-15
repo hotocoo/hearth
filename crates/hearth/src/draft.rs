@@ -108,7 +108,9 @@ pub fn from_args(words: &[String]) -> Result<Found, String> {
                 &["-ctvd", "--cache-type-v-draft", "--spec-draft-type-v"],
             )?,
         ),
-        slots: number(words, &["-np", "--parallel"])?
+        // -1 is auto: the server decides, and fit's --port reads its slots.
+        slots: last_value(words, &["-np", "--parallel"])
+            .and_then(|v| v.parse::<u64>().ok())
             .filter(|&n| n > 0)
             .unwrap_or(1),
     }))
@@ -159,6 +161,10 @@ mod tests {
             (d.ctx, d.cache, d.slots),
             (None, (CacheType::F16, CacheType::F16), 1)
         );
+        assert!(matches!(
+            from_args(&words("llama-server -md s.gguf -np -1")),
+            Ok(Found::Draft(Draft { slots: 1, .. }))
+        ));
         // The last occurrence wins, whatever its value.
         assert!(from_args(&words("llama-server -md s.gguf -cd 4096 -cd x")).is_err());
         for cpu in [
