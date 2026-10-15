@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 09:00 LLAMA_ARG_* environment
+
+- **Settings from the environment.** `fit --port` and the `ports` oversized check now read a llama-server's `LLAMA_ARG_*` environment variables: cache types, projector and draft. A flag on the command line still overrides them, as in llama.cpp.
+- **Nothing else is read.** Only variables with that prefix are read, because others may hold secrets.
+
 ### 2026-10-15 08:55 files under 800 lines
 
 - **Split modules.** `ports`, `fit`, `history`, `doctor` and `supervise` are split by concern, and tests sit beside the files they cover.
