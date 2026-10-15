@@ -97,6 +97,11 @@ pub struct LogArgs {
     /// snapshots, run events and notes as they happened.
     #[arg(long, conflicts_with = "kind")]
     all: bool,
+    /// Each snapshot in full, not only its summary, as JSON lines: one
+    /// snapshot per line, oldest first, for archiving or attaching to a
+    /// report (`hearth log --all --since 1d --full > day.jsonl`).
+    #[arg(long, conflicts_with = "stats")]
+    full: bool,
 }
 
 fn parse_age(text: &str) -> Result<std::time::Duration, String> {
@@ -263,6 +268,9 @@ struct LogEntry {
     taken_at_ms: u64,
     hearth_version: String,
     summary: String,
+    /// The snapshot itself, with --full.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -332,6 +340,20 @@ fn mentions(value: &Value, needle: &str) -> bool {
     }
 }
 
+/// One self-contained line per snapshot, oldest first, so an archive
+/// reads in the order things happened; the unreadable last.
+fn json_lines(report: &LogReport) -> Result<String, String> {
+    let mut out = String::new();
+    for e in report.snapshots.iter().rev() {
+        let line = serde_json::to_string(e).map_err(|e| e.to_string())?;
+        let _ = writeln!(out, "{line}");
+    }
+    for e in &report.unreadable {
+        let _ = writeln!(out, "{}", serde_json::json!({ "unreadable": e }));
+    }
+    Ok(out)
+}
+
 pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
     if args.stats {
@@ -384,9 +406,13 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
                 id: s.id,
                 taken_at_ms: s.taken_at_ms,
                 hearth_version: s.hearth_version,
+                body: args.full.then_some(s.body),
             }),
             Err(e) => report.unreadable.push(e.to_string()),
         }
+    }
+    if args.full {
+        return json_lines(&report);
     }
     if json {
         return crate::to_json(&report);
@@ -486,6 +512,7 @@ fn meanwhile(
                     id: s.id,
                     taken_at_ms: s.taken_at_ms,
                     hearth_version: s.hearth_version,
+                    body: None,
                 }),
                 // Thinned away after listing: gone, not unreadable.
                 Err(hearth_core::state::StateError::Io { source, .. })
