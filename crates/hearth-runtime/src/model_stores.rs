@@ -352,7 +352,7 @@ fn search(name: &str, only: Option<Store>) -> Option<Result<PathBuf, String>> {
                 files.display()
             )),
             several => Err(format!(
-                "{name}: several files in the {store}; name one as {org}/{repo}/FILE or {org}/{repo}:QUANT: {}",
+                "{name}: several files in the {store}; name one as {org}/{repo}/FILE or {org}/{repo}:QUANT (hearth models {org}/{repo} sizes each): {}",
                 several
                     .iter()
                     .filter_map(|p| relative(p, &files))
