@@ -38,6 +38,11 @@ jobs:
         run: |
           cargo build -p hearth --bin hearth
           ./target/debug/hearth config --markdown | diff -u docs/configuration.md -
+      - name: no source file over 800 lines
+        if: runner.os == 'Linux'
+        run: |
+          long=$(find crates -name '*.rs' -exec wc -l {} + | awk '$2 != "total" && $1 > 800 { print $2 " (" $1 " lines)" }')
+          if [ -n "$long" ]; then echo "$long"; exit 1; fi
       - name: completion scripts parse
         if: runner.os == 'Linux'
         run: |
