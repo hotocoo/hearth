@@ -32,8 +32,8 @@ pub enum Identity {
         health: String,
         /// Router mode serves several models from one port.
         models: Vec<String>,
-        /// Tokens its slots hold in their KV cache now (`/slots`: each
-        /// slot's last prompt and what it decoded), when it says.
+        /// About how many tokens its slots last used (`/slots`: each slot's
+        /// last prompt and what it decoded), when it says.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens_held: Option<u64>,
     },
@@ -254,9 +254,12 @@ fn ollama(p: &Prober, version: &Value) -> Identity {
     }
 }
 
-/// The tokens a llama-server's slots hold, from its `/slots`: each slot's
-/// last prompt plus what it decoded since. `None` when the answer is not
-/// that shape (`--no-slots`, another version).
+/// About how many tokens a llama-server's slots last used, from its
+/// `/slots`: each slot's last prompt plus what it decoded. Not exactly
+/// what the cache holds (a prompt still prefilling counts in full; slots
+/// sharing a prefix count it twice), so it is a guide, never a verdict.
+/// `None` when the answer is not that shape (`--no-slots`, a version that
+/// says otherwise) or did not come in time.
 fn tokens_held(slots: &Value) -> Option<u64> {
     slots.as_array()?.iter().try_fold(0u64, |sum, s| {
         let prompt = s["n_prompt_tokens"].as_u64()?;
@@ -346,6 +349,17 @@ fn identify_http(p: &Prober, first: &Probe) -> Identity {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tokens_held_sums_each_slots_prompt_and_decoded() {
+        let slots = serde_json::json!([
+            {"id": 0, "n_prompt_tokens": 100, "next_token": [{"n_decoded": 20}]},
+            {"id": 1, "n_prompt_tokens": 5, "next_token": {"n_decoded": 1}}
+        ]);
+        assert_eq!(tokens_held(&slots), Some(126));
+        assert_eq!(tokens_held(&serde_json::json!({"error": "no slots"})), None);
+        assert_eq!(tokens_held(&serde_json::json!([{"id": 0}])), None);
+    }
+
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;

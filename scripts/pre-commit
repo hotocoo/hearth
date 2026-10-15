@@ -1,7 +1,8 @@
 #!/bin/sh
 # Git pre-commit hook: run scripts/check.sh when Rust code, the shipped
 # configuration or the MCP JSON is staged, so a commit CI would reject is
-# refused here. Install with: ln -s ../../scripts/pre-commit .git/hooks/pre-commit
+# refused here. It checks the working tree, not only what is staged.
+# Install with: ln -s ../../scripts/pre-commit .git/hooks/pre-commit
 if git diff --cached --name-only | grep -qE '\.rs$|hearth\.toml$|mcp-(tools|prompts)\.json$|Cargo\.(toml|lock)$'; then
   exec "$(git rev-parse --show-toplevel)/scripts/check.sh"
 fi

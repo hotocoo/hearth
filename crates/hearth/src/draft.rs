@@ -15,8 +15,9 @@ pub struct Draft {
     pub ctx: Option<u64>,
     /// Its KV cache types (`-ctkd`, `-ctvd`), each f16 unless given.
     pub cache: (CacheType, CacheType),
-    /// Server slots (`-np`), each with its own draft context.
-    pub slots: u64,
+    /// Server slots (`-np`), each with its own draft context; `None` when
+    /// the command line leaves them to the server (`-np -1` or absent).
+    pub slots: Option<u64>,
 }
 
 /// What a command line says about its draft.
@@ -108,11 +109,10 @@ pub fn from_args(words: &[String]) -> Result<Found, String> {
                 &["-ctvd", "--cache-type-v-draft", "--spec-draft-type-v"],
             )?,
         ),
-        // -1 is auto: the server decides, and fit's --port reads its slots.
+        // -1 is auto: the server decides, and its /props says.
         slots: last_value(words, &["-np", "--parallel"])
             .and_then(|v| v.parse::<u64>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(1),
+            .filter(|&n| n > 0),
     }))
 }
 
@@ -121,9 +121,9 @@ pub fn from_args(words: &[String]) -> Result<Found, String> {
 pub fn bytes(draft: &Draft, main_ctx: u64) -> Result<(u64, u64), String> {
     let (_, weights, geometry) = crate::model_files::weights_and_geometry(Path::new(&draft.model))
         .map_err(|e| format!("draft model {}: {e}", draft.model.display()))?;
-    let tokens = draft
-        .ctx
-        .map_or(main_ctx, |per_slot| per_slot.saturating_mul(draft.slots));
+    let tokens = draft.ctx.map_or(main_ctx, |per_slot| {
+        per_slot.saturating_mul(draft.slots.unwrap_or(1))
+    });
     let (k, v) = draft.cache;
     Ok((weights, geometry.kv_bytes(tokens, k, v, None)))
 }
@@ -150,7 +150,7 @@ mod tests {
                 model: PathBuf::from("small.gguf"),
                 ctx: Some(4096),
                 cache: (CacheType::Q8_0, CacheType::F16),
-                slots: 2,
+                slots: Some(2),
             }))
         );
         let Ok(Found::Draft(d)) = from_args(&words("llama-server --model-draft=s.gguf -cd 0"))
@@ -159,11 +159,11 @@ mod tests {
         };
         assert_eq!(
             (d.ctx, d.cache, d.slots),
-            (None, (CacheType::F16, CacheType::F16), 1)
+            (None, (CacheType::F16, CacheType::F16), None)
         );
         assert!(matches!(
             from_args(&words("llama-server -md s.gguf -np -1")),
-            Ok(Found::Draft(Draft { slots: 1, .. }))
+            Ok(Found::Draft(Draft { slots: None, .. }))
         ));
         // The last occurrence wins, whatever its value.
         assert!(from_args(&words("llama-server -md s.gguf -cd 4096 -cd x")).is_err());

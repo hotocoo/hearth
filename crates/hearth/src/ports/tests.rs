@@ -244,8 +244,8 @@ fn missed_learned_deadline_gets_a_second_chance() {
 fn headroom_says_how_close_the_slots_are() {
     assert_eq!(
         super::findings::headroom(Some(100), Some(250)),
-        "; its slots hold 100 tokens now, 150 short of the 250 that fit"
+        "; its slots' last requests used about 100 tokens, 150 short of the 250 that fit"
     );
-    assert!(super::findings::headroom(Some(300), Some(250)).contains("already hold 300"));
+    assert!(super::findings::headroom(Some(300), Some(250)).contains("about 300 tokens, past"));
     assert_eq!(super::findings::headroom(None, Some(250)), "");
 }

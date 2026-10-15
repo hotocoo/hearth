@@ -54,25 +54,25 @@ pub(super) fn partially_offloaded(
     out
 }
 
-/// llama.cpp servers configured past what the device holds: their model
-/// at their context and cache types, as `hearth fit --port` computes it
-/// from the server's own `/props` and command line. Such a server runs
-/// until its context fills, then runs out of accelerator memory.
 /// How far its slots are from the context the device holds, when the
 /// server says what they hold: the warning's urgency.
 pub(super) fn headroom(held: Option<u64>, fits: Option<u64>) -> String {
     match (held, fits) {
         (Some(h), Some(f)) if h >= f => {
-            format!("; its slots already hold {h} tokens, past the {f} that fit")
+            format!("; its slots' last requests used about {h} tokens, past the {f} that fit")
         }
         (Some(h), Some(f)) => format!(
-            "; its slots hold {h} tokens now, {} short of the {f} that fit",
+            "; its slots' last requests used about {h} tokens, {} short of the {f} that fit",
             f - h
         ),
         _ => String::new(),
     }
 }
 
+/// llama.cpp servers configured past what the device holds: their model
+/// at their context and cache types, as `hearth fit --port` computes it
+/// from the server's own `/props` and command line. Such a server runs
+/// until its context fills, then runs out of accelerator memory.
 pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
     let mut seen = std::collections::BTreeSet::new();
     ports
@@ -121,7 +121,9 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
                 && d.model.is_file()
             {
                 line.push(format!("--draft={}", d.model.display()));
-                line.extend(d.ctx.map(|c| format!("--draft-ctx={}", c.saturating_mul(d.slots))));
+                // -np auto: the server's own count, from what it answered.
+                let draft_slots = d.slots.or(*slots).unwrap_or(1);
+                line.extend(d.ctx.map(|c| format!("--draft-ctx={}", c.saturating_mul(draft_slots))));
                 line.push(format!("--draft-cache-type={}", d.cache.0.name()));
                 line.push(format!("--draft-cache-type-v={}", d.cache.1.name()));
             }
@@ -140,11 +142,8 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
             };
             let (kinds, values) = (types("fits_device_with"), types("fits_device_with_values"));
             let fits = r["max_ctx_device"].as_u64();
-            // Past the context the device holds, it is a matter of time:
-            // its own code, so watch says so even after the first warning.
-            let past = tokens_held.zip(fits).is_some_and(|(h, f)| h >= f);
             Some(Finding {
-                code: if past { "overfull" } else { "oversized" },
+                code: "oversized",
                 pid: p.pid,
                 model: None,
                 severity: "warn",
@@ -157,7 +156,8 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
                     bytes(r["ceiling"]["bytes"].as_u64().unwrap_or_default()),
                     r["ceiling"]["source"].as_str().unwrap_or("device"),
                     headroom(*tokens_held, fits)
-                ),
+                ) + &crate::server_args::env_problem(p.pid)
+                    .map_or(String::new(), |e| format!("; {e}")),
                 remediation: format!(
                     "it will run out of accelerator memory as its context fills; {}{}{}",
                     r["max_ctx_device"].as_u64().map_or_else(

@@ -77,6 +77,23 @@ pub(super) fn hf_projector(
 /// readable), else the `--port` server's own `-md`. A server's draft that
 /// is kept on the CPU, comes from `-hfd`, or is not readable from here is
 /// noted, not counted.
+/// The slots a llama-server on `port` runs, from its `/props`.
+fn server_slots(port: u16) -> Option<u64> {
+    use hearth_runtime::fingerprint::{Identity, fingerprint};
+    let config = hearth_core::config::load().ok()?;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    match fingerprint(
+        addr,
+        std::time::Duration::from_millis(config.discovery.first_contact_timeout_ms),
+        config.discovery.max_probe_response_bytes,
+    )
+    .identity
+    {
+        Identity::LlamaCpp { slots, .. } => slots,
+        _ => None,
+    }
+}
+
 pub(super) fn draft_of(args: &Args, ctx: u64) -> Result<(Option<u64>, Option<String>), String> {
     use crate::draft::{Draft, Found};
     let given = args.draft.as_ref().map(|model| Draft {
@@ -89,7 +106,7 @@ pub(super) fn draft_of(args: &Args, ctx: u64) -> Result<(Option<u64>, Option<Str
             (k, args.draft_cache_type_v.unwrap_or(k))
         },
         // --draft-ctx is already the total over the slots.
-        slots: 1,
+        slots: Some(1),
     });
     let draft = match given {
         Some(d) => d,
@@ -107,6 +124,10 @@ pub(super) fn draft_of(args: &Args, ctx: u64) -> Result<(Option<u64>, Option<Str
                         )),
                     ));
                 }
+                Found::Draft(d) if d.slots.is_none() && d.ctx.is_some() => Draft {
+                    slots: args.port.and_then(server_slots),
+                    ..d
+                },
                 Found::Draft(d) => d,
             },
         },

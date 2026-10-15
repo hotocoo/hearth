@@ -272,7 +272,9 @@ mod tests {
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
             &mut code,
         );
-        for w in builtin() {
+        let all = builtin();
+        assert!(!all.is_empty(), "the built-in workflows did not parse");
+        for w in all {
             let template = w["template"].as_str().unwrap();
             for word in template.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
                 let identifier = word.contains('_')
