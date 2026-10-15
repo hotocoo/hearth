@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:20 projectors in fit
+
+- `fit --mmproj FILE` counts a multimodal projector with the weights. `fit --port` and the `ports` oversized check read the server's own `--mmproj`.
+
 ### 2026-10-15 08:14 review fixes
 
 - **`what-can-i-run`.** It sizes each model with its own cache type unless one is given.
