@@ -58,6 +58,21 @@ pub(super) fn partially_offloaded(
 /// at their context and cache types, as `hearth fit --port` computes it
 /// from the server's own `/props` and command line. Such a server runs
 /// until its context fills, then runs out of accelerator memory.
+/// How far its slots are from the context the device holds, when the
+/// server says what they hold: the warning's urgency.
+pub(super) fn headroom(held: Option<u64>, fits: Option<u64>) -> String {
+    match (held, fits) {
+        (Some(h), Some(f)) if h >= f => {
+            format!("; its slots already hold {h} tokens, past the {f} that fit")
+        }
+        (Some(h), Some(f)) => format!(
+            "; its slots hold {h} tokens now, {} short of the {f} that fit",
+            f - h
+        ),
+        _ => String::new(),
+    }
+}
+
 pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
     let mut seen = std::collections::BTreeSet::new();
     ports
@@ -71,6 +86,7 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
                 model: Some(model),
                 n_ctx: Some(n_ctx),
                 slots,
+                tokens_held,
                 ..
             } = &p.fingerprint.identity
             else {
@@ -99,7 +115,6 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
             if let Some(projector) = crate::server_args::served_projector(&argv, std::path::Path::new(model)) {
                 line.push(format!("--mmproj={}", projector.display()));
             }
-            // So is a draft model, with its own context and cache.
             // So is a draft model, with its own context and cache (a total
             // over the server's slots, as fit takes it).
             if let Ok(crate::draft::Found::Draft(d)) = crate::draft::from_args(&argv)
@@ -124,19 +139,24 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
                     .collect()
             };
             let (kinds, values) = (types("fits_device_with"), types("fits_device_with_values"));
+            let fits = r["max_ctx_device"].as_u64();
+            // Past the context the device holds, it is a matter of time:
+            // its own code, so watch says so even after the first warning.
+            let past = tokens_held.zip(fits).is_some_and(|(h, f)| h >= f);
             Some(Finding {
-                code: "oversized",
+                code: if past { "overfull" } else { "oversized" },
                 pid: p.pid,
                 model: None,
                 severity: "warn",
                 message: format!(
-                    "{} (pid {}) on {} is configured past the device: its context needs {} of {} ({})",
+                    "{} (pid {}) on {} is configured past the device: its context needs {} of {} ({}){}",
                     p.process,
                     p.pid,
                     p.fingerprint.addr,
                     bytes(r["total_bytes"].as_u64().unwrap_or_default()),
                     bytes(r["ceiling"]["bytes"].as_u64().unwrap_or_default()),
-                    r["ceiling"]["source"].as_str().unwrap_or("device")
+                    r["ceiling"]["source"].as_str().unwrap_or("device"),
+                    headroom(*tokens_held, fits)
                 ),
                 remediation: format!(
                     "it will run out of accelerator memory as its context fills; {}{}{}",

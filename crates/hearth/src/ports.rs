@@ -544,10 +544,12 @@ fn describe(identity: &Identity) -> String {
             slots,
             health,
             models,
+            tokens_held,
         } => format!(
-            "llama.cpp · {} · ctx {} · slots {} · health {health}{}",
+            "llama.cpp · {} · ctx {}{} · slots {} · health {health}{}",
             model.as_deref().unwrap_or("?"),
             n_ctx.map_or("?".into(), |n| n.to_string()),
+            tokens_held.map_or(String::new(), |t| format!(" ({t} held)")),
             slots.map_or("?".into(), |n| n.to_string()),
             if models.len() > 1 {
                 format!(" · router: {}", list(models))

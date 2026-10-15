@@ -82,6 +82,7 @@ fn serving_means_a_runtime_with_the_expected_model() {
         slots: None,
         health: health.into(),
         models: vec![],
+        tokens_held: None,
     };
     assert!(serves(&llama("ok"), None));
     assert!(serves(&llama("ok"), Some("qwen3-8b")));

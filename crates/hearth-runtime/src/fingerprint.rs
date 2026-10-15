@@ -32,6 +32,10 @@ pub enum Identity {
         health: String,
         /// Router mode serves several models from one port.
         models: Vec<String>,
+        /// Tokens its slots hold in their KV cache now (`/slots`: each
+        /// slot's last prompt and what it decoded), when it says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens_held: Option<u64>,
     },
     ComfyUi {
         version: Option<String>,
@@ -250,6 +254,22 @@ fn ollama(p: &Prober, version: &Value) -> Identity {
     }
 }
 
+/// The tokens a llama-server's slots hold, from its `/slots`: each slot's
+/// last prompt plus what it decoded since. `None` when the answer is not
+/// that shape (`--no-slots`, another version).
+fn tokens_held(slots: &Value) -> Option<u64> {
+    slots.as_array()?.iter().try_fold(0u64, |sum, s| {
+        let prompt = s["n_prompt_tokens"].as_u64()?;
+        let decoded = s["next_token"]
+            .as_array()
+            .and_then(|t| t.first())
+            .or(Some(&s["next_token"]))
+            .and_then(|t| t["n_decoded"].as_u64())
+            .unwrap_or(0);
+        Some(sum.saturating_add(prompt).saturating_add(decoded))
+    })
+}
+
 fn identify_http(p: &Prober, first: &Probe) -> Identity {
     if let Some(props) = p.json("/props")
         && props.get("default_generation_settings").is_some()
@@ -272,6 +292,7 @@ fn identify_http(p: &Prober, first: &Probe) -> Identity {
             slots: props["total_slots"].as_u64(),
             health,
             models,
+            tokens_held: p.json("/slots").as_ref().and_then(tokens_held),
         };
     }
     if let Some(stats) = p.json("/system_stats")
