@@ -248,6 +248,47 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// Every source file of the workspace, for checking names against.
+    fn sources(dir: &std::path::Path, out: &mut String) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                sources(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push_str(&std::fs::read_to_string(&p).unwrap());
+            }
+        }
+    }
+
+    /// A field or argument a built-in workflow names (snake_case, so it is
+    /// an identifier, not prose) exists: as a tool's argument or in its
+    /// description, or as a field hearth reports. A renamed field cannot
+    /// leave a workflow pointing at nothing.
+    #[test]
+    fn workflows_name_only_fields_that_exist() {
+        let tools = include_str!("mcp-tools.json");
+        let mut code = String::new();
+        sources(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
+            &mut code,
+        );
+        for w in builtin() {
+            let template = w["template"].as_str().unwrap();
+            for word in template.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                let identifier = word.contains('_')
+                    && word.starts_with(|c: char| c.is_ascii_lowercase())
+                    && !word.ends_with('_');
+                if identifier {
+                    assert!(
+                        tools.contains(word) || code.contains(word),
+                        "{}: {word} is not a field or argument hearth has",
+                        w["name"]
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_workflow_naming_a_missing_tool_is_refused() {
         let tools = vec!["doctor".to_string()];
