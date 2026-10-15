@@ -102,11 +102,11 @@
       },
       {
         "name": "cache_type",
-        "description": "KV cache type to size with, e.g. q8_0 or f16 (default q8_0).",
+        "description": "KV cache type to size with, e.g. q8_0 or f16. Default: each model's own (an MLX model's dtype); GGUFs are then sized only if one is given.",
         "required": false,
-        "default": "q8_0"
+        "default": "the model's own"
       }
     ],
-    "template": "Find which models on this machine can run at {ctx} tokens of context with a {cache_type} KV cache. Only read: never download or load a model.\n\n1. Call `models` with ctx {ctx}, cache_type \"{cache_type}\" and serving true: every model on disk that the device holds at that context, its weights and largest context, and which ones a running server already serves.\n2. Call `doctor`: memory pressure and available memory now. A model that fits the device may still not fit beside what is loaded.\n3. Call `ports` with runtimes_only true: what is resident and how much memory each holds.\n\nAnswer with the models that fit, largest context headroom first, marking any already served (no load needed). For the best one that is not served, call `fit` with it, ctx {ctx} and cache_type \"{cache_type}\" to check fits_now, and say what would have to be unloaded first if it does not fit now. If none fits, say the largest context any model reaches (from `models` without ctx) or a smaller cache type to try."
+    "template": "Find which models on this machine can run at {ctx} tokens of context (KV cache type: {cache_type}). Only read: never download or load a model.\n\n1. Call `models` with ctx {ctx}, serving true, and cache_type \"{cache_type}\" unless that is \"the model's own\", in which case leave cache_type out: every model on disk that the device holds at that context, its weights and largest context, and which ones a running server already serves.\n2. Call `doctor`: memory pressure and available memory now. A model that fits the device may still not fit beside what is loaded.\n3. Call `ports` with runtimes_only true: what is resident and how much memory each holds.\n\nAnswer with the models that fit, largest context headroom first, marking any already served (no load needed). For the best one that is not served, call `fit` with it and ctx {ctx} (and the same cache_type, if one was given) to check fits_now, and say what would have to be unloaded first if it does not fit now. A quantized KV cache (q8_0 and smaller) for values needs flash attention (llama.cpp -fa on). If none fits, say the largest context any model reaches (from `models` without ctx) or a smaller cache type to try."
   }
 ]

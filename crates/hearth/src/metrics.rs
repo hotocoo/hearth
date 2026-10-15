@@ -84,9 +84,7 @@ pub fn render(servers: &[Value]) -> String {
         let cause = (last["event"] == "exited")
             .then(|| last["cause"].as_str())
             .flatten();
-        for candidate in
-            hearth_runtime::signals::Cause::ALL.map(hearth_runtime::signals::Cause::name)
-        {
+        for candidate in hearth_runtime::signals::Cause::ALL.iter().map(|c| c.name()) {
             let _ = writeln!(
                 out,
                 "hearth_server_exit_cause{{server=\"{}\",cause=\"{candidate}\"}} {}",

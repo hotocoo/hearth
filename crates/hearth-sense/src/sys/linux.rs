@@ -368,7 +368,8 @@ fn drm_vram(pid: i32) -> std::result::Result<u64, String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(format!("{info}: {e}")),
         };
-        if let Some((client, bytes)) = parse_drm_fdinfo(&text)
+        if let Some((client, bytes)) =
+            parse_drm_fdinfo(&text).map_err(|e| format!("{info}: {e}"))?
             && !clients.iter().any(|(c, _)| *c == client)
         {
             clients.push((client, bytes));
@@ -381,7 +382,7 @@ fn drm_vram(pid: i32) -> std::result::Result<u64, String> {
 /// Resident device memory (`drm-resident-vram0`, `drm-resident-local0`)
 /// when the kernel reports it; else the older per-region totals
 /// (`drm-memory-vram`), which also count buffers not resident there.
-fn parse_drm_fdinfo(text: &str) -> Option<(u64, u64)> {
+fn parse_drm_fdinfo(text: &str) -> std::result::Result<Option<(u64, u64)>, String> {
     let device = |region: &str| region.starts_with("vram") || region.starts_with("local");
     let mut client = None;
     let (mut resident, mut older) = (None::<u64>, None::<u64>);
@@ -412,11 +413,11 @@ fn parse_drm_fdinfo(text: &str) -> Option<(u64, u64)> {
             Some("MiB") => MIB,
             Some("GiB") => GIB,
             // A unit this does not know is not guessed at.
-            Some(_) => continue,
+            Some(other) => return Err(format!("{key}: unknown unit {other}")),
         };
         *slot = Some(slot.unwrap_or(0).saturating_add(n.saturating_mul(unit)));
     }
-    Some((client?, resident.or(older).unwrap_or(0)))
+    Ok(client.map(|c| (c, resident.or(older).unwrap_or(0))))
 }
 
 /// `pid, used_memory` lines in MiB; a process on several GPUs is summed.
@@ -727,13 +728,13 @@ mod tests {
         let apps = parse_compute_apps("4242, 20480\n77, 512\n4242, 1024\nbad\n");
         assert_eq!(apps, [(4242, 21504 * 1024 * 1024), (77, 512 * 1024 * 1024)]);
         let amd = "pos:\t0\nflags:\t02100002\ndrm-driver:\tamdgpu\ndrm-client-id:\t17\ndrm-memory-vram:\t8388608 KiB\ndrm-memory-gtt:\t2048 KiB\n";
-        assert_eq!(parse_drm_fdinfo(amd), Some((17, 8_589_934_592)));
-        assert_eq!(parse_drm_fdinfo("pos:\t0\nflags:\t0100002\n"), None);
+        assert_eq!(parse_drm_fdinfo(amd), Ok(Some((17, 8_589_934_592))));
+        assert_eq!(parse_drm_fdinfo("pos:\t0\nflags:\t0100002\n"), Ok(None));
         // Newer kernels: resident device memory wins over the totals.
         let xe = "drm-client-id:\t4\ndrm-total-vram0:\t4 GiB\ndrm-resident-vram0:\t3 GiB\ndrm-resident-system:\t1 GiB\ndrm-memory-vram0:\t4 GiB\n";
-        assert_eq!(parse_drm_fdinfo(xe), Some((4, 3 << 30)));
+        assert_eq!(parse_drm_fdinfo(xe), Ok(Some((4, 3 << 30))));
         let odd = "drm-client-id:\t5\ndrm-memory-vram:\t7 TiB\n";
-        assert_eq!(parse_drm_fdinfo(odd), Some((5, 0)));
+        assert!(parse_drm_fdinfo(odd).is_err());
     }
 
     #[test]

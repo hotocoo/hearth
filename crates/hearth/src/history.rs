@@ -344,12 +344,17 @@ fn mentions(value: &Value, needle: &str) -> bool {
 /// reads in the order things happened; the unreadable last.
 fn json_lines(report: &LogReport) -> Result<String, String> {
     let mut out = String::new();
-    for e in report.snapshots.iter().rev() {
-        let line = serde_json::to_string(e).map_err(|e| e.to_string())?;
+    for entry in report.snapshots.iter().rev() {
+        let line = serde_json::to_string(entry).map_err(|e| format!("{}: {e}", entry.id))?;
         let _ = writeln!(out, "{line}");
     }
+    // Same shape as a snapshot line, told apart by kind.
     for e in &report.unreadable {
-        let _ = writeln!(out, "{}", serde_json::json!({ "unreadable": e }));
+        let _ = writeln!(
+            out,
+            "{}",
+            serde_json::json!({ "kind": "unreadable", "error": e })
+        );
     }
     Ok(out)
 }

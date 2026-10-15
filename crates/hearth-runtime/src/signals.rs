@@ -71,7 +71,7 @@ pub enum Cause {
 
 impl Cause {
     /// Every cause, for consumers that list them all (metrics).
-    pub const ALL: [Self; 5] = [
+    pub const ALL: &[Self] = &[
         Self::ModelMissing,
         Self::LoadFailed,
         Self::OutOfMemory,
