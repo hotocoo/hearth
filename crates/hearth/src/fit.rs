@@ -844,8 +844,13 @@ fn render(r: &Report) -> String {
 /// all, as `hearth fit` computes it. Only the device ceiling is checked: it
 /// does not move, while what is free now is provisional (ADR-000) and is
 /// the supervisor's to find out.
-pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Verdict {
-    let line: Vec<String> = [
+pub(crate) fn fits_device(
+    model: &str,
+    ctx: u64,
+    cache: &str,
+    projector: Option<&std::path::Path>,
+) -> Verdict {
+    let mut line: Vec<String> = [
         "hearth",
         "--json",
         "fit",
@@ -853,12 +858,14 @@ pub(crate) fn fits_device(model: &str, ctx: u64, cache: &str) -> Verdict {
         &ctx.to_string(),
         "--cache-type",
         cache,
-        "--",
-        model,
     ]
     .iter()
     .map(|s| (*s).to_string())
     .collect();
+    if let Some(p) = projector {
+        line.push(format!("--mmproj={}", p.display()));
+    }
+    line.extend(["--".to_string(), model.to_string()]);
     let report: serde_json::Value = match crate::dispatch(&line)
         .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
     {
@@ -905,9 +912,8 @@ pub(crate) enum Verdict {
 /// "fits" verdict is kept for later starts.
 pub(crate) fn start_check(
     label: String,
-    model: String,
-    ctx: u64,
-    cache: String,
+    (model, ctx, cache): (String, u64, String),
+    projector: Option<PathBuf>,
 ) -> impl Fn() -> Result<(), String> + Send {
     let known: std::sync::Mutex<Option<Result<(), String>>> = std::sync::Mutex::new(None);
     move || {
@@ -917,7 +923,7 @@ pub(crate) fn start_check(
         if let Some(verdict) = known.as_ref() {
             return verdict.clone();
         }
-        match fits_device(&model, ctx, &cache) {
+        match fits_device(&model, ctx, &cache, projector.as_deref()) {
             Verdict::Fits => {
                 *known = Some(Ok(()));
                 Ok(())

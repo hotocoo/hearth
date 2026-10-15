@@ -337,10 +337,19 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
             _ => m,
         }
     });
+    // The projector the command loads counts too, where it can be found.
+    let projector = crate::fit::projector_arg(&command)
+        .map(|p| match &server.dir {
+            Some(d) if p.is_relative() => d.join(p),
+            _ => p,
+        })
+        .filter(|p| p.is_file());
     let check = model_path
         .zip(server.ctx)
         .zip(server.cache_type.clone())
-        .map(|((m, c), t)| crate::fit::start_check(format!("[{}]", server.port), m, c, t));
+        .map(|((m, c), t)| {
+            crate::fit::start_check(format!("[{}]", server.port), (m, c, t), projector.clone())
+        });
     let make = Box::new(move || {
         if let Some(check) = &check {
             check()?;

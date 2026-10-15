@@ -216,6 +216,26 @@ pub(crate) fn footprint_at_ready(
     };
 }
 
+/// The fit check run before each start, when --model, --ctx and
+/// --cache-type say what the server loads; the projector its command
+/// loads counts too, where it can be found.
+fn fit_check(
+    args: &Args,
+    addr: std::net::SocketAddr,
+) -> Option<impl Fn() -> Result<(), String> + Send + use<>> {
+    let words: Vec<String> = args
+        .command
+        .iter()
+        .map(|w| w.to_string_lossy().into_owned())
+        .collect();
+    let projector = crate::fit::projector_arg(&words).filter(|p| p.is_file());
+    args.model
+        .clone()
+        .zip(args.ctx)
+        .zip(args.cache_type.clone())
+        .map(|((m, c), t)| crate::fit::start_check(format!("[{addr}]"), (m, c, t), projector))
+}
+
 /// What `hearth run` records of one event.
 fn journal_record(
     addr: std::net::SocketAddr,
@@ -399,12 +419,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         eprintln!("hearth: run events will not be recorded: {e}");
     }
     let mut sending = Vec::new();
-    let check = args
-        .model
-        .clone()
-        .zip(args.ctx)
-        .zip(args.cache_type.clone())
-        .map(|((m, c), t)| crate::fit::start_check(format!("[{}]", probe.addr), m, c, t));
+    let check = fit_check(args, probe.addr);
     let make = Box::new(move || {
         if let Some(check) = &check {
             check()?;
