@@ -116,6 +116,8 @@ A test fails when a workflow names a tool that does not exist. The workflows the
 ## Addendum (2026-10-15): `fit --port`
 
 `hearth fit --port P` asks the server on `P`, with the same read-only fingerprint as `ports`, which model it serves, and fits that file at the context given.
+
+For a llama.cpp server, "fits right now" counts the memory the server already holds as available: a restart at another size frees it first. This applies on unified memory only. An Ollama daemon is not counted, because its model lives in a runner child.
 - **llama.cpp** reports its model file.
 - **Ollama** reports the models it has loaded. One loaded model is used directly; with several, `--model` picks which. The weights are then found in Ollama's store.
 
