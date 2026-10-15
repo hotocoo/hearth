@@ -19,6 +19,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/api/"):
+            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
+            return
         if self.path == "/slow":
             self.send_response(200); self.end_headers()
             try:
@@ -31,6 +34,19 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path == "/v1/chat/completions":
+            ask = json.loads(body)
+            said = ask["messages"][-1]["content"]
+            if ask.get("stream"):
+                self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+                for piece in [said[:2], said[2:]]:
+                    self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": piece}, "finish_reason": None}]}) + "\n\n").encode())
+                self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]}) + "\n\n").encode())
+                self.wfile.write(("data: " + json.dumps({"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 2}}) + "\n\ndata: [DONE]\n\n").encode())
+                return
+            b = json.dumps({"choices": [{"message": {"content": said}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 2}}).encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+            return
         if self.path == "/flaky" and not os.path.exists("flaked"):
             open("flaked", "w").close()
             os._exit(1)

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use hearth_core::config::Gateway;
 
+mod ollama;
 mod queue;
 mod retry;
 use serde_json::{Value, json};
@@ -320,6 +321,27 @@ fn handle(
             );
         }
     };
+    if ollama::endpoint(&forward).is_some() {
+        let Some(length) = retry::keepable_length(&head, config.translate_body_bytes) else {
+            return reply(
+                &mut client,
+                &refuse(
+                    "413 Content Too Large",
+                    "bad_request",
+                    format!(
+                        "an Ollama request needs a Content-Length of at most {} bytes",
+                        config.translate_body_bytes
+                    ),
+                    "send a smaller request, or raise gateway.translate_body_bytes".into(),
+                ),
+            );
+        };
+        let body = retry::read_body(&mut client, length, head_time)?;
+        if ollama::serve(&mut client, &forward, &body, config)? {
+            return Ok(());
+        }
+        return with_retries(client, &head, forward, &body, config, servers, deadline);
+    }
     if let Some(length) = retry::keepable_length(&head, config.retry_body_bytes) {
         let body = retry::read_body(&mut client, length, head_time)?;
         return with_retries(client, &head, forward, &body, config, servers, deadline);

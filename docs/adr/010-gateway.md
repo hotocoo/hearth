@@ -50,3 +50,18 @@ Not in this slice: API translation, retry before the first token, admission from
 - **One deadline.** Time in the queue counts toward `gateway.ready_wait_ms`, like waiting for a restart and retrying. A request still waiting at the deadline gets a 503 `queue_full`, saying how many were running or ahead.
 - **Priorities, quotas and shedding by deadline** are not built. They need real traffic from several apps to set sensibly.
 - **Tests.** Unit tests check the order of turns across and within apps, a request that gives up leaving the line, and a full server letting the next request in when one finishes.
+
+## Addendum (2026-10-15): Ollama's API translated
+
+- **Why.** llama.cpp answers OpenAI's and Anthropic's APIs but not Ollama's: `/api/chat`, `/api/generate`, `/api/tags` and `/api/version` all return 404 from llama-server (checked on b11429). Many tools only speak Ollama.
+- **What.** For those four endpoints the gateway first asks the server's `/api/version`. A server that answers it speaks Ollama, and gets the request as is. Otherwise:
+  - `/api/chat` and `/api/generate` become `/v1/chat/completions`; `generate`'s `system` and `prompt` become messages.
+  - Options map to their OpenAI names (`num_predict` to `max_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `seed`, `stop` and the penalties); others are dropped. `format` becomes `response_format`.
+  - Images become data-URL content parts. Tool definitions pass through, and tool calls come back with their arguments as objects. Streamed tool-call fragments are gathered and sent whole on the last line.
+  - Streamed answers come back as NDJSON: one line per piece, then a `done` line with `done_reason`, `prompt_eval_count`, `eval_count` and `total_duration`.
+  - `/api/tags` lists `/v1/models`, and `/api/version` answers hearth's own version.
+- **Bounds.** A translated request's body is read whole, up to `gateway.translate_body_bytes`. A translated request is not retried; if the server turns out to speak Ollama, the body goes through the normal retrying path.
+- **Checked.**
+  - Against a real llama-server (Qwen2.5 0.5B, `--jinja`): chat whole and streamed, generate, tags, and a tool call, both whole and streamed.
+  - With the official `ollama` Python client: `list`, `chat`, streamed `chat` and `generate`.
+  - The end-to-end test talks to a fake OpenAI-only server, both whole and streamed.

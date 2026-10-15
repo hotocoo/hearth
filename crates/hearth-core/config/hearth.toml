@@ -252,6 +252,11 @@ retry_grace_ms = 3000
 # toward ready_wait_ms. 0 turns queuing off: everything goes straight on.
 per_server_concurrency = 0
 
+# Largest Ollama-API request (/api/chat, /api/generate) translated for a
+# server that only speaks OpenAI's API. The body is read whole to translate
+# it, so this bounds what one request holds; images in base64 count.
+translate_body_bytes = 33554432
+
 # Requests forwarded at once; one beyond this is told the gateway is busy.
 max_clients = 64
 

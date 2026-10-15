@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 mod common;
 use common::*;
@@ -146,6 +146,47 @@ fn check_stopped(dir: &Path, port: u16, metrics: u16, gateway: u16) {
     );
 }
 
+/// An Ollama client reaches a server that speaks only OpenAI's API: chat
+/// answered whole, and streamed as NDJSON ending in a `done` line.
+fn check_ollama(gateway: u16) {
+    use std::io::{Read, Write};
+    let ask = |stream: bool| {
+        let body = format!(
+            r#"{{"model":"m","stream":{stream},"messages":[{{"role":"user","content":"hello"}}]}}"#
+        );
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
+        write!(
+            s,
+            "POST /s/e2e/api/chat HTTP/1.1\r\nHost: test\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut reply = String::new();
+        s.read_to_string(&mut reply).unwrap();
+        reply
+            .split("\r\n\r\n")
+            .nth(1)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let whole: Value = serde_json::from_str(&ask(false)).unwrap();
+    assert_eq!(whole["message"]["content"], "hello", "{whole}");
+    assert_eq!(
+        (whole["done"].clone(), whole["eval_count"].clone()),
+        (json!(true), json!(2))
+    );
+    let lines: Vec<Value> = ask(true)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let text: String = lines
+        .iter()
+        .filter_map(|l| l["message"]["content"].as_str())
+        .collect();
+    assert_eq!(text, "hello", "{lines:?}");
+    assert_eq!(lines.last().unwrap()["done_reason"], "stop", "{lines:?}");
+}
+
 /// A server that dies before answering gets the request again, body and
 /// all, once hearthd has it back.
 fn check_retry(dir: &Path, gateway: u16) {
@@ -186,6 +227,7 @@ fn check_gateway(dir: &Path, gateway: u16) {
     );
     gateway_says(gateway, "/s/nope/v1/models", "HTTP/1.1 404", "servers: e2e");
     check_retry(dir, gateway);
+    check_ollama(gateway);
     // A request that arrives during a restart is held until the server is
     // back, not refused.
     let (_, before) = state(dir).unwrap();

@@ -69,6 +69,7 @@ pub struct Gateway {
     pub retry_body_bytes: u64,
     pub retry_grace_ms: u64,
     pub per_server_concurrency: u64,
+    pub translate_body_bytes: u64,
     pub max_clients: u64,
 }
 
@@ -119,6 +120,7 @@ impl Gateway {
             ("gateway.ready_wait_ms", self.ready_wait_ms),
             ("gateway.ready_poll_ms", self.ready_poll_ms),
             ("gateway.retry_grace_ms", self.retry_grace_ms),
+            ("gateway.translate_body_bytes", self.translate_body_bytes),
             ("gateway.max_clients", self.max_clients),
         ] {
             if value == 0 {

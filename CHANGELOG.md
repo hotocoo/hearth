@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 20:45 Ollama's API in front of llama.cpp
+
+- **Ollama clients work with llama.cpp.** Through the gateway, `/api/chat`, `/api/generate`, `/api/tags` and `/api/version` are translated to OpenAI's API for servers that do not speak Ollama's. This covers streaming as NDJSON, options, JSON format, images and tool calls. A server that speaks Ollama itself is passed through.
+- **Checked with the real client.** The official `ollama` Python library listed, chatted, streamed and generated against a llama-server through the gateway.
+
 ### 2026-10-15 20:15 one load at a time
 
 - **Serialized loads.** hearthd starts one server at a time: a server about to start waits while another is still loading, so two models never fill memory together. `supervise.serialize_loads`, on by default. This is ADR-000's fallback until its measurement gate can run.
