@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:45 draft model fixes
+
+- **Draft cache size.** It follows llama.cpp: `-cd` is per slot. Each cache type defaults to f16 on its own.
+- **Drafts not counted.** A draft kept on the CPU, downloaded with `-hfd`, or not readable from hearth's working directory is not counted, and a note says why.
+- **Code layout.** `ports.rs` and `fit.rs` are split into modules, each under 800 lines.
+
 ### 2026-10-15 08:38 draft models
 
 - `fit --draft FILE` counts a speculative-decoding draft model's weights and its own KV cache. `fit --port` and the `ports` oversized check read the server's `-md`, `-cd` and `-ctkd`.
