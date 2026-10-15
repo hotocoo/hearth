@@ -15,6 +15,8 @@ pub mod daemon;
 mod doctor;
 mod draft;
 mod fit;
+#[cfg(unix)]
+mod gateway;
 mod history;
 mod incidents;
 mod mcp;

@@ -2,7 +2,7 @@
 
 **A control plane for local inference.** One daemon in front of every model runtime on a machine (llama.cpp, MLX, Ollama, LM Studio, ComfyUI, anything OpenAI-compatible), so that many apps can share one box without it OOMing, wedging or panicking.
 
-> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (inspection, history, supervision, workflows and an MCP server; `hearth --help` lists every command) and `hearthd`, which keeps configured model servers alive, checks they fit before starting them, and watches the machine. hearthd does not proxy inference yet; nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
+> Status: **P2 in progress.** Shipped: `hearth-probe` (measurement instrument), the `hearth` CLI (inspection, history, supervision, workflows and an MCP server; `hearth --help` lists every command) and `hearthd`, which keeps configured model servers alive, checks they fit before starting them, and watches the machine. Its gateway forwards requests to those servers by name, with typed errors and cancellation; translation, retry, admission and scheduling are not built yet, and nothing below the "Planned" line has shipped. Each phase lands implemented, tested on real runtimes, and documented ([docs/adr](docs/adr)), or it does not land.
 
 ## Why
 
@@ -103,6 +103,8 @@ cargo build --release -p hearth
 ./target/release/hearth --json top          # the same frame as one document, for scripts and agents
 ./target/release/hearth service install     # run hearthd at login: launchd on macOS, systemd user unit on Linux
 #   [metrics] listen = "127.0.0.1:9469" in your config: hearthd serves Prometheus metrics at /metrics
+#   [gateway] listen = "127.0.0.1:9470": clients use http://127.0.0.1:9470/s/NAME/v1 as their base URL;
+#   a stopped or unknown server gets a JSON error with a remediation, and a client that leaves cancels its request
 ```
 
 Every command takes `--json`. Every finding carries a `remediation`. Every setting, with its default and meaning, is in [docs/configuration.md](docs/configuration.md).
@@ -144,11 +146,9 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - A classifier sorts failures as transient, capacity, poisoned, wedged or model-missing. It uses latency signatures, stderr and HTTP evidence.
   - Owned runtimes are restarted and the request is retried, as long as no token has reached the client yet. Restart on exit, wedge or a poisoned backend, with the SIGKILL escalation and crash-loop limit, already ships in `hearth run` and `hearthd` (ADR-004, ADR-007). The request-level classifier and the retry come with the gateway.
   - Runtimes hearth did not start are never killed.
-- **Gateway.**
+- **Gateway, beyond forwarding.** Forwarding by name, typed errors and structural cancellation ship (ADR-010). Still to come:
   - OpenAI, Anthropic Messages and Ollama APIs, translated as needed.
-  - Cancellation is structural: when a client disconnects, the upstream is aborted and the slot freed.
   - One deadline covers queue time and every retry.
-  - Errors are typed and carry a `remediation` field.
 - **Scheduling.** Priority classes, fair queuing across apps, quotas and deadline-aware shedding.
 - **For people and agents.**
   - MCP `load`, `unload` and `drain` on runtimes hearth owns, next to the `restart` that ships. Runtimes hearth did not start are refused, with the reason.

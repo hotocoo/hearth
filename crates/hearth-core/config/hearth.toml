@@ -189,6 +189,33 @@ recent_events = 50
 # metrics name the servers this machine runs.
 # listen = "127.0.0.1:9469"
 
+[gateway]
+# Where hearthd forwards requests to the servers it keeps: a request for
+# /s/NAME/REST goes to server NAME as /REST, so a client's base URL is
+# http://LISTEN/s/NAME/v1. A server that is not ready, or not configured,
+# gets a JSON error saying what to do instead of a hang. Unset means off.
+# Keep it on loopback: it forwards to the servers with no authentication.
+# listen = "127.0.0.1:9470"
+
+# Most bytes of one request's line and headers. Bodies are not limited:
+# they stream through to the server as they arrive.
+max_head_bytes = 65536
+
+# How long a client may take to send its request line and headers.
+head_timeout_ms = 10000
+
+# How long connecting to the server may take before the client is told it
+# could not be reached.
+connect_timeout_ms = 2000
+
+# How long a request may go without a byte from the server before both
+# sides are closed. Long enough for a large prompt's prefill, which sends
+# nothing until the first token.
+idle_timeout_ms = 600000
+
+# Requests forwarded at once; one beyond this is told the gateway is busy.
+max_clients = 64
+
 # Servers hearthd starts and keeps alive, one table each, named
 # [servers.NAME] in your own file: port (where it listens), command (the
 # program and its arguments, as a list), and optionally host (the address to

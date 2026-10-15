@@ -221,7 +221,11 @@ fn machine(out: &mut String) {
 /// before `deadline` in total: each read waits at most the time left when
 /// reading began, and the deadline is checked after every byte, so a client
 /// sending a byte at a time cannot hold the handler.
-fn read_head(stream: &TcpStream, max: u64, deadline: Instant) -> std::io::Result<String> {
+pub(crate) fn read_head(
+    stream: &TcpStream,
+    max: u64,
+    deadline: Instant,
+) -> std::io::Result<String> {
     use std::io::{Error, ErrorKind, Read as _};
     let left = || {
         deadline

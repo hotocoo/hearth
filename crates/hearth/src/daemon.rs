@@ -715,23 +715,27 @@ pub fn run() -> Result<(), String> {
             .spawn(move || crate::watch::forever(&config))
             .map_err(|e| format!("cannot start watching: {e}"))?;
     }
+    let servers: crate::gateway::Servers = {
+        let board = board.clone();
+        Arc::new(move || {
+            lock(&board)
+                .values()
+                .filter_map(|s| serde_json::to_value(s).ok())
+                .collect()
+        })
+    };
     if let Some(addr) = config.metrics.listen {
         let listener =
             std::net::TcpListener::bind(addr).map_err(|e| format!("metrics.listen {addr}: {e}"))?;
-        let (board, control) = (board.clone(), config.control.clone());
+        let (servers, control) = (servers.clone(), config.control.clone());
         std::thread::Builder::new()
             .name("metrics".into())
-            .spawn(move || {
-                let servers: Arc<dyn Fn() -> Vec<Value> + Send + Sync> = Arc::new(move || {
-                    lock(&board)
-                        .values()
-                        .filter_map(|s| serde_json::to_value(s).ok())
-                        .collect()
-                });
-                crate::metrics::serve(&listener, &control, &servers);
-            })
+            .spawn(move || crate::metrics::serve(&listener, &control, &servers))
             .map_err(|e| format!("cannot start serving metrics: {e}"))?;
         log(&format!("hearthd: metrics on http://{addr}/metrics"));
+    }
+    if let Some(addr) = crate::gateway::start(&config.gateway, &servers)? {
+        log(&format!("hearthd: gateway on http://{addr}/s/NAME/"));
     }
     log(&format!(
         "hearthd: keeping {} server(s); control socket {}",

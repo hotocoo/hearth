@@ -4,6 +4,14 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 16:30 gateway
+
+- **One address for hearthd's servers.** Set `[gateway] listen` and point a client's base URL at `http://LISTEN/s/NAME/v1`: requests reach server NAME unchanged, streaming included.
+- **Errors that say what to do.** A stopped, starting or given-up server, an unknown name, a refused port or a silent server get a JSON error with a `remediation` (`hearth start NAME`, the names hearthd keeps), not a hang.
+- **Cancellation.** A client that disconnects closes the server's connection, so the server stops generating for it.
+- **Not yet.** No API translation, retry, admission or scheduling (ADR-010).
+- **Code layout.** `hearth-core`'s config tests move beside `config.rs`.
+
 ### 2026-10-15 15:40 hearthd watches without servers
 
 - **No servers needed.** hearthd with no `[servers]` now starts and only watches the machine, recording doctor and ports rounds. Before, it refused, so a box with no hearth-owned server could not keep history without a terminal open on `hearth watch`.

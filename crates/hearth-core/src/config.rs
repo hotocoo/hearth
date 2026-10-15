@@ -23,6 +23,7 @@ pub struct Config {
     pub servers: std::collections::BTreeMap<String, Server>,
     pub control: Control,
     pub metrics: Metrics,
+    pub gateway: Gateway,
     pub pressure: Pressure,
     pub accelerators: Accelerators,
     pub bundle: Bundle,
@@ -51,6 +52,34 @@ pub struct Pressure {
 #[serde(deny_unknown_fields)]
 pub struct Metrics {
     pub listen: Option<std::net::SocketAddr>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gateway {
+    pub listen: Option<std::net::SocketAddr>,
+    pub max_head_bytes: u64,
+    pub head_timeout_ms: u64,
+    pub connect_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
+    pub max_clients: u64,
+}
+
+impl Gateway {
+    fn positive(&self) -> Result<(), ConfigError> {
+        for (key, value) in [
+            ("gateway.max_head_bytes", self.max_head_bytes),
+            ("gateway.head_timeout_ms", self.head_timeout_ms),
+            ("gateway.connect_timeout_ms", self.connect_timeout_ms),
+            ("gateway.idle_timeout_ms", self.idle_timeout_ms),
+            ("gateway.max_clients", self.max_clients),
+        ] {
+            if value == 0 {
+                return invalid(key, &0, AT_LEAST_ONE);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -268,6 +297,7 @@ impl Config {
 
     /// Counts and durations for which zero means nothing.
     fn positive(&self) -> Result<(), ConfigError> {
+        self.gateway.positive()?;
         let (d, v, w) = (&self.discovery, &self.supervise, &self.watch);
         let gone = "must be at least 1, or a snapshot would be deleted as it is written";
         for (key, value, reason) in [
@@ -505,93 +535,7 @@ fn merge(base: &mut toml::Table, overlay: toml::Table) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base_layer_parses() {
-        from_layers(None).unwrap();
-    }
-
-    #[test]
-    fn overlay_replaces_only_its_keys() {
-        let base = from_layers(None).unwrap();
-        let wanted = base.discovery.first_contact_timeout_ms + 1;
-        let cfg = from_layers(Some((
-            "test",
-            &format!("[discovery]\nfirst_contact_timeout_ms = {wanted}\n"),
-        )))
-        .unwrap();
-        assert_eq!(cfg.discovery.first_contact_timeout_ms, wanted);
-    }
-
-    #[test]
-    fn meaningless_values_are_rejected() {
-        for bad in [
-            "[discovery]\nlearned_deadline_multiplier = 0.5\n",
-            "[discovery]\nlearned_deadline_multiplier = nan\n",
-            "[discovery]\nlearned_min_samples = 0\n",
-            "[state]\nmax_snapshots_per_kind = 0\n",
-            "[supervise]\nunresponsive_probes = 0\n",
-            "[supervise]\nbackoff_start_ms = 9\nbackoff_max_ms = 8\n",
-            "[supervise]\nbackoff_max_ms = 60001\n",
-            "[supervise]\nbackoff_factor = 0\n",
-            "[notify]\nwebhook_url = \"file:///etc/passwd\"\n",
-            "[[state.tiers]]\nwithin_ms = 2\nevery_ms = 0\n[[state.tiers]]\nwithin_ms = 1\nevery_ms = 0\n",
-            "[state]\nthinned_kinds = [\"doctr\"]\n",
-            "[control]\nmax_clients = 0\n",
-            "[accelerators]\nquery_timeout_ms = 0\n",
-            "[discovery]\nfirst_contact_timeout_ms = 10\nlearned_deadline_floor_ms = 11\n",
-        ] {
-            assert!(
-                matches!(
-                    from_layers(Some(("test", bad))),
-                    Err(ConfigError::Invalid { .. })
-                ),
-                "{bad}"
-            );
-        }
-    }
-
-    /// What the clock can represent differs by platform, so the check is
-    /// that a value either fails validation or can be used, never panics.
-    #[test]
-    fn huge_durations_are_rejected_or_usable() {
-        let text = format!("[supervise]\nrestart_window_ms = {}\n", i64::MAX);
-        if let Ok(cfg) = from_layers(Some(("test", &text))) {
-            let _ = std::time::Instant::now()
-                + std::time::Duration::from_millis(cfg.supervise.restart_window_ms);
-        }
-    }
-
-    #[test]
-    fn servers_are_parsed_and_checked() {
-        let one = "[servers.qwen]\nport = 8081\ncommand = [\"llama-server\", \"-m\", \"q.gguf\"]\n";
-        let cfg = from_layers(Some(("test", one))).unwrap();
-        assert_eq!(cfg.servers["qwen"].command[0], "llama-server");
-        for bad in [
-            "[servers.qwen]\nport = 8081\ncommand = []\n",
-            "[servers.\"a b\"]\nport = 8081\ncommand = [\"x\"]\n",
-            "[servers.a]\nport = 1\ncommand = [\"x\"]\n[servers.b]\nport = 1\ncommand = [\"y\"]\n",
-            "[servers.a]\nport = 1\ncommand = [\"x\"]\nmodel = \"m.gguf\"\n",
-        ] {
-            assert!(
-                matches!(
-                    from_layers(Some(("test", bad))),
-                    Err(ConfigError::Invalid { .. })
-                ),
-                "{bad}"
-            );
-        }
-    }
-
-    #[test]
-    fn typos_are_rejected() {
-        let err =
-            from_layers(Some(("test", "[discovery]\nfirst_contact_timout_ms = 1\n"))).unwrap_err();
-        assert!(err.to_string().contains("test"));
-    }
-}
+mod tests;
 
 /// One effective setting: its value, where that value came from, and what
 /// the shipped file says it means.

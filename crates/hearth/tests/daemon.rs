@@ -17,13 +17,22 @@ import sys, json
 import os
 print("e2e server starting", flush=True)
 print("mark", os.environ.get("E2E_MARK"), "in", os.getcwd(), flush=True)
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/slow":
+            self.send_response(200); self.end_headers()
+            try:
+                for _ in range(600):
+                    self.wfile.write(b"x\n"); self.wfile.flush(); time.sleep(0.05)
+            except OSError:
+                open("cancelled", "w").close()
+            return
         b = json.dumps({"data": [{"id": "e2e-model"}]}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def log_message(self, *a): pass
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 "#;
 
 const LIMIT: Duration = Duration::from_secs(60);
@@ -59,14 +68,14 @@ const CONTROL_TIMEOUT_MS: u64 = 1000;
 const DOCTOR_INTERVAL_MS: u64 = 200;
 const PORTS_INTERVAL_MS: u64 = 1000;
 
-/// `metrics` is where hearthd serves `/metrics`.
-fn config(dir: &Path, port: u16, metrics: u16) {
+/// `metrics` is where hearthd serves `/metrics`, `gateway` its gateway.
+fn config(dir: &Path, port: u16, metrics: u16, gateway: u16) {
     let script = dir.join("server.py");
     std::fs::write(&script, SERVER).unwrap();
     std::fs::write(
         dir.join("hearth.toml"),
         format!(
-            "[control]\ntimeout_ms = {CONTROL_TIMEOUT_MS}\nmax_message_bytes = {MAX_MESSAGE_BYTES}\n[watch]\ndoctor_interval_ms = {DOCTOR_INTERVAL_MS}\nports_interval_ms = {PORTS_INTERVAL_MS}\n[metrics]\nlisten = \"127.0.0.1:{metrics}\"\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
+            "[control]\ntimeout_ms = {CONTROL_TIMEOUT_MS}\nmax_message_bytes = {MAX_MESSAGE_BYTES}\n[watch]\ndoctor_interval_ms = {DOCTOR_INTERVAL_MS}\nports_interval_ms = {PORTS_INTERVAL_MS}\n[metrics]\nlisten = \"127.0.0.1:{metrics}\"\n[gateway]\nlisten = \"127.0.0.1:{gateway}\"\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
             script.display(),
             dir.display()
         ),
@@ -129,6 +138,59 @@ fn gauge(port: u16, server: &str, state: &str) -> bool {
     reply.contains(&format!(
         "hearth_server_state{{server=\"{server}\",state=\"{state}\"}} 1"
     ))
+}
+
+/// One request through hearthd's gateway, as raw HTTP.
+fn http(port: u16, path: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(s, "GET {path} HTTP/1.1\r\nHost: test\r\n\r\n").unwrap();
+    let mut reply = String::new();
+    s.read_to_string(&mut reply).unwrap();
+    reply
+}
+
+/// Stopped on request, the server frees its port; metrics say so, and the
+/// gateway tells a client how to start it.
+fn check_stopped(dir: &Path, port: u16, metrics: u16, gateway: u16) {
+    hearth(dir, &["stop", "e2e"]).unwrap();
+    wait_until("stopped", || {
+        state(dir).is_some_and(|(s, _)| s == "stopped") && !listening(port)
+    });
+    assert!(gauge(metrics, "e2e", "stopped"), "metrics while stopped");
+    gateway_says(
+        gateway,
+        "/s/e2e/v1/models",
+        "HTTP/1.1 503",
+        "hearth start e2e",
+    );
+}
+
+/// The gateway answers `path` with `status` and a reply mentioning `says`.
+fn gateway_says(gateway: u16, path: &str, status: &str, says: &str) {
+    let reply = http(gateway, path);
+    assert!(reply.starts_with(status) && reply.contains(says), "{reply}");
+}
+
+/// The gateway forwards to a ready server by name, says what to do about a
+/// name it does not keep, and closes the server's connection when the
+/// client goes.
+fn check_gateway(dir: &Path, gateway: u16) {
+    use std::io::{Read, Write};
+    let ok = http(gateway, "/s/e2e/v1/models");
+    assert!(
+        ok.starts_with("HTTP/1.0 200") && ok.contains("e2e-model"),
+        "{ok}"
+    );
+    gateway_says(gateway, "/s/nope/v1/models", "HTTP/1.1 404", "servers: e2e");
+    let mut slow = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
+    write!(slow, "GET /s/e2e/slow HTTP/1.1\r\nHost: test\r\n\r\n").unwrap();
+    let mut first = [0u8; 64];
+    assert!(slow.read(&mut first).unwrap() > 0, "the stream began");
+    drop(slow);
+    wait_until("the server to see its client go", || {
+        dir.join("cancelled").exists()
+    });
 }
 
 /// hearthd watches the machine too: its rounds are in the journal, and a
@@ -281,8 +343,8 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         return;
     }
     let dir = home("e2e");
-    let (port, metrics) = (free_port(), free_port());
-    config(&dir, port, metrics);
+    let (port, metrics, gateway) = (free_port(), free_port(), free_port());
+    config(&dir, port, metrics, gateway);
     assert!(
         hearth(&dir, &["status"])
             .unwrap_err()
@@ -321,12 +383,9 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     // Stopped on request it stays down, and frees its port; started, it
     // comes back.
     // Metrics say the same as status, at every step.
+    check_gateway(&dir, gateway);
     assert!(gauge(metrics, "e2e", "ready"), "metrics while ready");
-    hearth(&dir, &["stop", "e2e"]).unwrap();
-    wait_until("stopped", || {
-        state(&dir).is_some_and(|(s, _)| s == "stopped") && !listening(port)
-    });
-    assert!(gauge(metrics, "e2e", "stopped"), "metrics while stopped");
+    check_stopped(&dir, port, metrics, gateway);
     hearth(&dir, &["start", "e2e"]).unwrap();
     wait_until("ready again", || {
         state(&dir).is_some_and(|(s, _)| s == "ready")
@@ -476,7 +535,7 @@ fn hearthd_without_servers_only_watches() {
 #[test]
 fn hearthd_never_removes_what_is_not_its_socket() {
     let dir = home("notsock");
-    config(&dir, free_port(), free_port());
+    config(&dir, free_port(), free_port(), free_port());
     std::fs::create_dir_all(dir.join("state")).unwrap();
     std::fs::set_permissions(
         dir.join("state"),
@@ -496,7 +555,7 @@ fn hearthd_never_removes_what_is_not_its_socket() {
 #[test]
 fn hearthd_refuses_a_state_directory_others_can_enter() {
     let dir = home("open");
-    config(&dir, free_port(), free_port());
+    config(&dir, free_port(), free_port(), free_port());
     std::fs::create_dir_all(dir.join("state")).unwrap();
     std::fs::set_permissions(
         dir.join("state"),
