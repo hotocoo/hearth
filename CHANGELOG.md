@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 14:43 end-to-end coverage
+
+- **More of hearthd tested as built.** The end-to-end test now reads `/metrics`, restarts a server through `hearth mcp`, and finds hearthd's watch rounds in the journal. A second test takes a crash loop to `gave_up` and checks the webhook hears of it.
+- **Limits from one place.** The oversized request and the stalled client are sized from the control limits the test configures, not separate numbers.
+
 ### 2026-10-15 09:32 tokens held fixes
 
 - **No `overfull` finding.** The tokens read from `/slots` are only a guide, so a finding keyed on them would open and close at random. They now appear only in the oversized warning, which says about how many tokens the last requests used.

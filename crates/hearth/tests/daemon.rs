@@ -51,13 +51,22 @@ fn hearthd(dir: &Path) -> Command {
     c
 }
 
-fn config(dir: &Path, port: u16) {
+/// The control socket's limits, small so the test can pass them; the
+/// oversized request and the stalled client are sized from these.
+const MAX_MESSAGE_BYTES: usize = 1024;
+const CONTROL_TIMEOUT_MS: u64 = 1000;
+/// Watch rounds short enough that hearthd records several during the test.
+const DOCTOR_INTERVAL_MS: u64 = 200;
+const PORTS_INTERVAL_MS: u64 = 1000;
+
+/// `metrics` is where hearthd serves `/metrics`.
+fn config(dir: &Path, port: u16, metrics: u16) {
     let script = dir.join("server.py");
     std::fs::write(&script, SERVER).unwrap();
     std::fs::write(
         dir.join("hearth.toml"),
         format!(
-            "[control]\ntimeout_ms = 1000\nmax_message_bytes = 1024\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
+            "[control]\ntimeout_ms = {CONTROL_TIMEOUT_MS}\nmax_message_bytes = {MAX_MESSAGE_BYTES}\n[watch]\ndoctor_interval_ms = {DOCTOR_INTERVAL_MS}\nports_interval_ms = {PORTS_INTERVAL_MS}\n[metrics]\nlisten = \"127.0.0.1:{metrics}\"\n[servers.e2e]\nport = {port}\nexpect = \"e2e\"\ncommand = [\"python3\", \"{}\", \"{port}\"]\ndir = \"{}\"\nenv = {{ E2E_MARK = \"on\" }}\n",
             script.display(),
             dir.display()
         ),
@@ -108,6 +117,79 @@ fn listening(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
+/// Whether hearthd's `/metrics` on `port` has `server` in `state`.
+fn gauge(port: u16, server: &str, state: &str) -> bool {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.write_all(b"GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n")
+        .unwrap();
+    let mut reply = String::new();
+    s.read_to_string(&mut reply).unwrap();
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    reply.contains(&format!(
+        "hearth_server_state{{server=\"{server}\",state=\"{state}\"}} 1"
+    ))
+}
+
+/// hearthd watches the machine too: its rounds are in the journal, and a
+/// second watcher is refused.
+fn check_watching(dir: &Path) {
+    for kind in ["doctor", "ports"] {
+        wait_until(&format!("a {kind} round"), || {
+            hearth(dir, &["log", "--kind", kind])
+                .is_ok_and(|v| v["snapshots"].as_array().is_some_and(|a| !a.is_empty()))
+        });
+    }
+    assert!(
+        hearth(dir, &["watch", "--for-seconds", "1"])
+            .unwrap_err()
+            .contains("already watches"),
+        "hearth watch beside hearthd"
+    );
+}
+
+/// An agent reaches the same servers through `hearth mcp`: status lists
+/// them, and restart restarts one.
+fn check_mcp(dir: &Path) {
+    use std::io::Write;
+    let (_, before) = state(dir).unwrap();
+    let mut mcp = Command::new(env!("CARGO_BIN_EXE_hearth"))
+        .arg("mcp")
+        .env("HEARTH_STATE", dir.join("state"))
+        .env("HEARTH_CONFIG", dir.join("hearth.toml"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let requests = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "status", "arguments": {}}}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "restart", "arguments": {"server": "e2e"}}}),
+    ];
+    let mut stdin = mcp.stdin.take().unwrap();
+    for r in &requests {
+        writeln!(stdin, "{r}").unwrap();
+    }
+    drop(stdin);
+    let out = mcp.wait_with_output().unwrap();
+    let replies: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let result = |id: u64| {
+        let r = replies.iter().find(|r| r["id"] == id).unwrap();
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        r["result"]["structuredContent"].clone()
+    };
+    assert_eq!(result(2)["servers"][0]["name"], "e2e");
+    result(3);
+    wait_until("the MCP restart", || {
+        state(dir).is_some_and(|(s, pid)| s == "ready" && pid != before)
+    });
+}
+
 struct Killed(Child);
 
 impl Drop for Killed {
@@ -124,8 +206,8 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         return;
     }
     let dir = home("e2e");
-    let port = free_port();
-    config(&dir, port);
+    let (port, metrics) = (free_port(), free_port());
+    config(&dir, port, metrics);
     assert!(
         hearth(&dir, &["status"])
             .unwrap_err()
@@ -163,14 +245,18 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
 
     // Stopped on request it stays down, and frees its port; started, it
     // comes back.
+    // Metrics say the same as status, at every step.
+    assert!(gauge(metrics, "e2e", "ready"), "metrics while ready");
     hearth(&dir, &["stop", "e2e"]).unwrap();
     wait_until("stopped", || {
         state(&dir).is_some_and(|(s, _)| s == "stopped") && !listening(port)
     });
+    assert!(gauge(metrics, "e2e", "stopped"), "metrics while stopped");
     hearth(&dir, &["start", "e2e"]).unwrap();
     wait_until("ready again", || {
         state(&dir).is_some_and(|(s, _)| s == "ready")
     });
+    assert!(gauge(metrics, "e2e", "ready"), "metrics once started");
     // What the server printed is kept, across its restarts.
     let logs = hearth(&dir, &["logs", "e2e"]).unwrap();
     let starts = logs["lines"]
@@ -192,14 +278,8 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     );
 
     check_reload(&dir);
-
-    // hearthd watches the machine too, so a second watcher is refused.
-    assert!(
-        hearth(&dir, &["watch", "--for-seconds", "1"])
-            .unwrap_err()
-            .contains("already watches"),
-        "hearth watch beside hearthd"
-    );
+    check_mcp(&dir);
+    check_watching(&dir);
 
     // One hearthd per state directory.
     let second = hearthd(&dir).output().unwrap();
@@ -210,14 +290,19 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     // keeps answering everyone else.
     let sock = dir.join("state").join("hearthd.sock");
     let mut big = std::os::unix::net::UnixStream::connect(&sock).unwrap();
-    let _ = std::io::Write::write_all(&mut big, &[b'x'; 4096]);
+    let _ = std::io::Write::write_all(&mut big, &vec![b'x'; MAX_MESSAGE_BYTES * 4]);
     let mut reply = String::new();
     let _ = std::io::Read::read_to_string(&mut big, &mut reply);
     assert!(reply.contains("longer than"), "{reply}");
     let stalled = std::os::unix::net::UnixStream::connect(&sock).unwrap();
+    let asked = Instant::now();
     assert!(
         hearth(&dir, &["status"]).is_ok(),
         "served after a stalled client"
+    );
+    assert!(
+        asked.elapsed() < Duration::from_millis(CONTROL_TIMEOUT_MS),
+        "the stalled client held up the next one"
     );
     drop(stalled);
 
@@ -282,7 +367,7 @@ fn journal_has_the_run(dir: &Path) {
 #[test]
 fn hearthd_never_removes_what_is_not_its_socket() {
     let dir = home("notsock");
-    config(&dir, free_port());
+    config(&dir, free_port(), free_port());
     std::fs::create_dir_all(dir.join("state")).unwrap();
     std::fs::set_permissions(
         dir.join("state"),
@@ -302,7 +387,7 @@ fn hearthd_never_removes_what_is_not_its_socket() {
 #[test]
 fn hearthd_refuses_a_state_directory_others_can_enter() {
     let dir = home("open");
-    config(&dir, free_port());
+    config(&dir, free_port(), free_port());
     std::fs::create_dir_all(dir.join("state")).unwrap();
     std::fs::set_permissions(
         dir.join("state"),
@@ -349,4 +434,70 @@ fn check_reload(dir: &Path) {
         before,
         "untouched server kept its process"
     );
+}
+
+/// Records each POST body it receives as one line of `argv[2]`.
+const HOOK: &str = r#"
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        with open(sys.argv[2], "ab") as f: f.write(body + b"\n")
+        self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+"#;
+
+/// Exits a crash loop may hold before hearthd gives up, and back-off short
+/// enough that it gets there quickly.
+const RESTART_BUDGET: u32 = 1;
+const BACKOFF_MS: u64 = 50;
+
+#[test]
+fn hearthd_gives_up_on_a_crash_loop_and_says_so_on_the_webhook() {
+    let curl = Command::new("curl")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !python() || !curl {
+        eprintln!("skipped: python3 and curl needed for the server and the webhook");
+        return;
+    }
+    let dir = home("hook");
+    let (port, hook) = (free_port(), free_port());
+    let received = dir.join("received.jsonl");
+    std::fs::write(dir.join("hook.py"), HOOK).unwrap();
+    let _hook = Killed(
+        Command::new("python3")
+            .arg(dir.join("hook.py"))
+            .arg(hook.to_string())
+            .arg(&received)
+            .spawn()
+            .unwrap(),
+    );
+    wait_until("the webhook", || listening(hook));
+    std::fs::write(
+        dir.join("hearth.toml"),
+        format!(
+            "[supervise]\nrestart_budget = {RESTART_BUDGET}\nbackoff_start_ms = {BACKOFF_MS}\nbackoff_max_ms = {BACKOFF_MS}\n[watch]\nin_hearthd = false\n[notify]\nwebhook_url = \"http://127.0.0.1:{hook}/\"\n[servers.crash]\nport = {port}\ncommand = [\"python3\", \"-c\", \"raise SystemExit(1)\"]\n"
+        ),
+    )
+    .unwrap();
+    let _daemon = Killed(
+        hearthd(&dir)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_until("gave up", || {
+        state(&dir).is_some_and(|(s, _)| s == "gave_up")
+    });
+    wait_until("the webhook to hear of it", || {
+        std::fs::read_to_string(&received).is_ok_and(|t| {
+            t.lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .any(|v| v["server"] == "crash" && v["event"]["decision"] == "give_up")
+        })
+    });
 }

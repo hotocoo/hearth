@@ -122,7 +122,12 @@ The rules:
   - restarts it through `hearth restart` and sees a new pid;
   - checks that a second hearthd refuses to start;
   - checks that an oversized request gets an error, and that a stalled client does not block the next one;
+  - reads `/metrics` and sees the server's state follow it through stop and start;
+  - restarts it through `hearth mcp`, as an agent would;
+  - finds hearthd's doctor and ports rounds in the journal (ADR-008);
   - SIGKILLs hearthd, sees the server's port close, and finds the requested restart in `hearth log --kind run`.
+
+  Another drives a crash loop to `gave_up` and checks the webhook received the event.
 
   Separate tests check that a regular file at the socket path is left untouched, and that a state directory open to other users is refused.
 - Live on the development machine, a steady and a crash-looping server ran side by side. `status` showed one ready and one `gave_up` after its budget, and MCP `status` returned the same.
