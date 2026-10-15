@@ -12,7 +12,6 @@
 //! The terminal is driven with escape sequences and `stty`, so no terminal
 //! library is needed.
 
-use std::fmt::Write as _;
 use std::io::{IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -74,55 +73,126 @@ struct View {
     logs: Option<(String, Vec<String>)>,
     /// The answer to the last key.
     message: String,
+    /// Whether that answer reports a failure.
+    failed: bool,
+    /// The server a first `s` asked to stop; a second `s` stops it.
+    armed: Option<String>,
+    /// Colour and weight, on a terminal that has not asked for `NO_COLOR`.
+    color: bool,
 }
 
-fn section(out: &mut Vec<String>, title: &str) {
+/// SGR codes, by what they mean on the screen.
+const BOLD: &str = "1";
+const DIM: &str = "2";
+const OK: &str = "32";
+const WAIT: &str = "33";
+const BAD: &str = "31";
+const ACCENT: &str = "36";
+
+impl View {
+    /// `text` in the style `code`, when colour is on.
+    fn paint(&self, code: &str, text: &str) -> String {
+        if self.color {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_string()
+        }
+    }
+}
+
+/// The colour of a server's state.
+fn tone(state: &str) -> &'static str {
+    match state {
+        "ready" => OK,
+        "starting" | "waiting" => WAIT,
+        "gave_up" | "unsupervised" => BAD,
+        _ => DIM,
+    }
+}
+
+fn section(out: &mut Vec<String>, view: &View, title: &str) {
     out.push(String::new());
-    out.push(format!("── {title}"));
+    out.push(format!(
+        "{} {}",
+        view.paint(DIM, "──"),
+        view.paint(BOLD, title)
+    ));
 }
 
 /// The frame as lines of text; `keys` adds the selection marker and help.
 fn render(frame: &Value, view: &View, keys: bool) -> Vec<String> {
     let mut out = vec![if keys {
-        "hearth top · q quit · ↑↓ select · r restart · s stop · S start · l logs".to_string()
+        format!(
+            "{} {}",
+            view.paint(&format!("{BOLD};{ACCENT}"), "hearth top"),
+            view.paint(
+                DIM,
+                "· q quit · ↑↓ select · r restart · s s stop · S start · l logs"
+            )
+        )
     } else {
         "hearth top".to_string()
     }];
-    section(&mut out, "servers (hearthd)");
+    section(&mut out, view, "servers (hearthd)");
     match frame["servers"].as_array() {
         Some(servers) if servers.is_empty() => {
             out.push("  none: add [servers.NAME] to your config".into());
         }
         Some(servers) => {
             for (i, s) in servers.iter().enumerate() {
-                let mark = if keys && i == view.selected { '>' } else { ' ' };
-                out.push(format!("{mark} {}", line(s)));
+                let selected = keys && i == view.selected;
+                let mark = if selected { '>' } else { ' ' };
+                let dot = if view.color {
+                    format!(
+                        "{} ",
+                        view.paint(tone(s["state"].as_str().unwrap_or_default()), "●")
+                    )
+                } else {
+                    String::new()
+                };
+                let text = clean(&line(s));
+                let text = if selected {
+                    view.paint(BOLD, &text)
+                } else {
+                    text
+                };
+                out.push(format!("{mark} {dot}{text}"));
             }
         }
-        None => out.push(format!("  {}", printable(&frame["servers"]["error"]))),
+        None => out.push(format!(
+            "  {}",
+            view.paint(BAD, &printable(&frame["servers"]["error"]))
+        )),
     }
-    section(&mut out, "machine");
+    section(&mut out, view, "machine");
     let machine = &frame["machine"];
     if machine["error"].is_string() {
         out.push(format!("  {}", printable(&machine["error"])));
     } else {
         out.push(format!("  {}", crate::doctor::summary(machine)));
         for f in machine["findings"].as_array().into_iter().flatten() {
+            let severity = printable(&f["severity"]);
+            let code = if severity == "critical" { BAD } else { WAIT };
             out.push(format!(
-                "  [{}] {}",
-                printable(&f["severity"]),
+                "  {} {}",
+                view.paint(code, &format!("[{severity}]")),
                 printable(&f["message"])
             ));
         }
     }
-    section(&mut out, "journal");
+    section(&mut out, view, "journal");
     match frame["journal"].as_array() {
         Some(entries) => {
             for e in entries {
+                let kind = format!("{:<6}", printable(&e["kind"]));
+                let age = format!(
+                    "{:>10}",
+                    crate::history::age(e["taken_at_ms"].as_u64().unwrap_or_default())
+                );
                 out.push(format!(
-                    "  {:<6} {:>10}  {}",
-                    printable(&e["kind"]),
-                    crate::history::age(e["taken_at_ms"].as_u64().unwrap_or_default()),
+                    "  {} {}  {}",
+                    view.paint(ACCENT, &kind),
+                    view.paint(DIM, &age),
                     printable(&e["summary"])
                 ));
             }
@@ -130,12 +200,17 @@ fn render(frame: &Value, view: &View, keys: bool) -> Vec<String> {
         None => out.push(format!("  {}", printable(&frame["journal"]["error"]))),
     }
     if let Some((name, lines)) = &view.logs {
-        section(&mut out, &format!("output of {} (l hides)", clean(name)));
+        section(
+            &mut out,
+            view,
+            &format!("output of {} (l hides)", clean(name)),
+        );
         out.extend(lines.iter().map(|l| format!("  {}", clean(l))));
     }
     if !view.message.is_empty() {
         out.push(String::new());
-        out.push(clean(&view.message));
+        let code = if view.failed { BAD } else { OK };
+        out.push(view.paint(code, &clean(&view.message)));
     }
     out
 }
@@ -156,7 +231,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
 }
 
 /// A key, as read from the terminal.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Key {
     Quit,
     Up,
@@ -197,8 +272,38 @@ fn keys(bytes: &[u8]) -> Vec<Key> {
     out
 }
 
+/// What a key asks of the selected server, `name`. A first `s` only arms
+/// the stop: stopping frees a model's memory, so one stray key must not.
+fn press(view: &mut View, key: Key, name: &str) {
+    let armed = view.armed.take();
+    match key {
+        Key::Order("stop") if armed.as_deref() != Some(name) => {
+            view.armed = Some(name.to_string());
+            view.failed = false;
+            view.message =
+                format!("press s again to stop {name}; it frees its memory until started");
+        }
+        Key::Order(op) => {
+            (view.message, view.failed) = match call(&json!({ "op": op, "server": name })) {
+                Ok(_) => (format!("{op} of {name} requested"), false),
+                Err(e) => (format!("{op} of {name}: {e}"), true),
+            };
+        }
+        Key::Logs => {
+            view.logs = match view.logs.take() {
+                Some((shown, _)) if shown == name => None,
+                _ => Some((name.to_string(), Vec::new())),
+            };
+        }
+        _ => {}
+    }
+}
+
 fn interact(args: &Args) -> Result<(), String> {
-    let mut view = View::default();
+    let mut view = View {
+        color: std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+        ..View::default()
+    };
     let mut stdin = std::io::stdin().lock();
     loop {
         let frame = frame(args);
@@ -220,20 +325,15 @@ fn interact(args: &Args) -> Result<(), String> {
             for key in keys(&buf[..n]) {
                 match (key, &name) {
                     (Key::Quit, _) => return Ok(()),
-                    (Key::Up, _) => view.selected = view.selected.saturating_sub(1),
-                    (Key::Down, _) => view.selected += 1,
-                    (Key::Order(op), Some(name)) => {
-                        view.message = match call(&json!({ "op": op, "server": name })) {
-                            Ok(_) => format!("{op} of {name} requested"),
-                            Err(e) => format!("{op} of {name}: {e}"),
-                        };
+                    (Key::Up, _) => {
+                        view.armed = None;
+                        view.selected = view.selected.saturating_sub(1);
                     }
-                    (Key::Logs, Some(name)) => {
-                        view.logs = match view.logs.take() {
-                            Some((shown, _)) if &shown == name => None,
-                            _ => Some((name.clone(), Vec::new())),
-                        };
+                    (Key::Down, _) => {
+                        view.armed = None;
+                        view.selected += 1;
                     }
+                    (key, Some(name)) => press(&mut view, key, name),
                     _ => {}
                 }
             }
@@ -308,9 +408,34 @@ fn draw(lines: &[String]) -> Result<(), String> {
         if i > 0 {
             screen.push_str("\r\n");
         }
-        let _ = write!(screen, "{}", l.chars().take(cols).collect::<String>());
+        screen.push_str(&cut(l, cols));
     }
     put(&screen)
+}
+
+/// `line` cut to `cols` visible characters: escape sequences take no
+/// room, and a cut line resets its style so colour cannot leak onward.
+fn cut(line: &str, cols: usize) -> String {
+    let mut out = String::new();
+    let (mut shown, mut chars) = (0, line.chars());
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            out.push(c);
+            for e in chars.by_ref() {
+                out.push(e);
+                if e.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else if shown < cols {
+            out.push(c);
+            shown += 1;
+        }
+    }
+    if out.contains('\x1b') {
+        out.push_str("\x1b[0m");
+    }
+    out
 }
 
 impl Drop for Terminal {
@@ -359,6 +484,7 @@ mod tests {
             selected: 1,
             logs: Some(("b".into(), vec!["out\u{1b}[31m".into()])),
             message: "restart of b requested".into(),
+            ..View::default()
         };
         let lines = render(&frame, &view, true);
         let text = lines.join("\n");
@@ -373,6 +499,39 @@ mod tests {
         );
         let plain = render(&frame, &View::default(), false).join("\n");
         assert!(!plain.contains('>'), "{plain}");
+    }
+
+    #[test]
+    fn colour_is_only_painted_when_asked_and_cut_by_what_shows() {
+        let frame = json!({
+            "servers": [{"name": "a", "addr": "127.0.0.1:1", "state": "gave_up", "restarts": 3}],
+            "machine": {"health": {}, "findings": [{"severity": "critical", "message": "m"}]},
+            "journal": [],
+        });
+        let painted = render(
+            &frame,
+            &View {
+                color: true,
+                ..View::default()
+            },
+            true,
+        )
+        .join("\n");
+        assert!(painted.contains("\x1b[31m●"), "{painted}");
+        assert!(painted.contains("\x1b[31m[critical]"), "{painted}");
+        assert_eq!(cut("\x1b[1mabcdef\x1b[0m", 3), "\x1b[1mabc\x1b[0m\x1b[0m");
+        assert_eq!(cut("abcdef", 3), "abc");
+    }
+
+    #[test]
+    fn a_stop_needs_its_key_twice_and_anything_else_disarms_it() {
+        let mut view = View::default();
+        press(&mut view, Key::Order("stop"), "a");
+        assert_eq!(view.armed.as_deref(), Some("a"));
+        assert!(view.message.contains("press s again"), "{}", view.message);
+        press(&mut view, Key::Logs, "a");
+        assert_eq!(view.armed, None);
+        assert!(view.logs.is_some());
     }
 
     #[test]

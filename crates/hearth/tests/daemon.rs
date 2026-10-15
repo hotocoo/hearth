@@ -360,6 +360,8 @@ fn check_top(dir: &Path) {
         script
             .env("HEARTH_STATE", dir.join("state"))
             .env("HEARTH_CONFIG", dir.join("hearth.toml"))
+            // Plain text to match on; the colours have their own unit test.
+            .env("NO_COLOR", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

@@ -4,6 +4,12 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 17:50 hearth top polish
+
+- **Colour that means something.** State dots, severity tags, a bold selection and clear section titles on a terminal. `NO_COLOR` turns it off; `--once` and `--json` stay plain.
+- **Stop asks twice.** `s` once says what stopping does, `s` again stops. Any other key cancels.
+- **Gateway wording.** With no servers configured, a gateway error says "none configured yet".
+
 ### 2026-10-15 17:30 dashboard
 
 - **A web dashboard.** Set `[dashboard] listen = "127.0.0.1:9471"` and open it in a browser. It shows the servers hearthd keeps, the machine's memory, pressure, swap and limits, findings, and the journal, and refreshes on its own.

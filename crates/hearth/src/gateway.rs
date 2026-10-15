@@ -110,6 +110,11 @@ fn route(head: &str, servers: &[Value]) -> Result<Forward, Refusal> {
         .filter_map(|s| s["name"].as_str())
         .collect::<Vec<_>>()
         .join(", ");
+    let names = if names.is_empty() {
+        "none configured yet".to_string()
+    } else {
+        names
+    };
     let Some((name, tail)) = split_target(target) else {
         return Err(refuse(
             "404 Not Found",
