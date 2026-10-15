@@ -46,6 +46,9 @@ struct Status {
     /// Why the footprint could not be measured.
     footprint_error: Option<String>,
     restarts: u64,
+    /// Why its start is held for memory, while it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held: Option<String>,
     last_event: Option<Value>,
     last_event_at_ms: Option<u64>,
 }
@@ -134,6 +137,7 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
             footprint_bytes: None,
             footprint_error: None,
             restarts: 0,
+            held: None,
             last_event: None,
             last_event_at_ms: None,
         },
@@ -395,7 +399,7 @@ fn supervise(
     output: hearth_runtime::supervise::Output,
 ) {
     let _watchman = Watchman { board, name };
-    let mut gate = loads::Gate::new(name, config.supervise.serialize_loads);
+    let mut gate = loads::Gate::new(name, &config.supervise);
     let mut supervised = supervised(server, config).sharing_output(output);
     let mut halted = false;
     let journal = Journal::open(&config.state)
@@ -482,7 +486,9 @@ fn supervise(
         gate.settle(state);
         let state = if halted { "stopped" } else { state };
         let restarts = supervised.restarts();
+        let held = if halted { None } else { gate.held.clone() };
         update(board, name, |s| {
+            s.held = held;
             s.state = state.to_string();
             s.pid = pid;
             s.restarts = restarts;

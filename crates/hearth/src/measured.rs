@@ -21,6 +21,19 @@ pub(crate) fn measured_compute(model: &Path, ctx: u64) -> (Option<u64>, Option<S
     }
 }
 
+/// The footprint server `name` had when it last became ready under
+/// hearthd, from the run journal: a lower bound of what it needs, since it
+/// may leave out memory-mapped weights (ADR-000).
+pub(crate) fn last_footprint(journal: &hearth_core::state::Journal, name: &str) -> Option<u64> {
+    let ids = journal.ids(crate::run::KIND).ok()?;
+    ids.iter().rev().find_map(|id| {
+        let s = journal.read(id).ok()?;
+        (s.body["server"] == name && s.body["event"]["event"] == "ready")
+            .then(|| s.body["footprint_at_ready"]["footprint_bytes"].as_u64())
+            .flatten()
+    })
+}
+
 pub(crate) fn measured_compute_in(
     journal: &hearth_core::state::Journal,
     model: &Path,

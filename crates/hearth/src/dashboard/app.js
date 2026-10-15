@@ -197,7 +197,8 @@
     li.querySelector('[data-op="logs"]').setAttribute("aria-pressed", String(view.drawer === s.name));
     const ev = s.last_event;
     const what = ev ? [ev.event, ev.cause, ev.decision].filter(Boolean).join(", ") : "";
-    setText(li.querySelector(".event"), what ? `last: ${what} ${age(s.last_event_at_ms)}` : "");
+    setText(li.querySelector(".event"), s.held ? `start held for memory: ${s.held}`
+      : what ? `last: ${what} ${age(s.last_event_at_ms)}` : "");
   }
 
   function renderServers(servers) {

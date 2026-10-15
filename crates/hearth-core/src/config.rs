@@ -203,6 +203,8 @@ pub struct Supervise {
     pub output_lines: usize,
     pub output_line_bytes: usize,
     pub serialize_loads: bool,
+    pub admit_by_footprint: bool,
+    pub admit_headroom_bytes: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

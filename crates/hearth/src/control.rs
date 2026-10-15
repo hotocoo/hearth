@@ -199,7 +199,9 @@ pub fn line(s: &Value) -> String {
             .map_or(String::new(), crate::units::bytes),
         s["restarts"].as_u64().unwrap_or_default(),
         printable(&s["last_event"]["event"]),
-    )
+    ) + &s["held"].as_str().map_or(String::new(), |h| {
+        format!(" · start held: {}", printable(&Value::from(h)))
+    })
 }
 
 /// Sends `op` (`restart`, `stop` or `start`) for one server.

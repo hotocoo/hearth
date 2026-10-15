@@ -52,7 +52,9 @@ These come from passive sampling of a running llama-server on 2026-10-14:
 
 ## Fallback in place (2026-10-15)
 
-The fallback named above ships for loads: hearthd starts one server at a time (`supervise.serialize_loads`, on by default). A server about to start waits while another it keeps is still loading, so two models never fill memory at the same moment. The start-time fit check (ADR-007) still refuses a model that can never fit the device. Learned per-model footprints are already recorded at each ready event (`footprint_at_ready`). Admitting from measured free memory waits for this gate.
+The fallback named above ships for loads: hearthd starts one server at a time (`supervise.serialize_loads`, on by default). A server about to start waits while another it keeps is still loading, so two models never fill memory at the same moment. The start-time fit check (ADR-007) still refuses a model that can never fit the device. Learned per-model footprints are used too (`supervise.admit_by_footprint`). hearthd holds a server's start while available memory is below the footprint that server had when it last became ready, plus `supervise.admit_headroom_bytes`. `hearth status` and the dashboard say why it is held, and the start goes ahead at the first poll that fits.
+
+That footprint may leave out memory-mapped weights, which is the question this gate answers. So it is used only as a lower bound: a held start is one that certainly would not fit, and some starts that will not fit are still let through. A server never measured is not held. Memory that cannot be read holds the start, because hearth does not admit blind. Admitting on the full estimate of what a load will take waits for this gate.
 
 ## Results
 

@@ -132,6 +132,18 @@ output_line_bytes = 1024
 # this once its gate has run.
 serialize_loads = true
 
+# hearthd holds a server's start while available memory is below what that
+# server held when it last became ready, plus admit_headroom_bytes. That
+# footprint is a lower bound (it may leave out memory-mapped weights, see
+# ADR-000), so a held start is one that certainly would not fit. A server
+# never measured starts; memory that cannot be read holds the start.
+admit_by_footprint = true
+
+# Kept free above that footprint. One GiB covers most of the short-term
+# swing in available memory on a busy machine (ADR-000 measured a 3-sigma
+# of 2.45 GiB over 90 s); the start goes ahead at the first poll it fits.
+admit_headroom_bytes = 1073741824
+
 [notify]
 # Who hears about a server hearth gave up on, one it found wedged, or one
 # whose backend poisoned itself. Both channels are off by default.

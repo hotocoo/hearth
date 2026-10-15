@@ -139,7 +139,7 @@ INTERVAL_MS=100 CTX=8192 BASELINE_S=60 SETTLE_S=20 RECLAIM_S=30 FILL_TOKENS=4096
 
 All of this is design, not shipped code. The design is in the ADRs as each phase lands.
 
-- **Admission from measurement.** Blocked on the P0 gate (ADR-000), which has not run yet; until it does, `hearth fit`'s "fits right now" is marked provisional. Its fallback ships: hearthd starts one server at a time, and refuses a model that can never fit the device.
+- **Admission from measurement.** Blocked on the P0 gate (ADR-000), which has not run yet; until it does, `hearth fit`'s "fits right now" is marked provisional. Its fallback ships: hearthd starts one server at a time, holds a start while the server's last measured footprint does not fit what is available, and refuses a model that can never fit the device. Admitting on the full estimate of a load waits for the gate.
   - Each memory pool gets a budget from the device ceiling, the measured resident footprints and a measured reserve.
   - Load cost comes from GGUF geometry and is corrected by the footprint learned per model.
   - If measurement fails, hearth serializes. It never fails open.
