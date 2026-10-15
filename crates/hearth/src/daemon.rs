@@ -348,7 +348,7 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
         .zip(server.ctx)
         .zip(server.cache_type.clone())
         .map(|((m, c), t)| {
-            crate::fit::start_check(format!("[{}]", server.port), (m, c, t), projector.clone())
+            crate::fit::start_check(format!("[{}]", server.port), (m, c, t), projector)
         });
     let make = Box::new(move || {
         if let Some(check) = &check {

@@ -171,10 +171,24 @@ fn model_arg(args: &[String]) -> Option<String> {
     })
 }
 
-/// The multimodal projector a llama-server loads beside its model
-/// (`--mmproj`/`-mm FILE`), from its command line: its weights are on the
-/// accelerator too. The last occurrence wins, as in llama.cpp.
+/// The multimodal projector a llama-server loads onto the accelerator
+/// beside its model (`--mmproj`/`-mm FILE`), from its command line. None
+/// when it is kept on the CPU (`--no-mmproj-offload`, `--mmproj-device
+/// none`) or not loaded (`--no-mmproj`). The last occurrence wins, as in
+/// llama.cpp. Only its weights are counted, not the compute it uses to
+/// encode images.
 pub(crate) fn projector_arg(args: &[String]) -> Option<PathBuf> {
+    let off_accelerator = args.iter().enumerate().any(|(i, a)| {
+        a == "--no-mmproj-offload"
+            || a == "--no-mmproj"
+            || a == "--mmproj-device=none"
+            || a == "-mmdev=none"
+            || (["--mmproj-device", "-mmdev"].contains(&a.as_str())
+                && args.get(i + 1).is_some_and(|v| v == "none"))
+    });
+    if off_accelerator {
+        return None;
+    }
     args.iter()
         .enumerate()
         .rev()
@@ -585,6 +599,7 @@ fn safetensors_weights(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// and the note says so.
 fn add_projector(
     args: &Args,
+    model: &Path,
     files: &mut Vec<PathBuf>,
     weights_bytes: &mut u64,
 ) -> Result<Option<String>, String> {
@@ -596,7 +611,7 @@ fn add_projector(
             .and_then(projector_arg)
     };
     let Some(projector) = args.mmproj.clone().or_else(from_server) else {
-        return Ok(None);
+        return Ok(hf_projector(args, model, files, weights_bytes));
     };
     let size = match std::fs::metadata(&projector) {
         Ok(m) => m.len(),
@@ -613,6 +628,80 @@ fn add_projector(
     Ok(None)
 }
 
+/// What `llama-server -hf org/repo` loads as its projector, unless told
+/// not to: the projector downloaded beside the model file, when its folder
+/// holds exactly one. `Err` says why none can be named.
+fn hf_projector_of(words: &[String], model: &Path) -> Result<Option<PathBuf>, String> {
+    let hf = words
+        .iter()
+        .any(|w| w == "-hf" || w == "--hf-repo" || w.starts_with("--hf-repo="));
+    let declined = words
+        .iter()
+        .any(|w| w.starts_with("--no-mmproj") || w == "-mm" || w.starts_with("--mmproj"));
+    let Some(dir) = model.parent().filter(|_| hf && !declined) else {
+        return Ok(None);
+    };
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let found: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.to_ascii_lowercase().contains("mmproj"))
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+        })
+        .collect();
+    match found.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        several => Err(format!(
+            "{} projectors beside the model and -hf loads one of them",
+            several.len()
+        )),
+    }
+}
+
+/// The projector a llama-server with command line `words` serving `model`
+/// loads onto the accelerator: its `--mmproj`, else what `-hf` loaded.
+/// Only a file readable from here.
+pub(crate) fn served_projector(words: &[String], model: &Path) -> Option<PathBuf> {
+    projector_arg(words)
+        .or_else(|| hf_projector_of(words, model).ok().flatten())
+        .filter(|p| p.is_file())
+}
+
+/// [`hf_projector_of`] for `fit --port`, counted, with a note either way.
+fn hf_projector(
+    args: &Args,
+    model: &Path,
+    files: &mut Vec<PathBuf>,
+    weights_bytes: &mut u64,
+) -> Option<String> {
+    let words = args.port.and_then(listener_args)?;
+    let found = match hf_projector_of(&words, model) {
+        Ok(found) => found?,
+        Err(e) => return Some(format!("{e}; the -hf projector is not counted")),
+    };
+    match std::fs::metadata(&found) {
+        Ok(m) => {
+            *weights_bytes = weights_bytes.saturating_add(m.len());
+            let note = format!(
+                "counted {} ({}), the projector -hf loads beside the model",
+                found.display(),
+                bytes(m.len())
+            );
+            files.push(found);
+            Some(note)
+        }
+        Err(e) => Some(format!(
+            "{}: {e}; the -hf projector is not counted",
+            found.display()
+        )),
+    }
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let (model, server_ctx) = locate(args)?;
     let ctx = args
@@ -620,7 +709,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .or(server_ctx)
         .ok_or("the server does not say its context; give --ctx (tokens of KV cache to fit)")?;
     let (mut files, mut weights_bytes, geometry) = weights_and_geometry(&model)?;
-    let projector_note = add_projector(args, &mut files, &mut weights_bytes)?;
+    let projector_note = add_projector(args, &model, &mut files, &mut weights_bytes)?;
     let (k, v) = cache_types(args, &model)?;
     let swa = args.swa();
     let kv_bytes = geometry.kv_bytes(ctx, k, v, swa);
@@ -1095,6 +1184,18 @@ mod port_tests {
             Some(PathBuf::from("p.gguf"))
         );
         assert_eq!(projector_arg(&line("llama-server -m m.gguf")), None);
+        for cpu in [
+            "--no-mmproj-offload",
+            "-mmdev none",
+            "--mmproj-device=none",
+            "--no-mmproj",
+        ] {
+            assert_eq!(
+                projector_arg(&line(&format!("llama-server --mmproj p.gguf {cpu}"))),
+                None,
+                "{cpu}"
+            );
+        }
         assert_eq!(model_arg(&line("python -m mlx_lm.server")), None);
     }
 
@@ -1183,6 +1284,34 @@ mod port_tests {
             measured_compute_in(&journal, Path::new("/other.gguf"), 8192),
             (None, None)
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_projector_hf_loads_is_the_one_beside_the_model() {
+        let dir = std::env::temp_dir().join(format!("hearth-hfproj-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("m-Q6_K.gguf");
+        std::fs::write(&model, "").unwrap();
+        let words = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let hf = words("llama-server -hf org/repo -c 4096");
+        assert_eq!(hf_projector_of(&hf, &model), Ok(None));
+        std::fs::write(dir.join("mmproj-BF16.gguf"), "").unwrap();
+        assert_eq!(
+            hf_projector_of(&hf, &model),
+            Ok(Some(dir.join("mmproj-BF16.gguf")))
+        );
+        assert_eq!(
+            hf_projector_of(&words("llama-server -hf org/repo --no-mmproj"), &model),
+            Ok(None)
+        );
+        assert_eq!(
+            hf_projector_of(&words("llama-server -m m-Q6_K.gguf"), &model),
+            Ok(None)
+        );
+        std::fs::write(dir.join("mmproj-F16.gguf"), "").unwrap();
+        assert!(hf_projector_of(&hf, &model).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

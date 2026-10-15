@@ -582,7 +582,7 @@ fn oversized(ports: &[Port]) -> Vec<Finding> {
             // Its projector is on the accelerator beside the model.
             // One not readable from here (relative to the server's own
             // directory) cannot be counted.
-            if let Some(projector) = crate::fit::projector_arg(&argv).filter(|p| p.is_file()) {
+            if let Some(projector) = crate::fit::served_projector(&argv, std::path::Path::new(model)) {
                 line.push(format!("--mmproj={}", projector.display()));
             }
             line.extend(["--".to_string(), model.clone()]);
