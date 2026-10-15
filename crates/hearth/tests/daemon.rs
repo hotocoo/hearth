@@ -190,6 +190,81 @@ fn check_mcp(dir: &Path) {
     });
 }
 
+/// `hearth top` shows hearthd's server, in one frame (`--once`, `--json`)
+/// and on a terminal, where `r` restarts the selected server and `q` quits.
+fn check_top(dir: &Path) {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::sync::{Arc, Mutex};
+
+    let name = hearth(dir, &["status"]).unwrap()["servers"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let frame = hearth(dir, &["top"]).unwrap();
+    assert_eq!(frame["servers"][0]["name"], name.as_str(), "{frame}");
+    assert!(frame["machine"]["health"].is_object(), "{frame}");
+    let once = Command::new(env!("CARGO_BIN_EXE_hearth"))
+        .args(["top", "--once"])
+        .env("HEARTH_STATE", dir.join("state"))
+        .env("HEARTH_CONFIG", dir.join("hearth.toml"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&once.stdout);
+    assert!(once.status.success(), "{text}");
+    assert!(
+        text.lines().any(|l| l.trim_start().starts_with(&name)),
+        "{text}"
+    );
+
+    // script(1) gives top a terminal; its arguments differ by system.
+    let bin = env!("CARGO_BIN_EXE_hearth");
+    let mut script = Command::new("script");
+    if cfg!(target_os = "linux") {
+        script.args(["-qec", &format!("'{bin}' top --every 1"), "/dev/null"]);
+    } else {
+        script.args(["-q", "/dev/null", bin, "top", "--every", "1"]);
+    }
+    let mut top = Killed(
+        script
+            .env("HEARTH_STATE", dir.join("state"))
+            .env("HEARTH_CONFIG", dir.join("hearth.toml"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let seen = Arc::new(Mutex::new(String::new()));
+    let mut stdout = top.0.stdout.take().unwrap();
+    let sink = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = stdout.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            sink.lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    });
+    let shows = |what: &str| seen.lock().unwrap().contains(what);
+    wait_until("top's first frame", || shows(&format!("> {name}")));
+    let before = state(dir).and_then(|(_, pid)| pid);
+    let mut keys = top.0.stdin.take().unwrap();
+    keys.write_all(b"r").unwrap();
+    wait_until("top's restart", || {
+        shows(&format!("restart of {name} requested"))
+            && state(dir).is_some_and(|(s, pid)| s == "ready" && pid != before)
+    });
+    keys.write_all(b"q").unwrap();
+    drop(keys);
+    wait_until("top to quit", || top.0.try_wait().unwrap().is_some());
+    assert!(top.0.wait().unwrap().success(), "{}", seen.lock().unwrap());
+    // The terminal is put back: the alternate screen is left.
+    wait_until("top's last output", || shows("\x1b[?1049l"));
+}
+
 struct Killed(Child);
 
 impl Drop for Killed {
@@ -279,6 +354,7 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
 
     check_reload(&dir);
     check_mcp(&dir);
+    check_top(&dir);
     check_watching(&dir);
 
     // One hearthd per state directory.

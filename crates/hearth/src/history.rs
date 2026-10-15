@@ -246,7 +246,7 @@ fn now_ms() -> u64 {
 }
 
 /// "42 s ago", "3 min ago", "5 h ago", "2 d ago".
-fn age(taken_at_ms: u64) -> String {
+pub(crate) fn age(taken_at_ms: u64) -> String {
     let secs = Duration::from_millis(now_ms().saturating_sub(taken_at_ms)).as_secs();
     let minute = Duration::from_secs(60).as_secs();
     let hour = minute * 60;

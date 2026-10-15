@@ -199,6 +199,13 @@ pub fn observe(previous: Option<&Observation>) -> Result<Observation, String> {
     Ok(Observation { report, at })
 }
 
+/// Measures the machine as `hearth doctor --json` reports it, without
+/// recording: for `hearth top`, which samples every few seconds.
+pub fn measure() -> Result<Value, String> {
+    let report = build(crate::pressure::box_health()?, None);
+    serde_json::to_value(&report).map_err(|e| e.to_string())
+}
+
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let first = crate::pressure::box_health()?;
     let (health, trend) = match args.watch {

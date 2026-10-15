@@ -31,6 +31,8 @@ mod run;
 mod server_args;
 #[cfg(unix)]
 mod service;
+#[cfg(unix)]
+mod top;
 mod units;
 mod watch;
 mod workflows;
@@ -91,6 +93,11 @@ enum Command {
     /// notify) when memory pressure rises, a resource would reach its limit
     /// soon, or a model runtime vanishes, restarts or stops answering.
     Watch(watch::Args),
+    /// One screen that keeps showing hearthd's servers, the machine's memory
+    /// and findings, and the journal; keys restart, stop and start servers and
+    /// show their output. `--once` prints one frame, `--json` one document.
+    #[cfg(unix)]
+    Top(top::Args),
     /// What hearthd keeps alive: each server's state, pid, restarts and last
     /// event.
     #[cfg(unix)]
@@ -174,6 +181,8 @@ fn execute(cli: &Cli) -> Result<String, String> {
         Command::Stop(args) => control::order("stop", args, cli.json),
         #[cfg(unix)]
         Command::Start(args) => control::order("start", args, cli.json),
+        #[cfg(unix)]
+        Command::Top(args) => top::run(args, cli.json),
         #[cfg(unix)]
         Command::Logs(args) => control::logs(args, cli.json),
         #[cfg(unix)]

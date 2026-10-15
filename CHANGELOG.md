@@ -4,6 +4,13 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 15:00 hearth top
+
+- **`hearth top`.** One terminal screen that stays open: hearthd's servers, the machine's memory and findings, and the journal, redrawn every `--every` seconds. Keys restart (`r`), stop (`s`) and start (`S`) the selected server and show its output (`l`); `q` or Ctrl-C quits and puts the terminal back.
+- **Same frame for scripts.** `hearth top --once` prints one frame; `hearth --json top` prints it as one document. What an agent does through `hearth restart` or `hearth note` shows on the next refresh.
+- **Sampling does not record.** `top` measures the machine without writing a doctor snapshot each refresh, so leaving it open does not fill the journal.
+- **Tested on a terminal.** The end-to-end test runs `top` under `script(1)`, restarts the server with `r`, and checks it quits cleanly.
+
 ### 2026-10-15 14:43 end-to-end coverage
 
 - **More of hearthd tested as built.** The end-to-end test now reads `/metrics`, restarts a server through `hearth mcp`, and finds hearthd's watch rounds in the journal. A second test takes a crash loop to `gave_up` and checks the webhook hears of it.

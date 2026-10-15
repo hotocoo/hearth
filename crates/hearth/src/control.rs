@@ -159,7 +159,7 @@ pub struct LogsArgs {
 
 /// Text from hearthd without control characters, so nothing it says can
 /// steer the terminal.
-fn printable(v: &Value) -> String {
+pub fn printable(v: &Value) -> String {
     v.as_str()
         .unwrap_or("-")
         .chars()
@@ -178,24 +178,28 @@ pub fn status(_: &StatusArgs, json: bool) -> Result<String, String> {
         out.push_str("hearthd runs no servers: add [servers.NAME] to your config\n");
     }
     for s in servers {
-        let _ = writeln!(
-            out,
-            "{:<16} {:<22} {:<9} pid {:<7} {:>11} restarts {:<3} last: {}",
-            printable(&s["name"]),
-            printable(&s["addr"]),
-            printable(&s["state"]),
-            s["server_pid"]
-                .as_u64()
-                .or_else(|| s["pid"].as_u64())
-                .map_or("-".into(), |p| p.to_string()),
-            s["footprint_bytes"]
-                .as_u64()
-                .map_or(String::new(), crate::units::bytes),
-            s["restarts"].as_u64().unwrap_or_default(),
-            printable(&s["last_event"]["event"]),
-        );
+        let _ = writeln!(out, "{}", line(&s));
     }
     Ok(out)
+}
+
+/// One server as `hearth status` and `hearth top` show it.
+pub fn line(s: &Value) -> String {
+    format!(
+        "{:<16} {:<22} {:<9} pid {:<7} {:>11} restarts {:<3} last: {}",
+        printable(&s["name"]),
+        printable(&s["addr"]),
+        printable(&s["state"]),
+        s["server_pid"]
+            .as_u64()
+            .or_else(|| s["pid"].as_u64())
+            .map_or("-".into(), |p| p.to_string()),
+        s["footprint_bytes"]
+            .as_u64()
+            .map_or(String::new(), crate::units::bytes),
+        s["restarts"].as_u64().unwrap_or_default(),
+        printable(&s["last_event"]["event"]),
+    )
 }
 
 /// Sends `op` (`restart`, `stop` or `start`) for one server.
