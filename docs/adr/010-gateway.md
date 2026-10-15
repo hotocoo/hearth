@@ -42,3 +42,11 @@ Not in this slice: API translation, retry before the first token, admission from
 - **Silence is not retried.** A server silent past `idle_timeout_ms` gets the 504. It is wedged, and hearthd's restart of it should not double the client's wait.
 - **One deadline.** `gateway.ready_wait_ms` covers waiting for the server and every retry.
 - **Test.** In the end-to-end test the fake server exits on its first `POST /flaky`. hearthd restarts it, and the client receives 200 with its own body echoed back, from the second attempt.
+
+## Addendum (2026-10-15): fair queuing
+
+- **A limit per server.** `gateway.per_server_concurrency` caps how many requests one server runs at once through the gateway. Set it to the server's slots (`-np`). 0, the default, leaves queuing off.
+- **Round robin across apps.** When a server is full, waiting requests are let in round robin across apps, named by the `X-Hearth-App` header, and in arrival order within one app. A batch of a hundred requests from one app holds up another app's request by one turn, not by the whole batch. Requests without the header share one app.
+- **One deadline.** Time in the queue counts toward `gateway.ready_wait_ms`, like waiting for a restart and retrying. A request still waiting at the deadline gets a 503 `queue_full`, saying how many were running or ahead.
+- **Priorities, quotas and shedding by deadline** are not built. They need real traffic from several apps to set sensibly.
+- **Tests.** Unit tests check the order of turns across and within apps, a request that gives up leaving the line, and a full server letting the next request in when one finishes.

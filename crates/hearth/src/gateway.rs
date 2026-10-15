@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use hearth_core::config::Gateway;
 
+mod queue;
 mod retry;
 use serde_json::{Value, json};
 
@@ -270,7 +271,12 @@ fn wait_for_ready(
     }
 }
 
-fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io::Result<()> {
+fn handle(
+    mut client: TcpStream,
+    config: &Gateway,
+    servers: &Servers,
+    queues: &queue::Queues,
+) -> std::io::Result<()> {
     let head_time = Duration::from_millis(config.head_timeout_ms);
     let head =
         crate::metrics::read_head(&client, config.max_head_bytes, Instant::now() + head_time)?;
@@ -294,6 +300,25 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
     let forward = match wait_for_ready(&head, config, servers, deadline) {
         Ok(f) => f,
         Err(r) => return reply(&mut client, &r),
+    };
+    let app = app_of(&head);
+    let _running = match queues.enter(&forward.name, &app, config.per_server_concurrency, deadline)
+    {
+        Ok(r) => r,
+        Err(ahead) => {
+            return reply(
+                &mut client,
+                &refuse(
+                    "503 Service Unavailable",
+                    "queue_full",
+                    format!(
+                        "server {} stayed full until the deadline; {ahead} request(s) running or ahead",
+                        forward.name
+                    ),
+                    "retry later, raise gateway.per_server_concurrency if the server has the slots, or gateway.ready_wait_ms".into(),
+                ),
+            );
+        }
     };
     if let Some(length) = retry::keepable_length(&head, config.retry_body_bytes) {
         let body = retry::read_body(&mut client, length, head_time)?;
@@ -323,6 +348,22 @@ fn handle(mut client: TcpStream, config: &Gateway, servers: &Servers) -> std::io
             ),
         ),
     }
+}
+
+/// The app a request comes from, for fair queuing: its `X-Hearth-App`
+/// header, else one shared name.
+fn app_of(head: &str) -> String {
+    head.lines()
+        .skip(1)
+        .find_map(|l| {
+            let (field, value) = l.split_once(':')?;
+            field
+                .trim()
+                .eq_ignore_ascii_case("x-hearth-app")
+                .then(|| value.trim().to_string())
+        })
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "-".into())
 }
 
 /// Sends a request whose body is in hand, again when its server fails
@@ -397,13 +438,14 @@ fn pipe_silent(client: &mut TcpStream, forward: &Forward, idle: Duration) -> std
 /// `max_clients`; one beyond that is told the gateway is busy.
 fn serve(listener: &TcpListener, config: &Gateway, servers: &Servers) {
     let (handler_config, servers) = (config.clone(), servers.clone());
+    let queues = queue::Queues::default();
     let busy_config = config.clone();
     crate::listen::serve(
         "gateway",
         listener,
         config.max_clients,
         Duration::from_millis(config.connect_timeout_ms),
-        &(Arc::new(move |stream| handle(stream, &handler_config, &servers)) as _),
+        &(Arc::new(move |stream| handle(stream, &handler_config, &servers, &queues)) as _),
         move |mut stream| {
             let _ =
                 stream.set_write_timeout(Some(Duration::from_millis(busy_config.head_timeout_ms)));

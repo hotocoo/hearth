@@ -68,6 +68,7 @@ pub struct Gateway {
     pub retries: u64,
     pub retry_body_bytes: u64,
     pub retry_grace_ms: u64,
+    pub per_server_concurrency: u64,
     pub max_clients: u64,
 }
 

@@ -149,7 +149,7 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
   - Runtimes hearth did not start are never killed.
 - **Gateway, beyond forwarding.** Forwarding by name, typed errors, structural cancellation, holding requests through a restart and retry before the first byte, all under one deadline, ship (ADR-010). Still to come:
   - OpenAI, Anthropic Messages and Ollama APIs, translated as needed.
-- **Scheduling.** Priority classes, fair queuing across apps, quotas and deadline-aware shedding.
+- **Scheduling, beyond fair queuing.** A per-server limit with round-robin queuing across apps ships (ADR-010). Priority classes, quotas and deadline-aware shedding are still to come.
 - **For people and agents.**
   - MCP `load`, `unload` and `drain` on runtimes hearth owns, next to the `restart` that ships. Runtimes hearth did not start are refused, with the reason.
 - **Platforms.** macOS on Apple Silicon first. Linux with NVIDIA (NVML), AMD (sysfs) and CPU.

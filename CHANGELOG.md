@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 19:45 fair queuing
+
+- **Per-server limit.** `gateway.per_server_concurrency` caps the requests a server runs at once through the gateway. It is off by default.
+- **Fair across apps.** Waiting requests are let in round robin across apps (`X-Hearth-App` header), so one app's batch cannot starve another. Queue time counts toward the same deadline as waiting and retrying.
+
 ### 2026-10-15 19:20 gateway retries before the first byte
 
 - **Transparent retry.** A request is sent again when its server dies, drops the connection or fails with a 5xx that hearthd restarts it for (a poisoned backend). This happens only while nothing has reached the client, at most `gateway.retries` times, and within the same deadline as waiting for the server.
