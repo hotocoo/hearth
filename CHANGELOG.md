@@ -4,6 +4,10 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 08:09 log --full
+
+- `hearth log --full` writes each snapshot in full as one JSON line, oldest first. `hearth log --all --since 1d --full > day.jsonl` archives a day of the journal.
+
 ### 2026-10-15 08:05 what-can-i-run workflow
 
 - **New workflow.** `what-can-i-run CTX` is the eighth built-in workflow. It lists the models on disk that fit at that context and marks those already served. It then checks the best one with `fit` and says what would have to be unloaded first.
