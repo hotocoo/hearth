@@ -24,16 +24,21 @@ pub(crate) fn model_arg(args: &[String]) -> Option<String> {
 /// none`) or not loaded (`--no-mmproj`). The last occurrence wins, as in
 /// llama.cpp. Only its weights are counted, not the compute it uses to
 /// encode images.
-pub(crate) fn projector_arg(args: &[String]) -> Option<PathBuf> {
-    let off_accelerator = args.iter().enumerate().any(|(i, a)| {
+/// Whether the command keeps its projector off the accelerator, or does
+/// not load one.
+fn projector_off_accelerator(args: &[String]) -> bool {
+    args.iter().enumerate().any(|(i, a)| {
         a == "--no-mmproj-offload"
             || a == "--no-mmproj"
             || a == "--mmproj-device=none"
             || a == "-mmdev=none"
             || (["--mmproj-device", "-mmdev"].contains(&a.as_str())
                 && args.get(i + 1).is_some_and(|v| v == "none"))
-    });
-    if off_accelerator {
+    })
+}
+
+pub(crate) fn projector_arg(args: &[String]) -> Option<PathBuf> {
+    if projector_off_accelerator(args) {
         return None;
     }
     args.iter()
@@ -88,9 +93,10 @@ pub(crate) fn hf_projector_of(words: &[String], model: &Path) -> Result<Option<P
     let hf = words
         .iter()
         .any(|w| w == "-hf" || w == "--hf-repo" || w.starts_with("--hf-repo="));
-    let declined = words
-        .iter()
-        .any(|w| w.starts_with("--no-mmproj") || w == "-mm" || w.starts_with("--mmproj"));
+    let declined = projector_off_accelerator(words)
+        || words
+            .iter()
+            .any(|w| w == "-mm" || w.starts_with("--mmproj"));
     let Some(dir) = model.parent().filter(|_| hf && !declined) else {
         return Ok(None);
     };

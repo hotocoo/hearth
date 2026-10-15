@@ -14,8 +14,10 @@ use serde::Serialize;
 
 use crate::measured::measured_compute;
 use crate::model_files::{dtype_cache_type, from_name, weights_and_geometry};
-use crate::server_args::{cache_types_from_args, hf_projector_of, model_arg, projector_arg};
+use crate::server_args::{cache_types_from_args, model_arg};
 use crate::units::bytes;
+
+mod beside;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -62,13 +64,17 @@ pub struct Args {
     /// the server's own -md, -cd and -ctkd/-ctvd are read.
     #[arg(long)]
     draft: Option<PathBuf>,
-    /// The draft's context (llama.cpp -cd), when not --ctx.
+    /// The draft's total context over all slots (llama.cpp -cd × -np),
+    /// when it does not follow --ctx.
     #[arg(long, requires = "draft")]
     draft_ctx: Option<u64>,
-    /// The draft's KV cache type for keys and values (llama.cpp -ctkd), when
-    /// not f16.
+    /// The draft's KV cache type for keys, and values unless
+    /// --draft-cache-type-v (llama.cpp -ctkd); f16 when not given.
     #[arg(long, requires = "draft", value_parser = parse_cache)]
     draft_cache_type: Option<CacheType>,
+    /// The draft's KV cache type for values (llama.cpp -ctvd).
+    #[arg(long, requires = "draft", value_parser = parse_cache)]
+    draft_cache_type_v: Option<CacheType>,
 }
 
 impl Args {
@@ -327,93 +333,6 @@ fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), Stri
     Ok((k, args.cache_type_v.unwrap_or(v)))
 }
 
-/// Adds the projector to the files and weights, since it is on the
-/// accelerator beside the model: `--mmproj` as given (which must exist),
-/// else the one the server on `--port` loads. A server's that cannot be
-/// found from here (a path relative to its own directory) is not counted,
-/// and the note says so.
-fn add_projector(
-    args: &Args,
-    model: &Path,
-    files: &mut Vec<PathBuf>,
-    weights_bytes: &mut u64,
-) -> Result<Option<String>, String> {
-    let given = args.mmproj.is_some();
-    let from_server = || {
-        args.port
-            .and_then(listener_args)
-            .as_deref()
-            .and_then(projector_arg)
-    };
-    let Some(projector) = args.mmproj.clone().or_else(from_server) else {
-        return Ok(hf_projector(args, model, files, weights_bytes));
-    };
-    let size = match std::fs::metadata(&projector) {
-        Ok(m) => m.len(),
-        Err(e) if !given => {
-            return Ok(Some(format!(
-                "the server loads the projector {} but it is not readable from here ({e}): not counted",
-                projector.display()
-            )));
-        }
-        Err(e) => return Err(format!("{}: {e}", projector.display())),
-    };
-    *weights_bytes = weights_bytes.saturating_add(size);
-    files.push(projector);
-    Ok(None)
-}
-
-/// [`hf_projector_of`] for `fit --port`, counted, with a note either way.
-fn hf_projector(
-    args: &Args,
-    model: &Path,
-    files: &mut Vec<PathBuf>,
-    weights_bytes: &mut u64,
-) -> Option<String> {
-    let words = args.port.and_then(listener_args)?;
-    let found = match hf_projector_of(&words, model) {
-        Ok(found) => found?,
-        Err(e) => return Some(format!("{e}; the -hf projector is not counted")),
-    };
-    match std::fs::metadata(&found) {
-        Ok(m) => {
-            *weights_bytes = weights_bytes.saturating_add(m.len());
-            let note = format!(
-                "counted {} ({}), the projector -hf loads beside the model",
-                found.display(),
-                bytes(m.len())
-            );
-            files.push(found);
-            Some(note)
-        }
-        Err(e) => Some(format!(
-            "{}: {e}; the -hf projector is not counted",
-            found.display()
-        )),
-    }
-}
-
-/// The draft model's weights and KV: `--draft`, else the `--port` server's
-/// own `-md`. A server's draft not readable from here is an error, since
-/// leaving it out would understate what the server holds.
-fn draft_of(args: &Args, ctx: u64) -> Result<Option<u64>, String> {
-    let draft = match &args.draft {
-        Some(model) => Some(crate::draft::Draft {
-            model: model.clone(),
-            ctx: args.draft_ctx,
-            cache: args.draft_cache_type.map(|t| (t, t)),
-        }),
-        None => args
-            .port
-            .and_then(listener_args)
-            .as_deref()
-            .and_then(crate::draft::from_args),
-    };
-    draft
-        .map(|d| crate::draft::bytes(&d, ctx).map(|(w, kv)| w.saturating_add(kv)))
-        .transpose()
-}
-
 /// The machine's memory, the device ceiling, whether memory is under
 /// pressure, and what is available now: on a discrete GPU the model goes
 /// into the device's own memory, so what is free there decides; otherwise
@@ -439,12 +358,12 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
         .or(server_ctx)
         .ok_or("the server does not say its context; give --ctx (tokens of KV cache to fit)")?;
     let (mut files, mut weights_bytes, geometry) = weights_and_geometry(&model)?;
-    let projector_note = add_projector(args, &model, &mut files, &mut weights_bytes)?;
+    let projector_note = beside::add_projector(args, &model, &mut files, &mut weights_bytes)?;
     let (k, v) = cache_types(args, &model)?;
     let swa = args.swa();
     let kv_bytes = geometry.kv_bytes(ctx, k, v, swa);
     let (compute_bytes, compute_note) = measured_compute(&model, ctx);
-    let draft_bytes = draft_of(args, ctx)?;
+    let (draft_bytes, draft_note) = beside::draft_of(args, ctx)?;
     // What the context search holds fixed: the weights, the compute buffers
     // when a start of this model at this context logged them, and a draft.
     let fixed = weights_bytes
@@ -465,6 +384,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     let mut notes = geometry.notes.clone();
     notes.extend(compute_note);
     notes.extend(projector_note);
+    notes.extend(draft_note);
     if let Some(trained) = geometry.trained_context
         && ctx > trained
     {

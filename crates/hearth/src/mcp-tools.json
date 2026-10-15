@@ -91,11 +91,15 @@
         "draft_ctx": {
           "type": "integer",
           "minimum": 1,
-          "description": "The draft's context (llama.cpp -cd), when not ctx."
+          "description": "The draft's total context over all slots (llama.cpp -cd × -np), when it does not follow ctx."
         },
         "draft_cache_type": {
           "type": "string",
           "description": "The draft's KV cache type (llama.cpp -ctkd), when not f16."
+        },
+        "draft_cache_type_v": {
+          "type": "string",
+          "description": "The draft's KV cache type for values (llama.cpp -ctvd), when not draft_cache_type."
         }
       }
     },

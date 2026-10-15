@@ -100,10 +100,15 @@ pub(super) fn oversized(ports: &[Port]) -> Vec<Finding> {
                 line.push(format!("--mmproj={}", projector.display()));
             }
             // So is a draft model, with its own context and cache.
-            if let Some(d) = crate::draft::from_args(&argv).filter(|d| d.model.is_file()) {
+            // So is a draft model, with its own context and cache (a total
+            // over the server's slots, as fit takes it).
+            if let Ok(crate::draft::Found::Draft(d)) = crate::draft::from_args(&argv)
+                && d.model.is_file()
+            {
                 line.push(format!("--draft={}", d.model.display()));
-                line.extend(d.ctx.map(|c| format!("--draft-ctx={c}")));
-                line.extend(d.cache.map(|(k, _)| format!("--draft-cache-type={}", k.name())));
+                line.extend(d.ctx.map(|c| format!("--draft-ctx={}", c.saturating_mul(d.slots))));
+                line.push(format!("--draft-cache-type={}", d.cache.0.name()));
+                line.push(format!("--draft-cache-type-v={}", d.cache.1.name()));
             }
             line.extend(["--".to_string(), model.clone()]);
             let r: Value = serde_json::from_str(&crate::dispatch(&line).ok()?).ok()?;
