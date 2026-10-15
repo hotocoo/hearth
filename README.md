@@ -154,7 +154,7 @@ All of this is design, not shipped code. The design is in the ADRs as each phase
 
 ## Developing
 
-`scripts/check.sh` runs what CI runs before a commit: `cargo fmt --check`, clippy with warnings as errors, every test, and the check that `docs/configuration.md` matches the shipped configuration. Every value hearth uses lives in `crates/hearth-core/config/hearth.toml`, never as a number in Rust code.
+`scripts/check.sh` runs what CI runs before a commit (`ln -s ../../scripts/pre-commit .git/hooks/pre-commit` runs it on every commit that touches code): `cargo fmt --check`, clippy with warnings as errors, every test, and the check that `docs/configuration.md` matches the shipped configuration. Every value hearth uses lives in `crates/hearth-core/config/hearth.toml`, never as a number in Rust code.
 
 ## License
 
