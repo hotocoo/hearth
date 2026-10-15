@@ -4,6 +4,11 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-15 09:32 tokens held fixes
+
+- **No `overfull` finding.** The tokens read from `/slots` are only a guide, so a finding keyed on them would open and close at random. They now appear only in the oversized warning, which says about how many tokens the last requests used.
+- **Draft slots.** A draft's `-cd` with `-np` set to auto uses the server's own slot count.
+
 ### 2026-10-15 09:24 tokens held
 
 - **Tokens held.** `ports` reads each llama.cpp server's `/slots` to see how many tokens its slots hold.
