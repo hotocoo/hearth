@@ -174,10 +174,13 @@ fn read_resource(uri: &str) -> Result<Value, String> {
     let snapshot = journal
         .resolve(kind, reference)
         .map_err(|e| e.to_string())?;
+    let mut snapshot = serde_json::to_value(&snapshot).map_err(|e| e.to_string())?;
+    // A doctor snapshot is shaped as `show` returns it.
+    trim("show", &mut snapshot);
     Ok(json!({
         "uri": uri,
         "mimeType": "application/json",
-        "text": serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?,
+        "text": serde_json::to_string(&snapshot).map_err(|e| e.to_string())?,
     }))
 }
 

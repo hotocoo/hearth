@@ -9,6 +9,8 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 - **doctor, bundle and show leave out per-process rows.** Those rows were 52 of doctor's 56 KB, past what an MCP client accepts. The result now says how many rows there were and gives the `show` arguments that return them. The snapshot is still recorded in full.
 - **log and follow list 50 by default over MCP.** `log` with `all` returned 209 KB. `follow` on doctor snapshots returned 379 KB. A larger `limit` lists more. `hearth follow --limit N` is new on the command line too.
 - **Compact text.** The text copy of each MCP result is no longer pretty-printed.
+- **Resources too.** `hearth://doctor/REF` leaves out the same rows (130 KB down to 14 KB), and resource text is compact.
+- **A missing tag says so.** `show`, `diff` and `tag --delete` with an unknown tag answer `no tag named "x"` instead of a file-not-found path.
 - **fit explains itself.** When the weights alone exceed the device ceiling, a note says no context fits. When `fit --port` cannot read the cache types, the error names the program listening there.
 
 ### 2026-10-15 21:10 start admission from learned footprints

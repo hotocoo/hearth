@@ -44,6 +44,8 @@ pub enum StateError {
     },
     #[error("not a snapshot id, ~N reference, @AGE (90s, 30m, 2h, 1d) or tag: {0:?}")]
     BadRef(String),
+    #[error("no tag named {0:?}; `hearth tag` lists them")]
+    NoTag(String),
     #[error("tag {tag:?} has no {kind} snapshot")]
     TagWithout { tag: String, kind: String },
     #[error("{id} is not a {kind} snapshot")]
@@ -180,6 +182,15 @@ fn now_nanos() -> u64 {
 /// When snapshot `id` was taken, from its name.
 fn nanos_of(id: &str) -> Option<u64> {
     id.split('-').next()?.parse().ok()
+}
+
+/// A tag file that is not there is a tag that does not exist.
+fn tag_error(name: &str, path: PathBuf, source: std::io::Error) -> StateError {
+    if source.kind() == std::io::ErrorKind::NotFound {
+        StateError::NoTag(name.to_string())
+    } else {
+        StateError::Io { path, source }
+    }
 }
 
 /// Tag names start with a letter, so they can never be mistaken for an id
@@ -559,10 +570,7 @@ impl Journal {
             return Err(StateError::BadRef(name.to_string()));
         }
         let path = self.tags_dir().join(format!("{name}.{EXTENSION}"));
-        let text = std::fs::read(&path).map_err(|source| StateError::Io {
-            path: path.clone(),
-            source,
-        })?;
+        let text = std::fs::read(&path).map_err(|source| tag_error(name, path.clone(), source))?;
         serde_json::from_slice(&text).map_err(|source| StateError::Json { path, source })
     }
 
@@ -619,7 +627,7 @@ impl Journal {
             return Err(StateError::BadRef(name.to_string()));
         }
         let path = self.tags_dir().join(format!("{name}.{EXTENSION}"));
-        std::fs::remove_file(&path).map_err(|source| StateError::Io { path, source })
+        std::fs::remove_file(&path).map_err(|source| tag_error(name, path, source))
     }
 
     /// Drops the oldest untagged snapshots of `kind` beyond retention. A tag

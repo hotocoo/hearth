@@ -78,6 +78,8 @@ fn tags_name_moments_and_survive_pruning() {
     assert_eq!(j.resolve("doctor", "healthy").unwrap().body["d"], 0);
     assert!(j.resolve("run", "healthy").is_err());
     assert!(j.tags().unwrap().contains_key("healthy"));
+    assert!(matches!(j.resolve("ports", "nosuch"), Err(StateError::NoTag(t)) if t == "nosuch"));
+    assert!(matches!(j.delete_tag("nosuch"), Err(StateError::NoTag(_))));
     for bad in ["1abc", "~1", "../x", "A", "a/b", "a..b"] {
         assert!(j.set_tag(bad, &["ports"]).is_err(), "{bad}");
     }
