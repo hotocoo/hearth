@@ -119,7 +119,7 @@ fn tool_result(value: &Value, is_error: bool) -> Value {
         json!({ "items": value })
     };
     json!({
-        "content": [{ "type": "text", "text": serde_json::to_string_pretty(value).unwrap_or_default() }],
+        "content": [{ "type": "text", "text": serde_json::to_string(value).unwrap_or_default() }],
         "structuredContent": structured,
         "isError": is_error,
     })
@@ -380,8 +380,52 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         .flatten()
         .find(|t| t["name"] == name && t.get("cli").is_some())
         .ok_or_else(|| format!("unknown tool {name}"))?;
-    let text = crate::dispatch(&command_line(tool, args)?)?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+    // A whole history runs to hundreds of KB, past an agent's context.
+    let mut args = args.clone();
+    if ["log", "follow"].contains(&name)
+        && let Some(o) = args.as_object_mut()
+        && o.get("limit").is_none_or(Value::is_null)
+        && o.get("stats") != Some(&Value::Bool(true))
+    {
+        o.insert("limit".into(), json!(HISTORY_LIMIT));
+    }
+    let text = crate::dispatch(&command_line(tool, &args)?)?;
+    let mut value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    trim(name, &mut value);
+    Ok(value)
+}
+
+/// What `log` and `follow` list when the call gives no limit.
+const HISTORY_LIMIT: u64 = 50;
+
+/// Parts of a result too large for an agent's context: the tool, the
+/// object holding the part, its key, and where the result names its doctor
+/// snapshot. The snapshot is recorded in full, so `show` reaches the part.
+const TRIMMED: &[(&str, &str, &str, &str)] = &[
+    ("doctor", "/health", "processes", "/snapshot"),
+    ("bundle", "/doctor/health", "processes", "/doctor/snapshot"),
+    ("show", "/body/health", "processes", "/id"),
+];
+
+/// Replaces each [`TRIMMED`] part of tool `name`'s result with its row
+/// count and the `show` arguments that return it.
+fn trim(name: &str, value: &mut Value) {
+    for &(_, parent, key, snapshot) in TRIMMED.iter().filter(|t| t.0 == name) {
+        let reference = value.pointer(snapshot).cloned();
+        let Some(holder) = value.pointer_mut(parent).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let Some(rows) = holder.remove(key) else {
+            continue;
+        };
+        holder.insert(
+            format!("{key}_omitted"),
+            json!({
+                "rows": rows.as_array().map_or(0, Vec::len),
+                "show": {"kind": "doctor", "reference": reference, "pointer": format!("/body/health/{key}")},
+            }),
+        );
+    }
 }
 
 fn process_memory(args: &Value) -> Result<Value, String> {
@@ -559,6 +603,38 @@ mod tests {
         let reply = handle(&json!({"jsonrpc":"2.0","id":4,"method":"tools/list"})).unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
         assert!(tools.iter().all(|t| t["inputSchema"]["type"] == "object"));
+    }
+
+    #[test]
+    fn per_process_rows_are_left_to_show() {
+        let mut doctor =
+            json!({"snapshot": "s1", "health": {"processes": [1, 2, 3], "limits": {}}});
+        trim("doctor", &mut doctor);
+        assert!(doctor["health"].get("processes").is_none());
+        assert_eq!(doctor["health"]["limits"], json!({}));
+        assert_eq!(
+            doctor["health"]["processes_omitted"],
+            json!({"rows": 3, "show": {"kind": "doctor", "reference": "s1", "pointer": "/body/health/processes"}})
+        );
+        let mut bundle = json!({"doctor": {"snapshot": "s2", "health": {"processes": []}}});
+        trim("bundle", &mut bundle);
+        assert_eq!(
+            bundle["doctor"]["health"]["processes_omitted"]["show"]["reference"],
+            "s2"
+        );
+        let mut shown = json!({"id": "s3", "body": {"health": {"processes": [1]}}});
+        trim("show", &mut shown);
+        assert_eq!(
+            shown["body"]["health"]["processes_omitted"]["show"]["reference"],
+            "s3"
+        );
+        let mut ports = json!({"health": {"processes": [1]}});
+        trim("ports", &mut ports);
+        assert_eq!(
+            ports["health"]["processes"],
+            json!([1]),
+            "only doctor, bundle and show"
+        );
     }
 
     #[test]

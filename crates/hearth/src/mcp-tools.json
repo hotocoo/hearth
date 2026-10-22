@@ -1,7 +1,7 @@
 [
   {
     "name": "doctor",
-    "description": "Memory (available, kernel pressure, swap), open files and threads against the kernel's limits; the processes holding half of each; findings with remediation. With watch_seconds, samples twice and projects time to each limit from measured growth (use it to catch descriptor or thread leaks).",
+    "description": "Memory (available, kernel pressure, swap), open files and threads against the kernel's limits; the processes holding half of each; findings with remediation. With watch_seconds, samples twice and projects time to each limit from measured growth (use it to catch descriptor or thread leaks). Per-process rows are left out (health.processes_omitted gives their count and the show arguments that return them).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -177,7 +177,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the most recent N."
+          "description": "Only the most recent N (default 50; give a larger one to list more)."
         },
         "since": {
           "type": "string",
@@ -232,7 +232,7 @@
   },
   {
     "name": "show",
-    "description": "One recorded snapshot in full, as it was written (the complete ports, doctor or run report). Use after log or diff to see everything a snapshot holds.",
+    "description": "One recorded snapshot in full, as it was written (the complete ports, doctor or run report). Use after log or diff to see everything a snapshot holds. A doctor snapshot shown whole leaves out its per-process rows (body.health.processes_omitted says how to get them).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -288,6 +288,11 @@
         "all": {
           "type": "boolean",
           "description": "Every snapshot, not only those where something changed."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only the most recent N steps (default 50; give a larger one to list more)."
         }
       }
     },
@@ -462,7 +467,7 @@
   },
   {
     "name": "bundle",
-    "description": "Everything hearth can say about this machine in one document: doctor, ports, models on disk, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port). Like ports and doctor, it records fresh snapshots of both.",
+    "description": "Everything hearth can say about this machine in one document: doctor, ports, models on disk, incidents, hearthd status, recent supervision events, tags and settings, with secrets redacted. Use it to get the whole picture in one call, or to attach to a bug report. Takes a few seconds (it probes every port). Like ports and doctor, it records fresh snapshots of both. Per-process rows are left out (health.processes_omitted gives their count and the show arguments that return them).",
     "inputSchema": {
       "type": "object",
       "properties": {

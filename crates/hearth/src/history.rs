@@ -150,6 +150,9 @@ pub struct FollowArgs {
     /// Show every snapshot, not only those where something changed.
     #[arg(long)]
     all: bool,
+    /// Only the most recent N steps.
+    #[arg(long)]
+    limit: Option<usize>,
 }
 
 #[derive(clap::Args)]

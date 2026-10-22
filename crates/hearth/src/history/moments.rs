@@ -86,6 +86,7 @@ pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
         &args.pattern,
         (args.all, events),
     );
+    let steps = &steps[steps.len().saturating_sub(args.limit.unwrap_or(usize::MAX))..];
     if json {
         return crate::to_json(&serde_json::json!({
             "kind": args.kind.name(),
@@ -103,7 +104,7 @@ pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
             args.kind.name()
         );
     }
-    for s in &steps {
+    for s in steps {
         let _ = writeln!(out, "{:>11}  {}: {}", age(s.taken_at_ms), s.who, s.state);
     }
     for e in &unreadable {

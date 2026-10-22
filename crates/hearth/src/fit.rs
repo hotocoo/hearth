@@ -320,6 +320,18 @@ fn alternatives(
         .collect()
 }
 
+/// Says so when what loads before any context is already past the ceiling,
+/// so `max_ctx_device: null` reads as nothing fits, not as not computed.
+fn overweight_note(fixed: u64, ceiling: Option<&Ceiling>) -> Option<String> {
+    ceiling.filter(|c| fixed > c.bytes).map(|c| {
+        format!(
+            "what loads before any context ({}) exceeds the device ceiling ({}): no context fits; use a smaller model or quantization",
+            crate::units::bytes(fixed),
+            crate::units::bytes(c.bytes)
+        )
+    })
+}
+
 /// The key and value cache types: as given, else the server's own.
 fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), String> {
     if let Some(k) = args.cache_type {
@@ -329,10 +341,15 @@ fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), Stri
         .port
         .and_then(server_cache_types)
         .or_else(|| dtype_cache_type(model).map(|t| (t, t)))
-        .ok_or(if args.port.is_some() {
-            "give --cache-type: the server's command line does not say it"
-        } else {
-            "give --cache-type (llama.cpp's default is f16)"
+        .ok_or_else(|| match args.port {
+            Some(port) => format!(
+                "give --cache-type: the command line of what listens on {port} ({}) does not say it",
+                listener_args(port).map_or_else(
+                    || "unreadable".to_string(),
+                    |a| a.iter().take(4).cloned().collect::<Vec<_>>().join(" ")
+                )
+            ),
+            None => "give --cache-type (llama.cpp's default is f16)".to_string(),
         })?;
     Ok((k, args.cache_type_v.unwrap_or(v)))
 }
@@ -438,6 +455,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
     if under_pressure {
         notes.push("memory is under pressure; nothing should be loaded now".into());
     }
+    notes.extend(overweight_note(fixed, ceiling.as_ref()));
     notes.extend(sliding_note(swa.as_ref(), &geometry));
     let report = Report {
         model: model.clone(),
