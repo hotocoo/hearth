@@ -167,7 +167,7 @@ mod tests {
         let t = line.join("a");
         line.leave(t);
         line.admit(1);
-        assert!(line.admitted.is_empty());
+        assert_eq!(line.admitted, Vec::<u64>::new());
         assert!(line.waiting.is_empty());
     }
 
