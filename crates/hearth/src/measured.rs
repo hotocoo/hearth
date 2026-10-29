@@ -22,16 +22,24 @@ pub(crate) fn measured_compute(model: &Path, ctx: u64) -> (Option<u64>, Option<S
 }
 
 /// The footprint server `name` had when it last became ready under
-/// hearthd, from the run journal: a lower bound of what it needs, since it
-/// may leave out memory-mapped weights (ADR-000).
+/// hearthd with this `definition` (`Server::definition`), from the run
+/// journal: a lower bound of what it needs, since it may leave out
+/// memory-mapped weights (ADR-000). A start of another model or context
+/// says nothing about this one.
 // shortcut: reads run events newest first until a match, so a server never
 // ready scans the whole run journal once per held wait; state.tiers keeps
 // that journal small. Index by server if it grows.
-pub(crate) fn last_footprint(journal: &hearth_core::state::Journal, name: &str) -> Option<u64> {
+pub(crate) fn last_footprint(
+    journal: &hearth_core::state::Journal,
+    name: &str,
+    definition: &str,
+) -> Option<u64> {
     let ids = journal.ids(crate::run::KIND).ok()?;
     ids.iter().rev().find_map(|id| {
         let s = journal.read(id).ok()?;
-        (s.body["server"] == name && s.body["event"]["event"] == "ready")
+        (s.body["server"] == name
+            && s.body["definition"] == definition
+            && s.body["event"]["event"] == "ready")
             .then(|| s.body["footprint_at_ready"]["footprint_bytes"].as_u64())
             .flatten()
     })
@@ -139,6 +147,27 @@ mod tests {
         assert_eq!(
             measured_compute_in(&journal, Path::new("/other.gguf"), 8192),
             (None, None)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_footprint_counts_only_for_the_definition_it_was_measured_with() {
+        let dir = std::env::temp_dir().join(format!("hearth-footprint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let journal = hearth_core::state::Journal::at(dir.clone(), 10).unwrap();
+        let ready = |definition: &str, bytes: u64| {
+            serde_json::json!({"server": "big", "definition": definition,
+                "event": {"event": "ready"}, "footprint_at_ready": {"footprint_bytes": bytes}})
+        };
+        journal.record(crate::run::KIND, &ready("70g", 70)).unwrap();
+        journal.record(crate::run::KIND, &ready("4g", 4)).unwrap();
+        assert_eq!(last_footprint(&journal, "big", "70g"), Some(70));
+        assert_eq!(last_footprint(&journal, "big", "4g"), Some(4));
+        assert_eq!(
+            last_footprint(&journal, "big", "new"),
+            None,
+            "a changed server is unmeasured"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

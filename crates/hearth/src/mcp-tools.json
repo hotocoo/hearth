@@ -177,7 +177,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the most recent N (default 50; give a larger one to list more)."
+          "description": "Only the most recent N (default mcp.history_limit)."
         },
         "since": {
           "type": "string",
@@ -224,7 +224,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the N largest movements."
+          "description": "Only the N largest movements per unit and the latest N events between (default mcp.history_limit)."
         }
       }
     },
@@ -292,7 +292,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the most recent N steps (default 50; give a larger one to list more)."
+          "description": "Only the most recent N steps (default mcp.history_limit)."
         }
       }
     },
@@ -365,7 +365,7 @@
   },
   {
     "name": "status",
-    "description": "What hearthd keeps alive: each owned server's name, address, state (starting, ready, waiting, stopped, gave_up, or unsupervised if its supervising thread failed), pid, restart count and last event (exited, wedged, poisoned, ...). Fails with a clear message when hearthd is not running.",
+    "description": "What hearthd keeps alive: each owned server's name, address, state (starting, ready, waiting, stopped, gave_up, or unsupervised if its supervising thread failed), pid, restart count and last event (exited, wedged, poisoned, ...), and base_url for clients when the gateway is on (Ollama clients drop /v1). Fails with a clear message when hearthd is not running.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -481,7 +481,7 @@
   },
   {
     "name": "config",
-    "description": "Every hearth setting in effect: value, source (built-in or the user's file), and what it means. hearth keeps no numbers in code; use this to see why it waited, retried, restarted or reported something, and which key to change.",
+    "description": "Every hearth setting in effect: value, source (built-in or the user's file), and what it means; user_file is the file to edit. hearth keeps no numbers in code; use this to see why it waited, retried, restarted or reported something, and which key to change. Filter servers: how to add a server (then reload). Secrets redacted.",
     "inputSchema": {
       "type": "object",
       "properties": {

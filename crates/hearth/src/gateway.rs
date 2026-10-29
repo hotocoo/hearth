@@ -182,12 +182,7 @@ fn reply(stream: &mut TcpStream, r: &Refusal) -> std::io::Result<()> {
         "type": r.kind, "message": r.message, "remediation": r.remediation,
     }})
     .to_string();
-    write!(
-        stream,
-        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        r.status,
-        body.len()
-    )
+    crate::listen::respond(stream, r.status, "application/json", "", &body)
 }
 
 /// Copies the request body up and the answer down until either side is
@@ -282,6 +277,36 @@ fn wait_for_ready(
     }
 }
 
+/// The request body, read whole (by one deadline) when it is kept: always
+/// for an Ollama request to translate, and when small enough to retry.
+/// `Err` is a refusal for a translated request too large to read.
+fn kept_body(
+    client: &mut TcpStream,
+    head: &str,
+    translate: bool,
+    config: &Gateway,
+) -> std::io::Result<Result<Option<Vec<u8>>, Refusal>> {
+    let by = Instant::now() + Duration::from_millis(config.head_timeout_ms);
+    if !translate {
+        return retry::keepable_length(head, config.retry_body_bytes)
+            .map(|length| retry::read_body(client, length, by))
+            .transpose()
+            .map(Ok);
+    }
+    let Some(length) = retry::keepable_length(head, config.translate_body_bytes) else {
+        return Ok(Err(refuse(
+            "413 Content Too Large",
+            "bad_request",
+            format!(
+                "an Ollama request needs a Content-Length of at most {} bytes",
+                config.translate_body_bytes
+            ),
+            "send a smaller request, or raise gateway.translate_body_bytes".into(),
+        )));
+    };
+    retry::read_body(client, length, by).map(|b| Ok(Some(b)))
+}
+
 fn handle(
     mut client: TcpStream,
     config: &Gateway,
@@ -290,7 +315,7 @@ fn handle(
 ) -> std::io::Result<()> {
     let head_time = Duration::from_millis(config.head_timeout_ms);
     let head =
-        crate::metrics::read_head(&client, config.max_head_bytes, Instant::now() + head_time)?;
+        crate::listen::read_head(&client, config.max_head_bytes, Instant::now() + head_time)?;
     client.set_write_timeout(Some(head_time))?;
     if !(head.ends_with("\r\n\r\n") || head.ends_with("\n\n")) {
         return reply(
@@ -306,11 +331,36 @@ fn handle(
             ),
         );
     }
+    if let Err(r) = guard(&head, config) {
+        return reply(&mut client, &r);
+    }
     // One deadline covers waiting for the server and every retry.
     let deadline = Instant::now() + Duration::from_millis(config.ready_wait_ms);
     let forward = match wait_for_ready(&head, config, servers, deadline) {
         Ok(f) => f,
         Err(r) => return reply(&mut client, &r),
+    };
+    // A body kept for translation or retry is read before a queue slot is
+    // taken, so a slow upload holds no slot.
+    let translate = ollama::endpoint(&forward).is_some();
+    let kept = match kept_body(&mut client, &head, translate, config) {
+        Ok(Ok(kept)) => kept,
+        Ok(Err(r)) => return reply(&mut client, &r),
+        Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+            return reply(
+                &mut client,
+                &refuse(
+                    "408 Request Timeout",
+                    "timeout",
+                    format!(
+                        "the body did not arrive within {} ms",
+                        config.head_timeout_ms
+                    ),
+                    "send the body at once, or raise gateway.head_timeout_ms".into(),
+                ),
+            );
+        }
+        Err(e) => return Err(e),
     };
     let app = app_of(&head);
     let _running = match queues.enter(&forward.name, &app, config.per_server_concurrency, deadline)
@@ -331,29 +381,14 @@ fn handle(
             );
         }
     };
-    if ollama::endpoint(&forward).is_some() {
-        let Some(length) = retry::keepable_length(&head, config.translate_body_bytes) else {
-            return reply(
-                &mut client,
-                &refuse(
-                    "413 Content Too Large",
-                    "bad_request",
-                    format!(
-                        "an Ollama request needs a Content-Length of at most {} bytes",
-                        config.translate_body_bytes
-                    ),
-                    "send a smaller request, or raise gateway.translate_body_bytes".into(),
-                ),
-            );
-        };
-        let body = retry::read_body(&mut client, length, head_time)?;
-        if ollama::serve(&mut client, &forward, &body, config)? {
+    // A client that left while queued is not served.
+    if kept.is_some() && gone(&client) {
+        return Ok(());
+    }
+    if let Some(body) = kept {
+        if translate && ollama::serve(&mut client, &forward, &body, config)? {
             return Ok(());
         }
-        return with_retries(client, &head, forward, &body, config, servers, deadline);
-    }
-    if let Some(length) = retry::keepable_length(&head, config.retry_body_bytes) {
-        let body = retry::read_body(&mut client, length, head_time)?;
         return with_retries(client, &head, forward, &body, config, servers, deadline);
     }
     match TcpStream::connect_timeout(
@@ -361,7 +396,9 @@ fn handle(
         Duration::from_millis(config.connect_timeout_ms),
     ) {
         Ok(upstream) => {
-            client.set_write_timeout(None)?;
+            // A client that stops reading is let go after idle, like a
+            // server that stops sending.
+            client.set_write_timeout(Some(Duration::from_millis(config.idle_timeout_ms)))?;
             pipe(
                 client,
                 upstream,
@@ -382,20 +419,70 @@ fn handle(
     }
 }
 
+/// The value of header `name` in `head`, if present.
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|l| {
+        let (field, value) = l.split_once(':')?;
+        field
+            .trim()
+            .eq_ignore_ascii_case(name)
+            .then_some(value.trim())
+    })
+}
+
 /// The app a request comes from, for fair queuing: its `X-Hearth-App`
 /// header, else one shared name.
 fn app_of(head: &str) -> String {
-    head.lines()
-        .skip(1)
-        .find_map(|l| {
-            let (field, value) = l.split_once(':')?;
-            field
-                .trim()
-                .eq_ignore_ascii_case("x-hearth-app")
-                .then(|| value.trim().to_string())
-        })
+    header(head, "x-hearth-app")
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "-".into())
+        .map_or_else(|| "-".into(), str::to_string)
+}
+
+/// Refuses what a web page could send: a `Host` that is a DNS name other
+/// than localhost (DNS rebinding), or an `Origin` not allowed by
+/// `gateway.allowed_origins` (a cross-site request). Programs that are not
+/// browsers send no Origin and name the address they connect to.
+fn guard(head: &str, config: &Gateway) -> Result<(), Refusal> {
+    let host = header(head, "host").unwrap_or_default();
+    let name = host
+        .strip_prefix('[')
+        .and_then(|h| h.split_once(']'))
+        .map_or_else(
+            || host.rsplit_once(':').map_or(host, |(n, _)| n),
+            |(n, _)| n,
+        );
+    if !(name.parse::<std::net::IpAddr>().is_ok() || name.eq_ignore_ascii_case("localhost")) {
+        return Err(refuse(
+            "403 Forbidden",
+            "forbidden",
+            format!("Host {host:?} is not an IP address or localhost"),
+            "use http://127.0.0.1:PORT/s/NAME/v1 as the base URL".into(),
+        ));
+    }
+    match header(head, "origin") {
+        Some(origin) if !config.allowed_origins.iter().any(|o| o == origin) => Err(refuse(
+            "403 Forbidden",
+            "forbidden",
+            format!("requests from web page {origin} are not allowed"),
+            format!(
+                "add \"{origin}\" to gateway.allowed_origins in your config, then restart hearthd"
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the client has closed its side, without waiting.
+fn gone(client: &TcpStream) -> bool {
+    if client.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let left = match client.peek(&mut [0u8; 1]) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(e) => e.kind() != ErrorKind::WouldBlock,
+    };
+    left || client.set_nonblocking(false).is_err()
 }
 
 /// Sends a request whose body is in hand, again when its server fails
@@ -415,14 +502,15 @@ fn with_retries(
     loop {
         tries += 1;
         let before = retry::pid(servers, &forward.name);
-        let why = match retry::attempt(&forward, body, config) {
+        let why = match retry::attempt(&forward, body, config, &client) {
             retry::Attempt::Answered(upstream, first)
                 if !(retry::server_error(&first)
                     && retry::hearthd_restarts(servers, &forward.name, before, config)) =>
             {
-                client.set_write_timeout(None)?;
+                client.set_write_timeout(Some(idle))?;
                 return pipe(client, upstream, &forward, idle, &first);
             }
+            retry::Attempt::Gone => return Ok(()),
             retry::Attempt::Answered(..) => "a 5xx, and hearthd is restarting it".to_string(),
             retry::Attempt::Silent => return pipe_silent(&mut client, &forward, idle),
             retry::Attempt::Retry(why) => {
@@ -564,6 +652,35 @@ mod tests {
         );
         let r = route(head, &memory_bound).unwrap_err();
         assert!(r.message.contains("held from starting: too big"), "{r:?}");
+    }
+
+    #[test]
+    fn web_pages_and_rebound_names_are_refused() {
+        let mut config = hearth_core::config::from_layers(None).unwrap().gateway;
+        let head = |extra: &str| format!("POST /s/chat/v1 HTTP/1.1\r\n{extra}\r\n\r\n");
+        for ok in [
+            "Host: 127.0.0.1:9470",
+            "Host: localhost:9470",
+            "Host: [::1]:9470",
+            "Host: LOCALHOST",
+        ] {
+            assert!(guard(&head(ok), &config).is_ok(), "{ok}");
+        }
+        for bad in ["Host: evil.example:9470", "Host: 127.0.0.1.nip.io", ""] {
+            assert_eq!(
+                guard(&head(bad), &config).unwrap_err().kind,
+                "forbidden",
+                "{bad}"
+            );
+        }
+        let from_page = head("Host: 127.0.0.1:9470\r\nOrigin: http://localhost:3000");
+        let refused = guard(&from_page, &config).unwrap_err();
+        assert!(
+            refused.remediation.contains("allowed_origins"),
+            "{refused:?}"
+        );
+        config.allowed_origins = vec!["http://localhost:3000".into()];
+        assert!(guard(&from_page, &config).is_ok());
     }
 
     #[test]

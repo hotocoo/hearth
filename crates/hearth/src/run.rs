@@ -262,7 +262,9 @@ fn next(d: &Decision) -> String {
     match d {
         Decision::Restart { after_ms } => format!("restarting in {after_ms} ms"),
         Decision::GiveUp { exits, window_ms } => {
-            format!("{exits} exits within {window_ms} ms: a crash loop, giving up")
+            format!(
+                "{exits} exits without staying ready {window_ms} ms in between: a crash loop, giving up"
+            )
         }
         Decision::Futile => {
             "a restart cannot fix that: not restarting; fix the command, then hearth start".into()

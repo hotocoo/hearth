@@ -14,13 +14,13 @@ fn diff_lists_what_happened_between_its_snapshots() {
     let to = j.record("ports", &2).unwrap().snapshot.id;
     j.record("note", &serde_json::json!({"message": "after"}))
         .unwrap();
-    let (entries, unreadable) = meanwhile(&j, &from, &to).unwrap();
+    let (entries, unreadable) = meanwhile(&j, &from, &to, None).unwrap();
     let said: Vec<&str> = entries.iter().map(|e| e.summary.as_str()).collect();
     assert_eq!(said, ["me: during"]);
     assert_eq!(entries[0].back, 1);
     assert_eq!(unreadable, Vec::<String>::new());
     // Either order of the two ends gives the same span.
-    assert_eq!(meanwhile(&j, &to, &from).unwrap().0.len(), 1);
+    assert_eq!(meanwhile(&j, &to, &from, None).unwrap().0.len(), 1);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

@@ -6,7 +6,7 @@
 //! validation and identical answers.
 
 use hearth_core::state::KINDS;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read as _, Write};
 
 use serde_json::{Value, json};
 
@@ -15,16 +15,36 @@ use serde_json::{Value, json};
 const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 pub fn serve() -> Result<String, String> {
-    let stdin = std::io::stdin();
+    let config = mcp_config()?;
+    let max = usize::try_from(config.max_message_bytes).unwrap_or(usize::MAX);
+    let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.trim().is_empty() {
-            continue;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        // One byte past the limit tells a long line from one at the limit.
+        let read = (&mut stdin)
+            .take(u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1))
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
         }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(msg) => handle(&msg),
-            Err(e) => Some(error(&Value::Null, -32700, &format!("parse error: {e}"))),
+        let reply = if line.len() > max && !line.ends_with(b"\n") {
+            // The rest of the line is not a message of its own.
+            skip_line(&mut stdin).map_err(|e| e.to_string())?;
+            Some(error(
+                &Value::Null,
+                -32700,
+                &format!("parse error: message longer than mcp.max_message_bytes ({max})"),
+            ))
+        } else if line.trim_ascii().is_empty() {
+            continue;
+        } else {
+            match serde_json::from_slice::<Value>(&line) {
+                Ok(msg) => handle(&msg),
+                Err(e) => Some(error(&Value::Null, -32700, &format!("parse error: {e}"))),
+            }
         };
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")
@@ -33,6 +53,31 @@ pub fn serve() -> Result<String, String> {
         }
     }
     Ok(String::new())
+}
+
+/// The `[mcp]` settings; built-in ones when the user file does not load,
+/// so a broken config leaves the agent the tools to diagnose it.
+fn mcp_config() -> Result<hearth_core::config::Mcp, String> {
+    hearth_core::config::load()
+        .or_else(|_| hearth_core::config::from_layers(None))
+        .map(|c| c.mcp)
+        .map_err(|e| e.to_string())
+}
+
+/// Reads and drops the rest of a line, a buffer at a time.
+fn skip_line(input: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let buf = input.fill_buf()?;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        if let Some(at) = buf.iter().position(|&b| b == b'\n') {
+            input.consume(at + 1);
+            return Ok(());
+        }
+        let n = buf.len();
+        input.consume(n);
+    }
 }
 
 fn error(id: &Value, code: i64, message: &str) -> Value {
@@ -46,6 +91,14 @@ fn ok(id: &Value, result: Value) -> Value {
 
 /// `None` for notifications, which get no reply.
 fn handle(msg: &Value) -> Option<Value> {
+    if !msg.is_object() {
+        // A batch, or not a request at all: an answer, never silence.
+        return Some(error(
+            &Value::Null,
+            -32600,
+            "invalid request: send one JSON-RPC object per line (batches are not supported)",
+        ));
+    }
     let id = msg.get("id")?;
     let params = &msg["params"];
     Some(match msg["method"].as_str() {
@@ -385,21 +438,19 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         .ok_or_else(|| format!("unknown tool {name}"))?;
     // A whole history runs to hundreds of KB, past an agent's context.
     let mut args = args.clone();
-    if ["log", "follow"].contains(&name)
+    if ["log", "follow", "diff"].contains(&name)
         && let Some(o) = args.as_object_mut()
         && o.get("limit").is_none_or(Value::is_null)
         && o.get("stats") != Some(&Value::Bool(true))
     {
-        o.insert("limit".into(), json!(HISTORY_LIMIT));
+        let limit = mcp_config()?.history_limit;
+        o.insert("limit".into(), json!(limit));
     }
     let text = crate::dispatch(&command_line(tool, &args)?)?;
     let mut value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     trim(name, &mut value);
     Ok(value)
 }
-
-/// What `log` and `follow` list when the call gives no limit.
-const HISTORY_LIMIT: u64 = 50;
 
 /// Parts of a result too large for an agent's context: the tool, the
 /// object holding the part, its key, and where the result names its doctor
@@ -466,6 +517,22 @@ mod tests {
         assert!(handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
         let reply = handle(&json!({"jsonrpc":"2.0","id":3,"method":"nope"})).unwrap();
         assert_eq!(reply["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn batches_and_non_objects_are_answered_not_dropped() {
+        for msg in [json!([{"jsonrpc":"2.0","id":1,"method":"ping"}]), json!(42)] {
+            assert_eq!(handle(&msg).unwrap()["error"]["code"], -32600, "{msg}");
+        }
+    }
+
+    #[test]
+    fn the_rest_of_an_overlong_line_is_skipped() {
+        let mut input = std::io::Cursor::new(b"aaaaaaaa\nnext\n".to_vec());
+        skip_line(&mut input).unwrap();
+        let mut rest = String::new();
+        input.read_line(&mut rest).unwrap();
+        assert_eq!(rest, "next\n");
     }
 
     #[test]

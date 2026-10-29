@@ -16,6 +16,10 @@ use crate::{Result, SenseError};
 
 const MAGIC: [u8; 4] = *b"GGUF";
 
+/// Longest array kept in memory. Per-layer arrays hold one entry per layer
+/// (hundreds); a file may not make a small array of bytes cost a `Value` each.
+const MAX_KEPT_ARRAY: u64 = 1 << 20;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Value {
@@ -243,6 +247,11 @@ impl<R: Read + Seek> Reader<'_, R> {
                 let n = self.u64()?;
                 match Self::scalar_size(elem) {
                     Some(size) if keep_arrays => {
+                        if n > MAX_KEPT_ARRAY {
+                            return Err(bad(&format!(
+                                "array of {n} entries is more than the {MAX_KEPT_ARRAY} kept"
+                            )));
+                        }
                         self.check_count(n, size)?;
                         Value::Array(
                             (0..n)
@@ -298,7 +307,8 @@ fn split_name(name: &str) -> Option<(&str, u32)> {
         return None;
     }
     index.parse::<u32>().ok()?;
-    Some((prefix, total.parse().ok()?))
+    // A total of 00000 names no shards.
+    Some((prefix, total.parse().ok().filter(|&t| t > 0)?))
 }
 
 #[cfg(test)]
@@ -421,5 +431,8 @@ pub(crate) mod tests {
             model_files(Path::new("/m/plain.gguf")),
             vec![PathBuf::from("/m/plain.gguf")]
         );
+        // A shard total of zero names no files: the path stands alone.
+        let odd = Path::new("/m/q-00001-of-00000.gguf");
+        assert_eq!(model_files(odd), vec![odd.to_path_buf()]);
     }
 }

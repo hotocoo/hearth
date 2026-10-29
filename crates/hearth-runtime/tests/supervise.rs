@@ -340,7 +340,6 @@ fn a_server_that_never_serves_the_expected_model_counts_as_a_failed_start() {
         )),
         "{seen:?}"
     );
-    assert!(!s.ready());
 }
 
 /// A wedged server that also ignores SIGTERM: found by its silence, stopped

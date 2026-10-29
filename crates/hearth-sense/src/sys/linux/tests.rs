@@ -134,3 +134,28 @@ fn live_own_footprint_is_readable() {
     let fp = process_footprint(std::process::id().cast_signed()).unwrap();
     assert!(fp.footprint_bytes > 0);
 }
+
+#[test]
+fn cgroup_v1_limit_binds_and_the_unlimited_placeholder_does_not() {
+    const HOST: u64 = 16 << 30;
+    let proc = "12:cpu,cpuacct:/x\n4:memory:/docker/abc\n1:name=systemd:/x\n";
+    assert_eq!(v1_memory_rel(proc), Some("/docker/abc"));
+    assert_eq!(
+        v1_level("4294967296\n", "1000\n", HOST),
+        Some((4 << 30, 1000))
+    );
+    // The kernel's "no limit" is a page-rounded i64::MAX.
+    assert_eq!(v1_level("9223372036854771712", "1000", HOST), None);
+    let root = std::env::temp_dir().join(format!("hearth-cg1-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("memory.limit_in_bytes"), "4294967296").unwrap();
+    fs::write(root.join("memory.usage_in_bytes"), "1073741824").unwrap();
+    // The path is absent under the mount: the root files answer.
+    let cg = cgroup_v1_at(&root, "/docker/abc", HOST);
+    assert_eq!(
+        (cg.max, cg.current, cg.available),
+        (Some(4 << 30), Some(1 << 30), Some(3 << 30))
+    );
+    fs::remove_dir_all(root).unwrap();
+}

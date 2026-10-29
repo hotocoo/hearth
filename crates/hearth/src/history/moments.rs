@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use hearth_core::state::Snapshot;
+use hearth_core::state::{Journal, Snapshot};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -62,30 +62,48 @@ fn timeline(
     steps
 }
 
+/// The timeline `follow` shows, read from the newest snapshots back only as
+/// far as `--limit` steps need: twice the limit, then twice that, until
+/// enough steps or the whole history. Steps at the window's oldest snapshot
+/// are not trusted (nothing before it was compared), unless the window
+/// reaches the first snapshot.
+fn latest_steps(journal: &Journal, args: &FollowArgs) -> Result<(Vec<Step>, Vec<String>), String> {
+    let kind = args.kind.name();
+    let total = journal.ids(kind).map_err(|e| e.to_string())?.len();
+    let mut window = args.limit.map_or(usize::MAX, |l| l.saturating_mul(2));
+    loop {
+        let (mut snapshots, mut unreadable) = (Vec::new(), Vec::new());
+        for snapshot in journal.recent(kind, window).map_err(|e| e.to_string())? {
+            match snapshot {
+                Ok(s) => snapshots.push(s),
+                Err(e) => unreadable.push(e.to_string()),
+            }
+        }
+        let events = matches!(args.kind, Kind::Run);
+        let mut steps = timeline(
+            &snapshots,
+            |b| args.kind.entries(b),
+            &args.pattern,
+            (args.all, events),
+        );
+        let whole = window >= total;
+        if !whole && let Some(oldest) = snapshots.first() {
+            steps.retain(|s| s.id != oldest.id);
+        }
+        if whole || args.limit.is_some_and(|l| steps.len() >= l) {
+            return Ok((steps, unreadable));
+        }
+        window = window.saturating_mul(2);
+    }
+}
+
 /// `hearth follow`: what one process, port or server looked like in every
 /// recorded snapshot, oldest first. By default only the snapshots where its
 /// state changed, appeared or vanished are listed, the way `git log` lists
 /// commits that touched a file.
 pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
-    let mut snapshots = Vec::new();
-    let mut unreadable = Vec::new();
-    for snapshot in journal
-        .recent(args.kind.name(), usize::MAX)
-        .map_err(|e| e.to_string())?
-    {
-        match snapshot {
-            Ok(s) => snapshots.push(s),
-            Err(e) => unreadable.push(e.to_string()),
-        }
-    }
-    let events = matches!(args.kind, Kind::Run);
-    let steps = timeline(
-        &snapshots,
-        |b| args.kind.entries(b),
-        &args.pattern,
-        (args.all, events),
-    );
+    let (steps, unreadable) = latest_steps(&journal, args)?;
     let steps = &steps[steps.len().saturating_sub(args.limit.unwrap_or(usize::MAX))..];
     if json {
         return crate::to_json(&serde_json::json!({
@@ -212,6 +230,31 @@ mod tests {
             .iter()
             .map(|p| (p[0].as_str().unwrap().into(), p[1].as_str().unwrap().into()))
             .collect()
+    }
+
+    #[test]
+    fn a_limited_follow_reads_back_only_as_far_as_it_needs_and_agrees() {
+        let dir = std::env::temp_dir().join(format!("hearth-follow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let journal = Journal::at(dir.clone(), 100).unwrap();
+        for n in 0..9 {
+            // A port that changes state every third snapshot.
+            let state = if (n / 3) % 2 == 0 { "ok" } else { "slow" };
+            let ports = serde_json::json!({ "ports": [{ "addr": "127.0.0.1:1", "process": "p", "pid": 1, "runtime": { "kind": "llama_cpp", "health": state } }] });
+            journal.record("ports", &ports).unwrap();
+        }
+        let args = |limit| FollowArgs {
+            pattern: String::new(),
+            kind: Kind::Ports,
+            all: false,
+            limit,
+        };
+        let (every, _) = latest_steps(&journal, &args(None)).unwrap();
+        let (last, _) = latest_steps(&journal, &args(Some(1))).unwrap();
+        assert!(!every.is_empty());
+        assert_eq!(last.last().map(|s| &s.id), every.last().map(|s| &s.id));
+        assert!(last.len() < every.len() || every.len() == 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

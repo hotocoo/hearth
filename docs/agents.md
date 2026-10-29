@@ -29,6 +29,8 @@ Any MCP client works: `hearth mcp` speaks JSON-RPC over stdio, protocol revision
 | Mark a known-good state to compare with later | `tag` |
 | Record what you changed or advised, and why | `note` with `by`; `log` with kind `note` reads them back |
 | Servers hearth keeps alive | `status`, `logs`, and `restart`, `stop`, `start` (owned servers only) |
+| Point an app at a local model | `status`: each server's `base_url` (through the gateway) |
+| Serve another model | `models` and `fit` to choose, `config` with filter `servers` for the table to add to `user_file`, then `reload` and `status` |
 | Why hearth waited, retried or reported something | `config`; `doctor` with `explain` for where each number comes from |
 | The whole picture in one call | `bundle` |
 

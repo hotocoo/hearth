@@ -49,11 +49,11 @@ pub struct Args {
     #[arg(long, value_parser = parse_cache)]
     cache_type_v: Option<CacheType>,
     /// Parallel sequences; with --ubatch, bounds sliding-window caches.
-    #[arg(long, requires = "ubatch")]
+    #[arg(long, requires = "ubatch", value_parser = clap::value_parser!(u64).range(1..))]
     parallel: Option<u64>,
     /// Physical batch size (llama.cpp -ub); with --parallel, bounds
     /// sliding-window caches.
-    #[arg(long, requires = "parallel")]
+    #[arg(long, requires = "parallel", value_parser = clap::value_parser!(u64).range(1..))]
     ubatch: Option<u64>,
     /// A multimodal projector loaded beside the model (llama.cpp --mmproj),
     /// counted with the weights. With --port, the server's own is read.
@@ -66,7 +66,7 @@ pub struct Args {
     draft: Option<PathBuf>,
     /// The draft's total context over all slots (llama.cpp -cd × -np),
     /// when it does not follow --ctx.
-    #[arg(long, requires = "draft")]
+    #[arg(long, requires = "draft", value_parser = clap::value_parser!(u64).range(1..))]
     draft_ctx: Option<u64>,
     /// The draft's KV cache type for keys, and values unless
     /// --draft-cache-type-v (llama.cpp -ctkd); f16 when not given.
@@ -360,7 +360,7 @@ fn cache_types(args: &Args, model: &Path) -> Result<(CacheType, CacheType), Stri
 /// it is the host's memory.
 fn room() -> Result<(hearth_sense::HostMemory, Option<Ceiling>, bool, u64), String> {
     let host = crate::pressure::host_memory()?;
-    let ceiling = device_ceiling()?;
+    let ceiling = device_ceiling()?.or_else(|| host_ceiling(&host));
     let under_pressure = matches!(
         host.pressure,
         Some(PressureLevel::Warn | PressureLevel::Critical)
@@ -370,6 +370,17 @@ fn room() -> Result<(hearth_sense::HostMemory, Option<Ceiling>, bool, u64), Stri
         .and_then(|c| c.free_bytes)
         .unwrap_or(host.available_bytes);
     Ok((host, ceiling, under_pressure, available_now))
+}
+
+/// With no accelerator limit (Linux without a GPU, an AMD APU) the model
+/// lives in host RAM, so total memory is the ceiling; none when the total is
+/// unknown.
+fn host_ceiling(host: &hearth_sense::HostMemory) -> Option<Ceiling> {
+    (host.total_bytes > 0).then(|| Ceiling {
+        bytes: host.total_bytes,
+        source: "host memory".into(),
+        free_bytes: None,
+    })
 }
 
 /// Sliding-window layers are costed as full unless --parallel and --ubatch
@@ -656,8 +667,11 @@ pub(crate) fn fits_device(
         Ok(r) => r,
         Err(e) => return Verdict::Unknown(e),
     };
-    if report["fits_device"] != false {
-        return Verdict::Fits;
+    // No ceiling known at all is not a fit: never admit blind.
+    match report["fits_device"].as_bool() {
+        Some(true) => return Verdict::Fits,
+        None => return Verdict::Unknown("no memory ceiling to check against".into()),
+        Some(false) => {}
     }
     let mut advice = report["max_ctx_device"].as_u64().map_or_else(
         || "the weights alone do not fit: use a smaller model or quantization".to_string(),
@@ -747,6 +761,30 @@ mod alternative_tests {
             alternatives(Some(&ceiling), 90, 50, kv).is_empty(),
             "already fits"
         );
+    }
+}
+
+#[cfg(test)]
+mod zero_tests {
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: super::Args,
+    }
+
+    #[test]
+    fn zero_parallel_or_ubatch_is_refused() {
+        for flag in ["--parallel", "--ubatch"] {
+            let other = if flag == "--parallel" {
+                "--ubatch"
+            } else {
+                "--parallel"
+            };
+            let line = ["fit", "--ctx", "8", flag, "0", other, "1", "m.gguf"];
+            assert!(Cli::try_parse_from(line).is_err(), "{flag} 0");
+        }
     }
 }
 

@@ -118,7 +118,6 @@ pub fn get(
             body,
             elapsed: started.elapsed(),
         }),
-        None if raw.is_empty() => Err(ProbeError::NotHttp),
         None => Err(ProbeError::NotHttp),
     }
 }
@@ -182,7 +181,11 @@ fn complete_at_eof(raw: &[u8]) -> Option<(u16, Vec<u8>)> {
     if h.chunked {
         return dechunk(body).map(|b| (h.status, b));
     }
-    Some((h.status, body.to_vec()))
+    // A body cut short of its declared length is not an answer.
+    match h.content_length {
+        Some(len) => (body.len() >= len).then(|| (h.status, body[..len].to_vec())),
+        None => Some((h.status, body.to_vec())),
+    }
 }
 
 /// The decoded body once the terminating zero-length chunk has arrived.
@@ -196,7 +199,7 @@ fn dechunk(mut body: &[u8]) -> Option<Vec<u8>> {
         if size == 0 {
             return Some(out);
         }
-        if body.len() < size + 2 {
+        if body.len() < size.checked_add(2)? {
             return None;
         }
         out.extend_from_slice(&body[..size]);
@@ -245,6 +248,19 @@ mod tests {
         );
         let r = get(addr, "/", SECOND, 1 << 20).unwrap();
         assert_eq!(r.body, b"{\"a\":1}");
+    }
+
+    #[test]
+    fn hostile_chunk_sizes_and_cut_bodies_are_not_answers() {
+        assert_eq!(dechunk(b"ffffffffffffffff\r\nx"), None);
+        let addr = serve_once(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"a\"",
+            None,
+        );
+        assert!(matches!(
+            get(addr, "/", SECOND, 1 << 20),
+            Err(ProbeError::NotHttp)
+        ));
     }
 
     #[test]

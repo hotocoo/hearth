@@ -198,7 +198,8 @@ fn later_shard(name: &str) -> bool {
         return false;
     };
     let digits = |s: &str| s.len() == 5 && s.bytes().all(|b| b.is_ascii_digit());
-    digits(index) && digits(total) && index != "00001"
+    // A total of 00000 names no shards, as in gguf::split_name.
+    digits(index) && digits(total) && index != "00001" && total != "00000"
 }
 
 /// Model weights in `dir`: `.gguf` files that are not a multimodal

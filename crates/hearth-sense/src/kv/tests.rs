@@ -255,3 +255,55 @@ fn cache_type_names_and_block_sizes() {
     assert_eq!(CacheType::Q4_0.bytes(33), 36);
     assert_eq!(CacheType::F32.bytes(3), 12);
 }
+
+#[test]
+fn max_tokens_sees_past_sliding_layers() {
+    // Five sliding layers per full one: the full layer alone sets the slope.
+    let mut layers = vec![
+        Layer::Sliding {
+            kv_heads: 1,
+            k_len: 64,
+            v_len: 64,
+            window: 16
+        };
+        5
+    ];
+    layers.push(Layer::Full {
+        kv_heads: 1,
+        k_len: 64,
+        v_len: 64,
+    });
+    let g = Geometry {
+        arch: "gemma3".into(),
+        trained_context: None,
+        layers,
+        confidence: Confidence::High,
+        notes: Vec::new(),
+    };
+    let (k, v) = (CacheType::F16, CacheType::F16);
+    let swa = Some(Swa {
+        sequences: 1,
+        ubatch: 4,
+    });
+    let budget = g.kv_bytes(10_000, k, v, swa);
+    assert_eq!(g.max_tokens(budget, k, v, swa), Some(10_000));
+}
+
+#[test]
+fn max_tokens_is_none_when_nothing_grows_with_context() {
+    let g = Geometry {
+        arch: "mamba".into(),
+        trained_context: None,
+        layers: vec![Layer::Recurrent; 3],
+        confidence: Confidence::Medium,
+        notes: Vec::new(),
+    };
+    let (k, v) = (CacheType::F16, CacheType::F16);
+    assert_eq!(g.max_tokens(1 << 30, k, v, None), None);
+}
+
+#[test]
+fn hostile_layer_count_is_refused() {
+    let cfg = serde_json::json!({"model_type":"llama","num_hidden_layers":200_000_000u64,"num_attention_heads":8,"hidden_size":64});
+    assert!(Geometry::from_hf_config(&cfg).is_err());
+}

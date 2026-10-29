@@ -4,6 +4,19 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 
 ## Unreleased
 
+### 2026-10-29 audit fixes; status gives client URLs
+
+- **Gateway.** 403 for a non-IP, non-localhost `Host` or an `Origin` outside `gateway.allowed_origins`. Cancels on client exit before the first byte or while queued; drops a client stalled past `idle_timeout_ms`; kept bodies read by one deadline, before the queue slot.
+- **Ollama.** Load/unload requests answered without generating; 4xx stays 400; mid-stream errors end with an `error` line.
+- **Supervision.** Exits count toward `restart_budget` until a run stays ready `restart_window_ms`, so slow crash loops stop. Footprints match the server definition. Output no longer floods `hearthd.log`. Reload keeps stopped servers stopped and never wedges. Quoted poison signatures ignored; no `/slots` probe.
+- **fit.** No accelerator ceiling: host RAM is the ceiling. `--parallel 0`/`--ubatch 0` refused. SWA max context fixed. Hostile GGUFs and `-of-00000` shards refused.
+- **Agents.** `status` gives each server's `base_url` plus gateway and dashboard URLs. `config servers` documents the server table; user-only keys listed; secrets redacted everywhere. MCP survives bad or oversized lines (`mcp.max_message_bytes`), answers batches, limits `diff` (`mcp.history_limit`).
+- **History.** Newest snapshot never thinned; ids ordered across clock steps; prune/tag locked; `state.max_tags`; deadlines learned from the latest `discovery.learned_from_snapshots`.
+- **Load.** `follow --limit` reads back only as far as it needs. `incidents` asks journalctl for the matching lines and `--since` only. A ready server is probed with one request, not a full fingerprint. Linux honours cgroup v1 memory limits.
+- **Bundle.** Credential-shaped text (`token=`, `key=`, `Bearer`, `hf_`, `sk-`, `ghp_`) in server log lines is redacted; the words stay.
+- **Lean.** One response writer and one head reader for every listener; Ollama GETs use `hearth_runtime::http::get`; `fingerprint_quick` and `Journal::tags` removed.
+- **Small.** Chunk-size overflow and short bodies rejected; panicking handlers free their slot; `incidents --since` compares times; systemd units escape `%`/`$`; `service uninstall` always removes the unit.
+
 ### 2026-10-22 14:30 MCP results fit an agent's context
 
 - **doctor, bundle and show leave out per-process rows.** Those rows were 52 of doctor's 56 KB, past what an MCP client accepts. The result now says how many rows there were and gives the `show` arguments that return them. The snapshot is still recorded in full.

@@ -99,3 +99,77 @@ fn times_are_rfc3339_utc() {
     assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
     assert_eq!(rfc3339(1_792_051_473), "2026-10-15T08:04:33Z");
 }
+
+#[test]
+fn load_and_unload_requests_are_answered_without_generating() {
+    let load = load_only("/api/generate", &json!({ "model": "m" })).unwrap();
+    assert_eq!(
+        (load["done"].clone(), load["done_reason"].clone()),
+        (json!(true), json!("load"))
+    );
+    let unload = load_only(
+        "/api/chat",
+        &json!({ "model": "m", "messages": [], "keep_alive": 0 }),
+    );
+    assert_eq!(unload.unwrap()["done_reason"], "unload");
+    let unload = load_only(
+        "/api/generate",
+        &json!({ "model": "m", "keep_alive": "0s" }),
+    );
+    assert_eq!(unload.unwrap()["done_reason"], "unload");
+    assert!(load_only("/api/generate", &json!({ "model": "m", "prompt": "hi" })).is_none());
+    assert!(
+        load_only(
+            "/api/generate",
+            &json!({ "model": "m", "images": ["QUJD"] })
+        )
+        .is_none()
+    );
+    let chat = json!({ "model": "m", "messages": [{ "role": "user", "content": "hi" }] });
+    assert!(load_only("/api/chat", &chat).is_none());
+}
+
+#[test]
+fn a_server_error_mid_stream_reaches_the_client_as_an_error_line() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let (mut s, _) = listener.accept().unwrap();
+        s.read_to_string(&mut text).unwrap();
+        text
+    });
+    let mut client = TcpStream::connect(addr).unwrap();
+    let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: {\"error\":{\"message\":\"context exceeded\"}}\n\n";
+    let body = Body {
+        inner: sse.as_bytes(),
+        chunked: false,
+        left: 0,
+        done: false,
+    };
+    stream(&mut client, "/api/chat", &json!("m"), body, Instant::now()).unwrap();
+    drop(client);
+    let got = reader.join().unwrap();
+    let last = got.lines().last().unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(last).unwrap(),
+        json!({ "error": "context exceeded" })
+    );
+    assert!(!got.contains("\"done\":true"), "{got}");
+}
+
+#[test]
+fn a_4xx_from_the_server_is_the_clients_to_fix() {
+    let forward = Forward {
+        name: "a".into(),
+        addr: "127.0.0.1:1".parse().unwrap(),
+        head: String::new(),
+    };
+    let r = upstream_error(&forward, 400, r#"{"error":{"message":"too long"}}"#);
+    assert_eq!((r.status, r.kind), ("400 Bad Request", "bad_request"));
+    assert!(r.message.contains("too long"));
+    assert_eq!(
+        upstream_error(&forward, 500, "boom").status,
+        "502 Bad Gateway"
+    );
+}

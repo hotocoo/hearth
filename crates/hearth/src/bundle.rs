@@ -6,8 +6,10 @@
 //! could not see. Secrets are left out: the webhook URL (it carries a
 //! token) and server arguments (they can carry keys) are redacted, and a
 //! configuration that fails to load is reported without its error text,
-//! which quotes the offending line. Like the commands it runs, a bundle
-//! records fresh ports and doctor snapshots.
+//! which quotes the offending line. Free text from servers (their log
+//! lines, in events and status) keeps its words but loses anything shaped
+//! like a credential. Like the commands it runs, a bundle records fresh
+//! ports and doctor snapshots.
 
 use serde_json::{Value, json};
 
@@ -29,6 +31,68 @@ const NOTE_WITHHELD: &str =
     "(withheld: notes are free text and may quote secrets; hearth log --kind note shows them)";
 
 const WITHHELD: &str = "the configuration does not load; details withheld from the bundle because they quote the offending line (run hearth config to see them)";
+
+/// Where a credential starts in free text: `key=VALUE` forms (URL query
+/// strings, command lines) and the prefixes of common tokens (Hugging Face,
+/// OpenAI-style, GitHub, Bearer headers). Lowercase.
+const SECRET_MARKERS: &[&str] = &[
+    "token=",
+    "key=",
+    "password=",
+    "secret=",
+    "bearer ",
+    "hf_",
+    "sk-",
+    "ghp_",
+    "github_pat_",
+];
+
+const SECRET_REDACTED: &str = "(redacted)";
+
+/// `text` with the value after every [`SECRET_MARKERS`] marker replaced. A
+/// token prefix counts only at the start of a word, so `disk-cache` stays.
+fn redact_secrets(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let token_char = |c: char| c.is_ascii_alphanumeric() || "-_.~+/%".contains(c);
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(c) = text[i..].chars().next() {
+        let at_word = !text[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|p| p.is_ascii_alphanumeric());
+        let hit = SECRET_MARKERS
+            .iter()
+            .find(|m| lower[i..].starts_with(*m) && (m.ends_with(['=', ' ']) || at_word));
+        if let Some(m) = hit {
+            let start = i + m.len();
+            let end = text[start..]
+                .find(|c| !token_char(c))
+                .map_or(text.len(), |n| start + n);
+            // `HF_TOKEN=` names a variable; its value is what follows.
+            let names_a_key = !m.ends_with(['=', ' ']) && text[end..].starts_with('=');
+            if end > start && !names_a_key {
+                out.push_str(&text[i..start]);
+                out.push_str(SECRET_REDACTED);
+                i = end;
+                continue;
+            }
+        }
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
+/// Applies [`redact_secrets`] to every string in `value`.
+fn redact_all(value: &mut Value) {
+    match value {
+        Value::String(s) => *s = redact_secrets(s),
+        Value::Array(items) => items.iter_mut().for_each(redact_all),
+        Value::Object(map) => map.values_mut().for_each(redact_all),
+        _ => {}
+    }
+}
 
 /// Runs one hearth command line and returns its JSON, or its error.
 fn part(argv: &[&str], config_error: Option<&str>) -> Value {
@@ -54,24 +118,6 @@ fn scrub(value: &mut Value, error: &str) {
     }
 }
 
-/// Replaces values that may hold secrets.
-fn redact(config: &mut Value) {
-    for s in config["settings"].as_array_mut().into_iter().flatten() {
-        let key = s["key"].as_str().unwrap_or_default().to_string();
-        // Server variables are where tokens go (HF_TOKEN and the like).
-        let secret = key == "notify.webhook_url"
-            || (key.starts_with("servers.")
-                && (key.ends_with(".command") || key.contains(".env.")));
-        if secret && !s["value"].is_null() {
-            s["value"] = match (key.ends_with(".command"), s["value"].as_array()) {
-                // The program says what runs; its arguments may hold keys.
-                (true, Some(argv)) => json!([argv.first(), "(arguments redacted)"]),
-                _ => json!("(redacted)"),
-            };
-        }
-    }
-}
-
 pub fn run(args: &Args, _json: bool) -> Result<String, String> {
     let mut incidents = vec!["incidents", "--all"];
     if let Some(s) = &args.since {
@@ -84,8 +130,8 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let broken = config_error();
     let c = broken.as_deref();
-    let mut config = part(&["config"], c);
-    redact(&mut config);
+    // `hearth config` redacts what may hold secrets itself.
+    let config = part(&["config"], c);
     let mut bundle = json!({
         "hearth_version": env!("CARGO_PKG_VERSION"),
         "os": std::env::consts::OS,
@@ -112,6 +158,7 @@ pub fn run(args: &Args, _json: bool) -> Result<String, String> {
     if let Some(error) = c {
         scrub(&mut bundle, error);
     }
+    redact_all(&mut bundle);
     crate::to_json(&bundle)
 }
 
@@ -120,29 +167,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn credentials_in_free_text_are_redacted_and_the_words_kept() {
+        let line = "llama_model_load: GET https://hf.co/x?token=hf_abc123&x=1 failed: Bearer sk-live9 key=K9; disk-cache ok";
+        assert_eq!(
+            redact_secrets(line),
+            "llama_model_load: GET https://hf.co/x?token=(redacted)&x=1 failed: Bearer (redacted) key=(redacted); disk-cache ok"
+        );
+        let mut v =
+            json!({ "status": { "last_event": { "line": "HF_TOKEN=hf_x1 loaded" } }, "n": 1 });
+        redact_all(&mut v);
+        assert_eq!(
+            v["status"]["last_event"]["line"],
+            "HF_TOKEN=(redacted) loaded"
+        );
+        assert_eq!(v["n"], 1);
+    }
+
+    #[test]
     fn configuration_errors_are_scrubbed_everywhere() {
         let error = "h.toml: line 2: webhook_url = \"https://x/TOKEN\" oops";
         let mut v = json!({ "doctor": { "state_errors": [error] }, "n": 1 });
         scrub(&mut v, error);
         assert!(!v.to_string().contains("TOKEN"), "{v}");
         assert_eq!(v["n"], 1);
-    }
-
-    #[test]
-    fn secrets_are_redacted() {
-        let mut config = json!({ "settings": [
-            { "key": "notify.webhook_url", "value": "https://ntfy.sh/secret-token" },
-            { "key": "servers.chat.command", "value": ["llama-server", "--api-key", "sk-1"] },
-            { "key": "servers.chat.env.HF_TOKEN", "value": "hf_secret" },
-            { "key": "supervise.restart_budget", "value": 5 },
-        ]});
-        redact(&mut config);
-        let text = config.to_string();
-        assert!(
-            !text.contains("secret-token") && !text.contains("sk-1") && !text.contains("hf_secret"),
-            "{text}"
-        );
-        assert!(text.contains("llama-server"));
-        assert_eq!(config["settings"][3]["value"], 5);
     }
 }

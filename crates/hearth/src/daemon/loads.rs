@@ -30,11 +30,11 @@ pub fn release(name: &str) {
     }
 }
 
-/// The server's last footprint at ready, from the run journal.
-fn learned(name: &str) -> Option<u64> {
-    let config = hearth_core::config::load().ok()?;
-    let journal = hearth_core::state::Journal::open(&config.state).ok()?;
-    crate::measured::last_footprint(&journal, name)
+/// The server's last footprint at ready with this definition, from the
+/// run journal hearthd keeps.
+fn learned(state: &hearth_core::config::State, name: &str, definition: &str) -> Option<u64> {
+    let journal = hearth_core::state::Journal::open(state).ok()?;
+    crate::measured::last_footprint(&journal, name, definition)
 }
 
 /// Whether a server whose last start held `learned` bytes may start with
@@ -65,6 +65,9 @@ fn admit(
 /// also on a panic.
 pub struct Gate<'a> {
     name: &'a str,
+    /// `Server::definition`, so a footprint of another definition is not used.
+    definition: String,
+    state: &'a hearth_core::config::State,
     serialize: bool,
     /// Headroom kept above a server's last footprint before it may start;
     /// `None` when admission by footprint is off.
@@ -80,9 +83,16 @@ pub struct Gate<'a> {
 }
 
 impl<'a> Gate<'a> {
-    pub fn new(name: &'a str, supervise: &hearth_core::config::Supervise) -> Self {
+    pub fn new(
+        name: &'a str,
+        server: &hearth_core::config::Server,
+        config: &'a hearth_core::config::Config,
+    ) -> Self {
+        let supervise = &config.supervise;
         Self {
             name,
+            definition: server.definition(),
+            state: &config.state,
             serialize: supervise.serialize_loads,
             headroom: supervise
                 .admit_by_footprint
@@ -100,10 +110,14 @@ impl<'a> Gate<'a> {
         let waiting = supervised.status().0 == "waiting";
         if waiting && let Some(headroom) = self.headroom {
             if !self.read {
-                self.learned = learned(self.name);
+                self.learned = learned(self.state, self.name, &self.definition);
                 self.read = true;
             }
-            let available = crate::pressure::host_memory().map(|m| m.available_bytes);
+            // Read with the config hearthd holds: a half-saved user file
+            // must not hold a start.
+            let available = hearth_sense::host_memory()
+                .map(|m| m.available_bytes)
+                .map_err(|e| e.to_string());
             match admit(self.learned, available, headroom) {
                 Ok(()) => self.held = None,
                 Err(why) => {

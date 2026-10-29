@@ -51,10 +51,25 @@ fn the_growth_factor_is_the_policys() {
 }
 
 #[test]
-fn exits_spread_wider_than_the_window_never_give_up() {
+fn a_loop_slower_than_the_window_still_gives_up() {
+    // Each run takes longer than the window to fail: a slow load that
+    // never answers, or an out-of-memory on the first request.
+    let mut r = Restarts::new(policy());
+    for i in 0..3u64 {
+        let d = r.on_exit(at(i * 20_000 + 15_000), Some(at(i * 20_000 + 12_000)));
+        assert!(matches!(d, Decision::Restart { .. }), "exit {i}: {d:?}");
+    }
+    assert!(matches!(
+        r.on_exit(at(80_000), None),
+        Decision::GiveUp { exits: 4, .. }
+    ));
+}
+
+#[test]
+fn a_server_that_stayed_ready_a_window_starts_a_fresh_budget() {
     let mut r = Restarts::new(policy());
     for i in 0..20u64 {
-        let d = r.on_exit(at(i * 4000), None);
+        let d = r.on_exit(at(i * 20_000 + 19_000), Some(at(i * 20_000)));
         assert!(matches!(d, Decision::Restart { .. }), "exit {i}: {d:?}");
     }
 }
@@ -99,4 +114,44 @@ fn signal_deaths_are_reported_as_signals() {
     assert_eq!(ended(ExitStatus::from_raw(3 << 8)), (Some(3), None));
     assert_eq!(ended(ExitStatus::from_raw(137 << 8)), (None, Some(9)));
     assert_eq!(ended(ExitStatus::from_raw(9)), (None, Some(9)));
+}
+
+/// A writer the test can read back after the watch thread is done with it.
+#[derive(Clone, Default)]
+struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Shared {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn output_is_echoed_only_when_asked_and_always_kept() {
+    let line_bytes = 64;
+    for echoing in [true, false] {
+        let (tx, _rx) = channel();
+        let (output, log) = (Output::default(), StartLog::default());
+        said(&log).open = 1;
+        let seen = Shared::default();
+        let echo = echoing.then(|| Box::new(seen.clone()) as Box<dyn std::io::Write + Send>);
+        watch(
+            std::io::Cursor::new(b"one line\n".to_vec()),
+            tx,
+            (output.clone(), 5, line_bytes, log.clone()),
+            echo,
+        );
+        // The reader is done once it reports its stream closed.
+        drop(
+            log.1
+                .wait_while(said(&log), |s| s.open > 0)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        assert_eq!(output.lock().unwrap().len(), 1);
+        assert_eq!(seen.0.lock().unwrap().is_empty(), !echoing);
+    }
 }

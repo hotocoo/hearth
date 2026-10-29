@@ -173,8 +173,23 @@ pub fn from_kernel_log(text: &str, source: &Path) -> Vec<Incident> {
         .collect()
 }
 
+/// Text the kernel's OOM-kill line carries after its cause. Shared with
+/// [`kernel_log_pattern`] so the journal filter cannot drift from the parser.
+const OOM_MARKER: &str = ": Killed process ";
+/// The two fixed ends of the kernel's hung-task line, around `%s:%d`.
+const HUNG_START: &str = "INFO: task ";
+const HUNG_MID: &str = " blocked for more than ";
+
+/// A regex (for `journalctl --grep`) matching exactly the lines
+/// [`from_kernel_log`] can turn into incidents, so the journal need not be
+/// read in full. Built from the parser's own markers.
+#[must_use]
+pub fn kernel_log_pattern() -> String {
+    format!("{OOM_MARKER}|{HUNG_START}.*{HUNG_MID}")
+}
+
 fn oom_kill(message: &str) -> Option<Kind> {
-    let (cause, rest) = message.split_once(": Killed process ")?;
+    let (cause, rest) = message.split_once(OOM_MARKER)?;
     let cgroup = cause.ends_with("Memory cgroup out of memory");
     if !cgroup && !cause.ends_with("Out of memory") {
         return None;
@@ -199,8 +214,8 @@ fn oom_kill(message: &str) -> Option<Kind> {
 }
 
 fn hung_task(message: &str) -> Option<Kind> {
-    let rest = message.split_once("INFO: task ")?.1;
-    let (task, rest) = rest.split_once(" blocked for more than ")?;
+    let rest = message.split_once(HUNG_START)?.1;
+    let (task, rest) = rest.split_once(HUNG_MID)?;
     let (process, pid) = task.rsplit_once(':')?;
     let seconds = rest.split_whitespace().next()?.parse().ok()?;
     Some(Kind::HungTask {
@@ -224,6 +239,56 @@ fn time_from_name(name: &str) -> Option<String> {
         shape.then(|| format!("{} {}:{}:{}", &s[..10], &s[11..13], &s[13..15], &s[15..17]))
     })
 }
+
+/// Seconds since the Unix epoch of a timestamp in any form incidents carry:
+/// `2026-10-14T03:12:09+0800`, `2026-10-12 09:17:33.00 +0800`,
+/// `2026-10-12 09:17:33`, or a bare date. A missing offset reads as UTC (the
+/// reports do not say which zone they are in). Lets `--since` compare times
+/// across formats, which as strings differ in separator and offset.
+#[must_use]
+pub fn epoch_secs(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let (date, rest) = text.split_once(['T', ' ']).unwrap_or((text, ""));
+    let mut ymd = date.splitn(3, '-').map(|p| p.parse::<i64>().ok());
+    let (year, month, day) = (ymd.next()??, ymd.next()??, ymd.next()??);
+    let rest = rest.trim();
+    let (clock, zone) = match rest.find(['+', '-', 'Z', ' ']) {
+        Some(i) => (&rest[..i], rest[i..].trim()),
+        None => (rest, ""),
+    };
+    // A bare date has no clock: midnight.
+    let mut parts = clock.split(':').filter(|p| !p.is_empty());
+    let mut field = || {
+        parts
+            .next()
+            .map_or(Some(0), |p| p.split('.').next()?.parse::<i64>().ok())
+    };
+    let (hour, min, sec) = (field()?, field()?, field()?);
+    let offset = match zone.as_bytes().first() {
+        Some(&sign @ (b'+' | b'-')) => {
+            let digits: String = zone[1..].chars().filter(char::is_ascii_digit).collect();
+            let (oh, om) = (
+                digits.get(..2)?.parse::<i64>().ok()?,
+                digits.get(2..4)?.parse::<i64>().ok()?,
+            );
+            let secs = oh * SECS_PER_HOUR + om * SECS_PER_MINUTE;
+            if sign == b'-' { -secs } else { secs }
+        }
+        _ => 0,
+    };
+    // Days from civil date (Howard Hinnant's algorithm).
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * SECS_PER_DAY + hour * SECS_PER_HOUR + min * SECS_PER_MINUTE + sec - offset)
+}
+
+const SECS_PER_MINUTE: i64 = 60;
+const SECS_PER_HOUR: i64 = 3600;
+const SECS_PER_DAY: i64 = 86_400;
 
 /// `Key:   value` lines of the text report format.
 fn header_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
@@ -322,6 +387,20 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn epoch_secs_compares_across_formats() {
+        let kernel = epoch_secs("2026-10-14T03:12:09+0800").unwrap();
+        let report = epoch_secs("2026-10-12 09:17:33.00 +0800").unwrap();
+        assert!(kernel > report);
+        // Same instant, different zone and separator.
+        assert_eq!(
+            epoch_secs("2026-10-12T01:17:33+0000"),
+            epoch_secs("2026-10-12 09:17:33.00 +0800")
+        );
+        assert_eq!(epoch_secs("1970-01-02"), Some(86_400));
+        assert_eq!(epoch_secs("garbage"), None);
     }
 
     #[test]
@@ -441,6 +520,14 @@ mod tests {
             &found[2].kind,
             Kind::HungTask { process, pid: 991, seconds: 122 } if process == "ollama"
         ));
+    }
+
+    #[test]
+    fn kernel_log_pattern_matches_what_the_parser_reads() {
+        let re = kernel_log_pattern();
+        assert!(
+            re.contains(": Killed process ") && re.contains("INFO: task .* blocked for more than ")
+        );
     }
 
     #[test]

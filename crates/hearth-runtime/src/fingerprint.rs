@@ -200,11 +200,18 @@ pub fn fingerprint_within(
     deadline: Duration,
     max_bytes: u64,
 ) -> Fingerprint {
-    let p = Prober {
-        addr,
-        deadline,
-        max_bytes,
-    };
+    identify(
+        &Prober {
+            addr,
+            deadline,
+            max_bytes,
+        },
+        first_deadline,
+    )
+}
+
+fn identify(p: &Prober, first_deadline: Duration) -> Fingerprint {
+    let addr = p.addr;
     // The first request also decides whether this is HTTP at all; nothing
     // more is sent to a port that answered something else or nothing.
     let first = p.get_within("/api/version", first_deadline);
@@ -213,23 +220,61 @@ pub fn fingerprint_within(
         .ok()
         .map(|(_, d)| u64::try_from(d.as_micros()).unwrap_or(u64::MAX));
     let identity = match first {
-        Err(ProbeError::Refused) => Identity::Refused,
-        Err(ProbeError::NotHttp) => Identity::NotHttp,
-        Err(ProbeError::NoAnswer { after }) => Identity::Unresponsive {
-            waited_ms: u64::try_from(after.as_millis()).unwrap_or(u64::MAX),
-        },
-        Err(ProbeError::TooLarge) => Identity::Error {
-            detail: "response larger than discovery.max_probe_response_bytes".into(),
-        },
-        Err(ProbeError::Io(detail)) => Identity::Error { detail },
-        Ok((Probe::Json(v), _)) if v["version"].is_string() => ollama(&p, &v),
-        Ok((first, _)) => identify_http(&p, &first),
+        Err(e) => failed(e),
+        Ok((Probe::Json(v), _)) if v["version"].is_string() => ollama(p, &v),
+        Ok((first, _)) => identify_http(p, &first),
     };
     Fingerprint {
         addr,
         identity,
         latency_us,
     }
+}
+
+/// What a request that got no HTTP answer says about the port.
+fn failed(e: ProbeError) -> Identity {
+    match e {
+        ProbeError::Refused => Identity::Refused,
+        ProbeError::NotHttp => Identity::NotHttp,
+        ProbeError::NoAnswer { after } => Identity::Unresponsive {
+            waited_ms: u64::try_from(after.as_millis()).unwrap_or(u64::MAX),
+        },
+        ProbeError::TooLarge => Identity::Error {
+            detail: "response larger than discovery.max_probe_response_bytes".into(),
+        },
+        ProbeError::Io(detail) => Identity::Error { detail },
+    }
+}
+
+/// The one endpoint that proves a server already identified as `identity`
+/// is still answering: the one that identified it, or the cheapest the
+/// runtime has (llama.cpp `/health` does not queue work in its slots).
+#[must_use]
+pub fn liveness_path(identity: &Identity) -> &'static str {
+    match identity {
+        Identity::LlamaCpp { .. } => "/health",
+        Identity::ComfyUi { .. } => "/system_stats",
+        Identity::StableDiffusionApi { .. } => "/sdapi/v1/sd-models",
+        Identity::LmStudio { .. } => "/api/v0/models",
+        Identity::OpenAiCompatible { .. } => "/v1/models",
+        _ => "/api/version",
+    }
+}
+
+/// One request to `path`: `Ok` when anything answers with HTTP (a wedge is
+/// silence, not a status), else what the port did instead.
+///
+/// # Errors
+/// The [`Identity`] describing no answer, a refusal or a non-HTTP reply.
+pub fn answers(
+    addr: SocketAddr,
+    path: &str,
+    deadline: Duration,
+    max_bytes: u64,
+) -> Result<(), Identity> {
+    http::get(addr, path, deadline, max_bytes)
+        .map(|_| ())
+        .map_err(failed)
 }
 
 fn ollama(p: &Prober, version: &Value) -> Identity {
@@ -349,6 +394,23 @@ fn identify_http(p: &Prober, first: &Probe) -> Identity {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_ready_server_is_kept_alive_with_one_request() {
+        let addr = fake(vec![("/health", r#"{"status":"ok"}"#)]);
+        let llama = Identity::LlamaCpp {
+            model: None,
+            n_ctx: None,
+            slots: None,
+            health: "ok".into(),
+            models: Vec::new(),
+            tokens_held: None,
+        };
+        let path = liveness_path(&llama);
+        assert_eq!(path, "/health");
+        // Not identifiable by the full fingerprint (no /props), yet alive.
+        assert!(answers(addr, path, Duration::from_secs(2), 1 << 20).is_ok());
+    }
+
     #[test]
     fn tokens_held_sums_each_slots_prompt_and_decoded() {
         let slots = serde_json::json!([

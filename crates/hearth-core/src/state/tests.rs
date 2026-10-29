@@ -77,7 +77,7 @@ fn tags_name_moments_and_survive_pruning() {
     );
     assert_eq!(j.resolve("doctor", "healthy").unwrap().body["d"], 0);
     assert!(j.resolve("run", "healthy").is_err());
-    assert!(j.tags().unwrap().contains_key("healthy"));
+    assert!(j.tags_lenient().unwrap().0.contains_key("healthy"));
     assert!(matches!(j.resolve("ports", "nosuch"), Err(StateError::NoTag(t)) if t == "nosuch"));
     assert!(matches!(j.delete_tag("nosuch"), Err(StateError::NoTag(_))));
     for bad in ["1abc", "~1", "../x", "A", "a/b", "a..b"] {
@@ -130,6 +130,30 @@ fn tiers_thin_old_snapshots_and_drop_the_oldest() {
     assert!((3..=4).contains(&thinned), "{thinned}");
     assert!(drop.contains(&id(150)), "past the last window");
     assert_eq!(thin(&ids, &[], now).0.len(), 200);
+    // A first window too small for anything still keeps what was just
+    // recorded.
+    let none = [Tier {
+        within_ms: 0,
+        every_ms: 0,
+    }];
+    assert_eq!(thin(&ids, &none, now + minute).0, vec![id(0)]);
+}
+
+#[test]
+fn a_clock_that_steps_back_still_records_the_latest_as_latest() {
+    let dir = std::env::temp_dir().join(format!("hearth-clock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let journal = Journal::at(dir.clone(), 10).unwrap();
+    // A snapshot from an hour ahead of this clock: as if it stepped back.
+    let ahead = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        + 3_600_000_000_000;
+    std::fs::write(dir.join(format!("{ahead:020}-1-ports.json")), b"{}").unwrap();
+    let id = journal.record("ports", &1).unwrap().snapshot.id;
+    assert_eq!(journal.ids("ports").unwrap().last(), Some(&id));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -182,5 +206,26 @@ fn ignores_temporaries_and_foreign_files() {
     std::fs::write(dir.join(".1-1-ports.tmp"), "{").unwrap();
     std::fs::write(dir.join("notes.json"), "{}").unwrap();
     assert_eq!(j.ids("ports").unwrap().len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn tags_are_capped_but_a_name_can_always_move() {
+    let (j, dir) = journal("tag-cap", 10);
+    let j = Journal { max_tags: 2, ..j };
+    j.record("ports", &1).unwrap();
+    j.set_tag("a", &["ports"]).unwrap();
+    j.set_tag("b", &["ports"]).unwrap();
+    assert!(matches!(
+        j.set_tag("c", &["ports"]),
+        Err(StateError::TooManyTags(2))
+    ));
+    let id = j.record("ports", &2).unwrap().snapshot.id;
+    assert!(matches!(
+        j.tag_snapshot("c", &id),
+        Err(StateError::TooManyTags(2))
+    ));
+    j.set_tag("a", &["ports"]).unwrap();
+    j.tag_snapshot("b", &id).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }

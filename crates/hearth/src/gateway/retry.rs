@@ -30,15 +30,26 @@ pub(super) fn keepable_length(head: &str, max: u64) -> Option<u64> {
     length.filter(|&n| n <= max)
 }
 
-/// Reads the `length`-byte body the client is sending.
+/// Reads the `length`-byte body the client is sending, all of it by
+/// `deadline`: a client trickling bytes cannot hold the request open.
 pub(super) fn read_body(
     client: &mut TcpStream,
     length: u64,
-    within: Duration,
+    deadline: Instant,
 ) -> std::io::Result<Vec<u8>> {
-    client.set_read_timeout(Some(within))?;
     let mut body = vec![0; usize::try_from(length).unwrap_or(usize::MAX)];
-    client.read_exact(&mut body)?;
+    let mut read = 0;
+    while read < body.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        client.set_read_timeout(Some(left))?;
+        match client.read(&mut body[read..])? {
+            0 => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            n => read += n,
+        }
+    }
     client.set_read_timeout(None)?;
     Ok(body)
 }
@@ -59,38 +70,57 @@ pub(super) enum Attempt {
     /// The server is silent past `idle`: a wedge is hearthd's to restart,
     /// and waiting again would double the client's wait.
     Silent,
+    /// The client left before the first byte; the request is dropped, so
+    /// the server stops working on it.
+    Gone,
 }
 
-/// Sends the request once and reads the first bytes of the answer.
-pub(super) fn attempt(forward: &Forward, body: &[u8], config: &Gateway) -> Attempt {
+/// Sends the request once and reads the first bytes of the answer,
+/// checking every `ready_poll_ms` that the client is still there.
+pub(super) fn attempt(
+    forward: &Forward,
+    body: &[u8],
+    config: &Gateway,
+    client: &TcpStream,
+) -> Attempt {
     let connect = Duration::from_millis(config.connect_timeout_ms);
     let mut upstream = match TcpStream::connect_timeout(&forward.addr, connect) {
         Ok(s) => s,
         Err(e) => return Attempt::Retry(format!("connect: {e}")),
     };
+    let poll = Duration::from_millis(config.ready_poll_ms.min(config.idle_timeout_ms));
     let sent = upstream
-        .set_read_timeout(Some(Duration::from_millis(config.idle_timeout_ms)))
+        .set_read_timeout(Some(poll))
         .and_then(|()| upstream.write_all(forward.head.as_bytes()))
         .and_then(|()| upstream.write_all(body));
     if let Err(e) = sent {
         return Attempt::Retry(format!("send: {e}"));
     }
+    let silent_at = Instant::now() + Duration::from_millis(config.idle_timeout_ms);
     let mut buf = vec![0u8; 16 * 1024];
-    match upstream.read(&mut buf) {
-        Ok(0) => Attempt::Retry("closed before answering".into()),
-        Ok(n) => {
-            buf.truncate(n);
-            Attempt::Answered(upstream, buf)
+    loop {
+        match upstream.read(&mut buf) {
+            Ok(0) => return Attempt::Retry("closed before answering".into()),
+            Ok(n) => {
+                buf.truncate(n);
+                // `pipe` sets the idle read timeout for the rest.
+                return Attempt::Answered(upstream, buf);
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if super::gone(client) {
+                    return Attempt::Gone;
+                }
+                if Instant::now() >= silent_at {
+                    return Attempt::Silent;
+                }
+            }
+            Err(e) => return Attempt::Retry(format!("read: {e}")),
         }
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-            ) =>
-        {
-            Attempt::Silent
-        }
-        Err(e) => Attempt::Retry(format!("read: {e}")),
     }
 }
 

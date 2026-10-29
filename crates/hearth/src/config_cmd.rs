@@ -59,6 +59,7 @@ pub fn run(args: &Args, json: bool) -> Result<String, String> {
                 .as_ref()
                 .is_none_or(|f| s.key.contains(f.as_str()))
         })
+        .map(hearth_core::config::Setting::redacted)
         .collect();
     if json {
         return crate::to_json(&serde_json::json!({

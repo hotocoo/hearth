@@ -39,12 +39,13 @@ fn exchange(
     path: &str,
     body: &[u8],
     config: &Gateway,
+    idle: Duration,
 ) -> std::io::Result<(u16, bool, BufReader<TcpStream>)> {
     let mut s = TcpStream::connect_timeout(
         &forward.addr,
         Duration::from_millis(config.connect_timeout_ms),
     )?;
-    s.set_read_timeout(Some(Duration::from_millis(config.idle_timeout_ms)))?;
+    s.set_read_timeout(Some(idle))?;
     write!(
         s,
         "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -279,30 +280,84 @@ fn finish(v: &mut Value, reason: &Value, usage: &Value, started: Instant) {
     v["eval_count"] = usage["completion_tokens"].clone();
 }
 
-fn send(client: &mut TcpStream, status: &str, kind: &str, body: &str) -> std::io::Result<()> {
-    write!(
-        client,
-        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
-}
-
+/// The server's error, passed on: a 4xx (context exceeded, a bad
+/// argument) is the client's to fix, as Ollama says with a 400; anything
+/// else is the server's.
 fn upstream_error(forward: &Forward, status: u16, body: &str) -> Refusal {
     let message = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| v["error"]["message"].as_str().map(String::from))
         .unwrap_or_else(|| body.chars().take(300).collect());
+    let (status_line, kind) = if (400..500).contains(&status) {
+        ("400 Bad Request", "bad_request")
+    } else {
+        ("502 Bad Gateway", "upstream")
+    };
     refuse(
-        "502 Bad Gateway",
-        "upstream",
+        status_line,
+        kind,
         format!("server {} answered {status}: {message}", forward.name),
         format!("hearth logs {}", forward.name),
     )
 }
 
-/// Whether the server speaks Ollama itself.
+/// Whether the server speaks Ollama itself; it must say so within the
+/// connect timeout, so a wedged server does not stall the request here.
 fn native(forward: &Forward, config: &Gateway) -> bool {
-    exchange(forward, "GET", "/api/version", b"", config).is_ok_and(|(status, _, _)| status == 200)
+    let quick = Duration::from_millis(config.connect_timeout_ms);
+    hearth_runtime::http::get(forward.addr, "/api/version", quick, config.max_head_bytes)
+        .is_ok_and(|r| r.status == 200)
+}
+
+/// An Ollama request that only loads or unloads the model (no prompt, no
+/// messages), answered at once as Ollama does instead of generating.
+fn load_only(path: &str, ask: &Value) -> Option<Value> {
+    let empty = match path {
+        "/api/chat" => ask["messages"].as_array().is_none_or(Vec::is_empty),
+        _ => ask["prompt"].as_str().is_none_or(str::is_empty) && ask["images"].is_null(),
+    };
+    empty.then(|| {
+        let mut v = line(path, &ask["model"], "", None);
+        v["done"] = json!(true);
+        // 0, "0", "0s", "0m": Ollama's ways of saying unload now. hearth
+        // keeps the server as configured; `hearth stop` frees its memory.
+        let zero = ask["keep_alive"].as_f64() == Some(0.0)
+            || ask["keep_alive"]
+                .as_str()
+                .is_some_and(|k| k.trim_end_matches(char::is_alphabetic).parse() == Ok(0.0));
+        v["done_reason"] = json!(if zero { "unload" } else { "load" });
+        v
+    })
+}
+
+/// Ollama's model list, from the server's OpenAI one.
+fn tags(client: &mut TcpStream, forward: &Forward, config: &Gateway) -> std::io::Result<()> {
+    let idle = Duration::from_millis(config.idle_timeout_ms);
+    let answer = match hearth_runtime::http::get(
+        forward.addr,
+        "/v1/models",
+        idle,
+        config.translate_body_bytes,
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            return reply(client, &super::retry::exhausted(forward, 1, &e.to_string()));
+        }
+    };
+    let text = String::from_utf8_lossy(&answer.body);
+    if answer.status != 200 {
+        return reply(client, &upstream_error(forward, answer.status, &text));
+    }
+    let listed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let models: Vec<Value> = listed["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["id"].as_str())
+        .map(|id| json!({ "name": id, "model": id, "modified_at": now(), "size": 0, "digest": "", "details": {} }))
+        .collect();
+    let body = json!({ "models": models }).to_string();
+    crate::listen::respond(&mut *client, "200 OK", "application/json", "", &body)
 }
 
 /// Answers an Ollama request by translating it; `Ok(false)` when the
@@ -323,35 +378,10 @@ pub(super) fn serve(
     match path {
         "/api/version" => {
             let body = json!({ "version": env!("CARGO_PKG_VERSION") }).to_string();
-            return send(client, "200 OK", "application/json", &body).map(|()| true);
+            return crate::listen::respond(&mut *client, "200 OK", "application/json", "", &body)
+                .map(|()| true);
         }
-        "/api/tags" => {
-            let (status, chunked, r) = match exchange(forward, "GET", "/v1/models", b"", config) {
-                Ok(x) => x,
-                Err(e) => return fail(client, super::retry::exhausted(forward, 1, &e.to_string())),
-            };
-            let mut text = String::new();
-            Body {
-                inner: r,
-                chunked,
-                left: 0,
-                done: false,
-            }
-            .read_to_string(&mut text)?;
-            if status != 200 {
-                return fail(client, upstream_error(forward, status, &text));
-            }
-            let listed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-            let models: Vec<Value> = listed["data"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|m| m["id"].as_str())
-                .map(|id| json!({ "name": id, "model": id, "modified_at": now(), "size": 0, "digest": "", "details": {} }))
-                .collect();
-            let body = json!({ "models": models }).to_string();
-            return send(client, "200 OK", "application/json", &body).map(|()| true);
-        }
+        "/api/tags" => return tags(client, forward, config).map(|()| true),
         _ => {}
     }
     let Ok(ask) = serde_json::from_slice::<Value>(request) else {
@@ -365,6 +395,16 @@ pub(super) fn serve(
             ),
         );
     };
+    if let Some(done) = load_only(path, &ask) {
+        return crate::listen::respond(
+            &mut *client,
+            "200 OK",
+            "application/json",
+            "",
+            &done.to_string(),
+        )
+        .map(|()| true);
+    }
     let started = Instant::now();
     let openai = to_openai(path, &ask).to_string();
     let (status, chunked, r) = match exchange(
@@ -373,6 +413,7 @@ pub(super) fn serve(
         "/v1/chat/completions",
         openai.as_bytes(),
         config,
+        Duration::from_millis(config.idle_timeout_ms),
     ) {
         Ok(x) => x,
         Err(e) => return fail(client, super::retry::exhausted(forward, 1, &e.to_string())),
@@ -392,7 +433,12 @@ pub(super) fn serve(
     if !ask["stream"].as_bool().unwrap_or(true) {
         let mut text = String::new();
         body.read_to_string(&mut text)?;
-        let answer: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let Some(answer) = serde_json::from_str::<Value>(&text)
+            .ok()
+            .filter(|a| a["choices"][0].is_object())
+        else {
+            return fail(client, upstream_error(forward, 502, &text));
+        };
         let choice = &answer["choices"][0];
         let mut v = line(
             path,
@@ -401,7 +447,14 @@ pub(super) fn serve(
             tool_calls(&choice["message"]["tool_calls"]),
         );
         finish(&mut v, &choice["finish_reason"], &answer["usage"], started);
-        return send(client, "200 OK", "application/json", &v.to_string()).map(|()| true);
+        return crate::listen::respond(
+            &mut *client,
+            "200 OK",
+            "application/json",
+            "",
+            &v.to_string(),
+        )
+        .map(|()| true);
     }
     stream(client, path, &model, body, started).map(|()| true)
 }
@@ -434,6 +487,14 @@ fn stream<R: BufRead>(
         let Ok(chunk) = serde_json::from_str::<Value>(data) else {
             continue;
         };
+        // An error mid-stream ends the answer as Ollama ends one: a line
+        // with `error`, not a clean finish with the text cut short.
+        if !chunk["error"].is_null() {
+            let message = chunk["error"]["message"]
+                .as_str()
+                .map_or_else(|| chunk["error"].to_string(), String::from);
+            return writeln!(client, "{}", json!({ "error": message }));
+        }
         if chunk["usage"].is_object() {
             usage = chunk["usage"].clone();
         }
@@ -465,6 +526,10 @@ fn stream<R: BufRead>(
         }
         if !text.is_empty() {
             writeln!(client, "{}", line(path, model, text, None))?;
+        } else if super::gone(client) {
+            // Thinking or tool-call pieces send the client nothing, so its
+            // leaving shows only here.
+            return Ok(());
         }
     }
     let gathered = json!(

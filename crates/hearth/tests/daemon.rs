@@ -43,7 +43,7 @@ fn config(dir: &Path, port: u16, metrics: u16, gateway: u16) {
 fn gauge(port: u16, server: &str, state: &str) -> bool {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    s.write_all(b"GET /metrics HTTP/1.1\r\nHost: test\r\n\r\n")
+    s.write_all(b"GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
         .unwrap();
     let mut reply = String::new();
     s.read_to_string(&mut reply).unwrap();
@@ -124,7 +124,7 @@ fn check_dashboard(dir: &Path, port: u16) {
 fn http(port: u16, path: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    write!(s, "GET {path} HTTP/1.1\r\nHost: test\r\n\r\n").unwrap();
+    write!(s, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
     let mut reply = String::new();
     s.read_to_string(&mut reply).unwrap();
     reply
@@ -157,7 +157,7 @@ fn check_ollama(gateway: u16) {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
         write!(
             s,
-            "POST /s/e2e/api/chat HTTP/1.1\r\nHost: test\r\nContent-Length: {}\r\n\r\n{body}",
+            "POST /s/e2e/api/chat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         )
         .unwrap();
@@ -194,7 +194,7 @@ fn check_retry(dir: &Path, gateway: u16) {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
     write!(
         s,
-        "POST /s/e2e/flaky HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello"
+        "POST /s/e2e/flaky HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 5\r\n\r\nhello"
     )
     .unwrap();
     let mut reply = String::new();
@@ -237,7 +237,7 @@ fn check_gateway(dir: &Path, gateway: u16) {
     });
     gateway_says(gateway, "/s/e2e/v1/models", "HTTP/1.0 200", "e2e-model");
     let mut slow = std::net::TcpStream::connect(("127.0.0.1", gateway)).unwrap();
-    write!(slow, "GET /s/e2e/slow HTTP/1.1\r\nHost: test\r\n\r\n").unwrap();
+    write!(slow, "GET /s/e2e/slow HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
     let mut first = [0u8; 64];
     assert!(slow.read(&mut first).unwrap() > 0, "the stream began");
     drop(slow);
@@ -382,6 +382,20 @@ fn check_top(dir: &Path) {
     wait_until("top's last output", || shows("\x1b[?1049l"));
 }
 
+/// An agent gets the address to point a client at from status, not a
+/// config to read.
+fn check_addresses(status: &serde_json::Value, gateway: u16) {
+    assert_eq!(
+        status["servers"][0]["base_url"],
+        format!("http://127.0.0.1:{gateway}/s/e2e/v1"),
+        "{status}"
+    );
+    assert_eq!(
+        status["dashboard"],
+        format!("http://127.0.0.1:{}/", dashboard_port(gateway))
+    );
+}
+
 #[test]
 fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
     if !python() {
@@ -414,6 +428,7 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         s["footprint_bytes"].as_u64().is_some_and(|b| b > 0),
         "{status}"
     );
+    check_addresses(&status, gateway);
 
     hearth(&dir, &["restart", "e2e"]).unwrap();
     wait_until("a new pid", || {
@@ -458,7 +473,7 @@ fn hearthd_keeps_reports_restarts_and_takes_its_server_down_with_it() {
         "{logs}"
     );
 
-    check_reload(&dir);
+    check_reload(&dir, port);
     check_mcp(&dir);
     check_top(&dir);
     check_watching(&dir);
@@ -616,7 +631,7 @@ fn hearthd_refuses_a_state_directory_others_can_enter() {
 
 /// A server added to the configuration starts on reload, and one taken out
 /// stops; the server already running keeps its process throughout.
-fn check_reload(dir: &Path) {
+fn check_reload(dir: &Path, port: u16) {
     let second = free_port();
     let toml = std::fs::read_to_string(dir.join("hearth.toml")).unwrap();
     let script = dir.join("server.py");
@@ -638,7 +653,7 @@ fn check_reload(dir: &Path) {
         hearth(dir, &["status"])
             .is_ok_and(|v| v["servers"].as_array().is_some_and(|a| a.len() == 2))
     });
-    std::fs::write(dir.join("hearth.toml"), toml).unwrap();
+    std::fs::write(dir.join("hearth.toml"), &toml).unwrap();
     assert_eq!(
         hearth(dir, &["reload"]).unwrap()["removed"],
         serde_json::json!(["extra"])
@@ -649,6 +664,25 @@ fn check_reload(dir: &Path) {
         before,
         "untouched server kept its process"
     );
+    // A server stopped by hand stays stopped when a reload replaces it.
+    hearth(dir, &["stop", "e2e"]).unwrap();
+    wait_until("the server to stop", || {
+        state(dir).is_some_and(|(s, _)| s == "stopped") && !listening(port)
+    });
+    let changed = toml.replace("E2E_MARK = \"on\"", "E2E_MARK = \"changed\"");
+    std::fs::write(dir.join("hearth.toml"), changed).unwrap();
+    assert_eq!(
+        hearth(dir, &["reload"]).unwrap()["changed"],
+        serde_json::json!(["e2e"])
+    );
+    // Another reload is accepted only once the first has finished.
+    wait_until("the reload to finish", || {
+        hearth(dir, &["reload"]).is_ok_and(|v| v.get("error").is_none())
+    });
+    assert!(!listening(port), "the replacement started a stopped server");
+    assert_eq!(state(dir).unwrap().0, "stopped");
+    hearth(dir, &["start", "e2e"]).unwrap();
+    wait_until("the started server", || listening(port));
 }
 
 /// Records each POST body it receives as one line of `argv[2]`.

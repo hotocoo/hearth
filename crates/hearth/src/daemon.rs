@@ -26,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use hearth_core::config::{Config, Server};
 use hearth_core::state::Journal;
 use hearth_runtime::supervise::{Probe, Supervised};
+use reload::reload;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -100,6 +101,9 @@ struct Kept {
     server: Server,
     mailbox: Arc<Mailbox>,
     output: hearth_runtime::supervise::Output,
+    /// Whether it was stopped on request when its supervision ended, so a
+    /// replacement started by `reload` stays stopped too.
+    halted: Arc<AtomicBool>,
     thread: std::thread::JoinHandle<()>,
 }
 
@@ -111,6 +115,10 @@ struct Desk {
     reloading: AtomicBool,
     board: Board,
     max_message_bytes: u64,
+    /// Where the gateway and dashboard listen, if on: status gives each
+    /// server the base URL a client should use.
+    gateway: Option<SocketAddr>,
+    dashboard: Option<SocketAddr>,
 }
 
 impl Desk {
@@ -120,7 +128,14 @@ impl Desk {
 }
 
 /// Starts supervising `server` on its own thread.
-fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<Kept, String> {
+/// `halted`: it starts stopped, and stays so until `hearth start`.
+fn keep(
+    name: &str,
+    server: &Server,
+    config: &Config,
+    board: &Board,
+    halted: bool,
+) -> Result<Kept, String> {
     if let Some(t) = &server.cache_type {
         crate::fit::parse_cache(t).map_err(|e| format!("[{name}] cache_type: {e}"))?;
     }
@@ -131,7 +146,7 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
             addr: address(server),
             expect: server.expect.clone(),
             program: server.command.first().cloned().unwrap_or_default(),
-            state: "waiting".into(),
+            state: if halted { "stopped" } else { "waiting" }.into(),
             pid: None,
             server_pid: None,
             footprint_bytes: None,
@@ -144,6 +159,7 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
     );
     let mailbox = Arc::new(Mailbox::default());
     let output = hearth_runtime::supervise::Output::default();
+    let halted = Arc::new(AtomicBool::new(halted));
     let thread = {
         let (name, server, config, board) = (
             name.to_string(),
@@ -151,10 +167,10 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
             config.clone(),
             board.clone(),
         );
-        let (mailbox, output) = (mailbox.clone(), output.clone());
+        let (mailbox, output, halted) = (mailbox.clone(), output.clone(), halted.clone());
         std::thread::Builder::new()
             .name(format!("supervise {name}"))
-            .spawn(move || supervise(&name, &server, &config, &board, &mailbox, output))
+            .spawn(move || supervise(&name, &server, &config, &board, &mailbox, output, &halted))
     }
     .map_err(|e| {
         // Nothing supervises it: it must not look as if something did.
@@ -165,115 +181,9 @@ fn keep(name: &str, server: &Server, config: &Config, board: &Board) -> Result<K
         server: server.clone(),
         mailbox,
         output,
+        halted,
         thread,
     })
-}
-
-/// What `reload` will change: servers to add, to remove, and to replace.
-fn plan_reload(
-    kept: &BTreeMap<String, Server>,
-    wanted: &BTreeMap<String, Server>,
-) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let added = wanted
-        .keys()
-        .filter(|n| !kept.contains_key(*n))
-        .cloned()
-        .collect();
-    let removed = kept
-        .keys()
-        .filter(|n| !wanted.contains_key(*n))
-        .cloned()
-        .collect();
-    let changed = wanted
-        .iter()
-        .filter(|(n, s)| kept.get(*n).is_some_and(|k| k != *s))
-        .map(|(n, _)| n.clone())
-        .collect();
-    (added, removed, changed)
-}
-
-/// Re-reads the configuration and makes the kept servers match its
-/// `[servers]`. Servers that left are stopped, changed ones are stopped and
-/// started anew once the old one is gone (it holds the port until then),
-/// new ones start, and the rest keep running untouched.
-fn reload(desk: &Arc<Desk>) -> Value {
-    // One reload at a time, from planning to the last server started.
-    if desk
-        .reloading
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return json!({ "error": "a reload is already in progress; try again when hearth status settles" });
-    }
-    let done = |answer: Value| {
-        desk.reloading.store(false, Ordering::SeqCst);
-        answer
-    };
-    let config = match hearth_core::config::load() {
-        Ok(c) => c,
-        Err(e) => {
-            return done(
-                json!({ "error": format!("not reloaded, the configuration does not load: {e}") }),
-            );
-        }
-    };
-    // Planned and taken out of service under one lock, so nothing else can
-    // see a half-applied plan.
-    let (added, removed, changed, leaving) = {
-        let mut kept = desk.kept();
-        let current: BTreeMap<String, Server> = kept
-            .iter()
-            .map(|(n, k)| (n.clone(), k.server.clone()))
-            .collect();
-        let (added, removed, changed) = plan_reload(&current, &config.servers);
-        let leaving: Vec<(String, Kept)> = removed
-            .iter()
-            .chain(&changed)
-            .filter_map(|n| kept.remove(n).map(|k| (n.clone(), k)))
-            .collect();
-        (added, removed, changed, leaving)
-    };
-    // Every leaving server is told at once, so their stops overlap.
-    for (_, k) in &leaving {
-        // False only when it was already leaving; either way it goes.
-        let _ = k.mailbox.post(Order::Quit);
-    }
-    let answer = json!({ "added": added, "removed": removed, "changed": changed });
-    let starting: Vec<String> = added.into_iter().chain(changed).collect();
-    let worker = desk.clone();
-    // Joining a stopping server can take its grace: the rest happens off
-    // the control handler, and orders for these names are refused until it
-    // is done (see `reloading`).
-    let spawned = std::thread::Builder::new()
-        .name("reload".into())
-        .spawn(move || {
-            for (name, k) in leaving {
-                if k.thread.join().is_err() {
-                    log(&format!("[{name}] its supervising thread had failed"));
-                }
-                lock(&worker.board).remove(&name);
-                log(&format!("[{name}] left supervision"));
-            }
-            for name in starting {
-                let Some(server) = config.servers.get(&name) else {
-                    continue;
-                };
-                match keep(&name, server, &config, &worker.board) {
-                    Ok(k) => {
-                        worker.kept().insert(name.clone(), k);
-                        log(&format!("[{name}] supervised"));
-                    }
-                    Err(e) => log(&e),
-                }
-            }
-            worker.reloading.store(false, Ordering::SeqCst);
-        });
-    match spawned {
-        Ok(_) => answer,
-        Err(e) => done(json!({
-            "error": format!("the reload could not run ({e}); the servers taken out were told to stop; run hearth reload again"),
-        })),
-    }
 }
 
 type Board = Arc<Mutex<BTreeMap<String, Status>>>;
@@ -379,6 +289,8 @@ fn supervised(server: &Server, config: &Config) -> Supervised {
         crate::run::settings(&config.supervise),
         make,
     )
+    // hearthd's stderr is a log file nothing rotates; `hearth logs` has the tail.
+    .quiet()
 }
 
 fn address(server: &Server) -> SocketAddr {
@@ -397,11 +309,16 @@ fn supervise(
     board: &Board,
     orders: &Mailbox,
     output: hearth_runtime::supervise::Output,
+    stopped: &AtomicBool,
 ) {
     let _watchman = Watchman { board, name };
-    let mut gate = loads::Gate::new(name, &config.supervise);
+    let mut gate = loads::Gate::new(name, server, config);
     let mut supervised = supervised(server, config).sharing_output(output);
-    let mut halted = false;
+    let mut halted = stopped.load(Ordering::SeqCst);
+    if halted {
+        // Replaces a server that was stopped: it must not start by itself.
+        let _ = supervised.stop();
+    }
     let journal = Journal::open(&config.state)
         .map_err(|e| log(&format!("[{name}] events will not be recorded: {e}")))
         .ok();
@@ -462,6 +379,7 @@ fn supervise(
                 "addr": address(server),
                 "expect": server.expect,
                 "command": server.command.first(),
+                "definition": server.definition(),
                 "event": event,
             });
             if let Some(found) = &ready {
@@ -484,6 +402,7 @@ fn supervise(
         // (the server's pid, the last event) are not there yet.
         let (state, pid) = supervised.status();
         gate.settle(state);
+        stopped.store(halted, Ordering::SeqCst);
         let state = if halted { "stopped" } else { state };
         let restarts = supervised.restarts();
         let held = if halted { None } else { gate.held.clone() };
@@ -510,7 +429,21 @@ fn answer(request: &str, board: &Board, desk: &Arc<Desk>) -> Value {
                     None => {}
                 }
             }
-            json!({ "servers": servers })
+            let servers: Vec<Value> = servers
+                .iter()
+                .map(|s| {
+                    let mut v = json!(s);
+                    if let Some(g) = desk.gateway {
+                        v["base_url"] = json!(format!("http://{g}/s/{}/v1", s.name));
+                    }
+                    v
+                })
+                .collect();
+            json!({
+                "servers": servers,
+                "gateway": desk.gateway.map(|g| format!("http://{g}/s/NAME/v1")),
+                "dashboard": desk.dashboard.map(|d| format!("http://{d}/")),
+            })
         }
         Some(op @ ("restart" | "stop" | "start")) => {
             let name = request["server"].as_str().unwrap_or_default();
@@ -713,14 +646,27 @@ pub fn run() -> Result<(), String> {
     let board: Board = Arc::default();
     let mut kept = BTreeMap::new();
     for (name, server) in &config.servers {
-        kept.insert(name.clone(), keep(name, server, &config, &board)?);
+        kept.insert(name.clone(), keep(name, server, &config, &board, false)?);
     }
     let count = kept.len();
     if config.watch.in_hearthd {
         let config = config.clone();
         std::thread::Builder::new()
             .name("watch".into())
-            .spawn(move || crate::watch::forever(&config))
+            .spawn(move || {
+                // Watching should never end: say so if it does, or it stops unseen.
+                match std::panic::catch_unwind(|| crate::watch::forever(&config)) {
+                    Ok(()) => log("hearthd: watching ended"),
+                    Err(panic) => {
+                        let why = panic
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| panic.downcast_ref::<&str>().copied())
+                            .unwrap_or("unknown cause");
+                        log(&format!("hearthd: watching stopped: {why}"));
+                    }
+                }
+            })
             .map_err(|e| format!("cannot start watching: {e}"))?;
     }
     let servers: crate::gateway::Servers = {
@@ -742,10 +688,12 @@ pub fn run() -> Result<(), String> {
             .map_err(|e| format!("cannot start serving metrics: {e}"))?;
         log(&format!("hearthd: metrics on http://{addr}/metrics"));
     }
-    if let Some(addr) = crate::gateway::start(&config.gateway, &servers)? {
+    let gateway = crate::gateway::start(&config.gateway, &servers)?;
+    if let Some(addr) = gateway {
         log(&format!("hearthd: gateway on http://{addr}/s/NAME/"));
     }
-    if let Some(addr) = crate::dashboard::start(&config.dashboard)? {
+    let dashboard = crate::dashboard::start(&config.dashboard)?;
+    if let Some(addr) = dashboard {
         log(&format!("hearthd: dashboard on http://{addr}/"));
     }
     log(&format!(
@@ -759,6 +707,8 @@ pub fn run() -> Result<(), String> {
         reloading: AtomicBool::new(false),
         board: board.clone(),
         max_message_bytes: config.control.max_message_bytes,
+        gateway,
+        dashboard,
     });
     let config = Arc::new(config);
     let busy = Arc::new(AtomicU64::new(0));
@@ -776,6 +726,7 @@ pub fn run() -> Result<(), String> {
 }
 
 mod loads;
+mod reload;
 
 #[cfg(test)]
 mod tests;

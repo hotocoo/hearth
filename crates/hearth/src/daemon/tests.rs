@@ -1,3 +1,4 @@
+use super::reload::plan_reload;
 use super::*;
 
 fn server(port: u16, program: &str) -> Server {

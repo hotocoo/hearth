@@ -59,14 +59,21 @@ fn missing(key: &str) -> SenseError {
     }
 }
 
-/// A layer count read from a file is not trusted to be allocatable: one
-/// that is not fails here instead of aborting the process later.
-fn room_for_layers(n: usize) -> Result<()> {
-    Vec::<Layer>::new()
-        .try_reserve_exact(n)
-        .map_err(|e| SenseError::Parse {
-            what: "model geometry",
-            detail: format!("{n} layers: {e}"),
+/// Most layers a model file may claim. Real models have hundreds; a hostile
+/// count would make `vec![layer; n]` allocate gigabytes.
+const MAX_LAYERS: usize = 1 << 16;
+
+/// Search ceiling for [`Geometry::max_tokens`] when the model has no trained
+/// context: 2^40 tokens, far past any real context.
+const MAX_SEARCH_TOKENS: u64 = 1 << 40;
+
+fn check_layers(n: u64, what: &'static str) -> Result<usize> {
+    usize::try_from(n)
+        .ok()
+        .filter(|&n| n <= MAX_LAYERS)
+        .ok_or_else(|| SenseError::Parse {
+            what,
+            detail: format!("{n} layers is more than the {MAX_LAYERS} hearth accepts"),
         })
 }
 
@@ -90,8 +97,7 @@ impl Geometry {
         let key = |suffix: &str| h.arch_key(suffix);
         let num = |suffix: &str| key(suffix).and_then(Value::as_u64);
         let block_count = num("block_count").ok_or_else(|| missing("block_count"))?;
-        let n = usize::try_from(block_count).map_err(|_| missing("block_count"))?;
-        room_for_layers(n)?;
+        let n = check_layers(block_count, "gguf geometry")?;
         let mut notes = Vec::new();
         let mut confidence = Confidence::High;
 
@@ -107,7 +113,8 @@ impl Geometry {
         let k_len = num("attention.key_length").or_else(head_dim);
         let v_len = num("attention.value_length").or_else(head_dim);
 
-        let latent = num("attention.kv_lora_rank");
+        // Rank 0 means no latent attention, as in the config.json path.
+        let latent = num("attention.kv_lora_rank").filter(|&r| r > 0);
         let window = num("attention.sliding_window");
         let pattern = key("attention.sliding_window_pattern");
 
@@ -119,7 +126,7 @@ impl Geometry {
             ));
             vec![
                 Layer::Latent {
-                    k_len: rank + rope,
+                    k_len: rank.saturating_add(rope),
                     v_len: rank,
                 };
                 n
@@ -198,11 +205,7 @@ impl Geometry {
                 ),
             })
         };
-        let n = usize::try_from(need("num_hidden_layers")?).map_err(|_| SenseError::Parse {
-            what: "config.json geometry",
-            detail: "num_hidden_layers too large".into(),
-        })?;
-        room_for_layers(n)?;
+        let n = check_layers(need("num_hidden_layers")?, "config.json geometry")?;
         let mut notes = Vec::new();
         let mut confidence = Confidence::High;
         let heads = need("num_attention_heads")?;
@@ -363,13 +366,24 @@ impl Geometry {
         v: CacheType,
         swa: Option<Swa>,
     ) -> Option<u64> {
-        // kv_bytes is monotonic in tokens, so binary search it. The upper end
-        // is where a single layer's cost alone exhausts the budget.
-        let per_token = self.kv_bytes(1, k, v, swa).max(1);
-        let (mut lo, mut hi) = (0u64, budget / per_token + 1);
+        // kv_bytes is monotonic in tokens. Sliding layers stop growing at
+        // their window, so no per-token estimate bounds the answer: double
+        // until the cache outgrows the budget, then binary search.
+        let ceiling = self.trained_context.unwrap_or(MAX_SEARCH_TOKENS);
+        let fits = |t| self.kv_bytes(t, k, v, swa) <= budget;
+        let mut hi = 1u64;
+        while fits(hi) && hi < ceiling {
+            hi = hi.saturating_mul(2).min(ceiling);
+        }
+        // Still fitting at the ceiling: no cost grows with context (all
+        // recurrent), or the trained context is the limit.
+        if fits(hi) {
+            return self.trained_context.and(Some(hi)).filter(|&h| h > 0);
+        }
+        let mut lo = 0u64;
         while lo < hi {
             let mid = lo + (hi - lo).div_ceil(2);
-            if self.kv_bytes(mid, k, v, swa) <= budget {
+            if fits(mid) {
                 lo = mid;
             } else {
                 hi = mid - 1;

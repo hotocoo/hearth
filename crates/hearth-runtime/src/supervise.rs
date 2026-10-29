@@ -33,20 +33,20 @@
 //! every rule is tested without a model. Every number comes from the caller,
 //! which reads them from configuration.
 
-use std::io::{BufRead as _, BufReader, Read, Write as _};
 use std::net::SocketAddr;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::fingerprint::{Identity, fingerprint};
-use crate::llama_log::compute_bytes;
-use crate::signals::{Cause, Signal, cause, classify};
+use crate::fingerprint::{Identity, answers, fingerprint, liveness_path};
+use crate::signals::{Cause, Signal};
 
+mod output;
 mod tether;
 
+use output::watch;
 use tether::ended;
 pub use tether::tethered;
 
@@ -66,7 +66,8 @@ pub struct RestartPolicy {
 pub enum Decision {
     /// Start it again after this long.
     Restart { after_ms: u64 },
-    /// It exited `exits` times inside one window: a crash loop.
+    /// It exited `exits` times without once staying ready a whole window
+    /// in between: a crash loop.
     GiveUp { exits: usize, window_ms: u64 },
     /// Its log said why it exited, and a restart cannot cure that (a
     /// missing or unloadable model, a refused argument): it is not
@@ -78,7 +79,8 @@ fn ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The restart ledger: exit times inside the window and the next back-off.
+/// The restart ledger: exits since the server last stayed ready a whole
+/// window, and the next back-off.
 #[derive(Debug, Clone)]
 pub struct Restarts {
     policy: RestartPolicy,
@@ -113,18 +115,24 @@ impl Restarts {
 
     /// A server exited at `now`, ready since `ready_since` (`None`: it never
     /// became ready). Both are offsets from the same epoch.
+    ///
+    /// Only a run that stayed ready a whole window proves the server
+    /// healthy; every other exit counts toward the budget, however long the
+    /// run took, so a model that takes longer than the window to fail (a
+    /// slow load that never answers, an out-of-memory on the first request)
+    /// is still caught looping.
     pub fn on_exit(&mut self, now: Duration, ready_since: Option<Duration>) -> Decision {
         let window = self.policy.window;
-        self.exits.retain(|&t| now.saturating_sub(t) < window);
+        if ready_since.is_some_and(|t| now.saturating_sub(t) >= window) {
+            self.exits.clear();
+            self.backoff = self.policy.backoff_start;
+        }
         self.exits.push(now);
         if self.exits.len() > usize::try_from(self.policy.budget).unwrap_or(usize::MAX) {
             return Decision::GiveUp {
                 exits: self.exits.len(),
                 window_ms: ms(window),
             };
-        }
-        if ready_since.is_some_and(|t| now.saturating_sub(t) >= window) {
-            self.backoff = self.policy.backoff_start;
         }
         let after = self.backoff;
         self.backoff = self
@@ -149,6 +157,13 @@ pub struct Probe {
 impl Probe {
     fn identity(&self) -> Identity {
         fingerprint(self.addr, self.deadline, self.max_bytes).identity
+    }
+
+    /// One request to `path`, for the probe a ready server gets every
+    /// interval: it was identified when it became ready, so only whether it
+    /// still answers matters.
+    fn still_answers(&self, path: &str) -> Result<(), Identity> {
+        answers(self.addr, path, self.deadline, self.max_bytes)
     }
 }
 
@@ -296,6 +311,8 @@ enum State {
         child: Child,
         since: Instant,
         misses: u32,
+        /// The endpoint that proves it still answers, from its identity.
+        liveness: &'static str,
     },
     Waiting {
         until: Instant,
@@ -318,6 +335,8 @@ pub struct Supervised {
     output: Output,
     /// What the running server's log said since it started.
     log: StartLog,
+    /// Whether the server's output is also passed on to hearth's stderr.
+    echo: bool,
 }
 
 /// What one start's output said, shared with the threads reading it.
@@ -366,17 +385,22 @@ impl Supervised {
             signals: None,
             output: Output::default(),
             log: StartLog::default(),
+            echo: true,
         }
+    }
+
+    /// Stops passing the server's output on to hearth's stderr; it is still
+    /// kept for [`Self::recent_output`]. For a supervisor whose stderr is a
+    /// log file that nothing rotates.
+    #[must_use]
+    pub fn quiet(mut self) -> Self {
+        self.echo = false;
+        self
     }
 
     #[must_use]
     pub fn gave_up(&self) -> bool {
         matches!(self.state, State::GaveUp)
-    }
-
-    #[must_use]
-    pub fn ready(&self) -> bool {
-        matches!(self.state, State::Ready { .. })
     }
 
     #[must_use]
@@ -436,6 +460,7 @@ impl Supervised {
                         child,
                         since: now,
                         misses: 0,
+                        liveness: liveness_path(&identity),
                     };
                     let compute = said(&self.log).compute_bytes;
                     return Some(Event::Ready {
@@ -462,6 +487,7 @@ impl Supervised {
                 child,
                 since,
                 misses,
+                liveness,
             } => {
                 let since = *since;
                 match child.try_wait() {
@@ -469,11 +495,13 @@ impl Supervised {
                     Ok(None) => {}
                     Err(e) => return Some(self.lost(&e, Some(since))),
                 }
-                let identity = self.probe.identity();
-                if serves(&identity, self.expect.as_deref()) {
-                    *misses = 0;
-                    return None;
-                }
+                let identity = match self.probe.still_answers(liveness) {
+                    Ok(()) => {
+                        *misses = 0;
+                        return None;
+                    }
+                    Err(identity) => identity,
+                };
                 *misses += 1;
                 let misses = *misses;
                 if misses < self.settings.unresponsive_probes {
@@ -522,11 +550,14 @@ impl Supervised {
                     self.settings.output_line_bytes,
                     self.log.clone(),
                 );
+                let echo = || -> Option<Box<dyn std::io::Write + Send>> {
+                    self.echo.then(|| Box::new(std::io::stderr()) as _)
+                };
                 if let Some(out) = child.stdout.take() {
-                    watch(out, tx.clone(), keep.clone());
+                    watch(out, tx.clone(), keep.clone(), echo());
                 }
                 if let Some(err) = child.stderr.take() {
-                    watch(err, tx, keep);
+                    watch(err, tx, keep, echo());
                 }
                 self.signals = Some(rx);
                 self.state = State::Starting {
@@ -681,87 +712,6 @@ impl Supervised {
         self.state = State::GaveUp;
         result
     }
-}
-
-/// Passes the server's output on to hearth's stderr line by line, and sends
-/// every line that carries a signal. Ends when the server's group closes the
-/// stream.
-fn watch<R: Read + Send + 'static>(
-    stream: R,
-    signals: Sender<(Signal, String)>,
-    (output, keep, line_bytes, log): (Output, usize, usize, StartLog),
-) {
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(stream);
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            // Memory stays bounded however the server writes: a line longer
-            // than the cap arrives in pieces of that size.
-            match (&mut reader)
-                .take(cap(line_bytes))
-                .read_until(b'\n', &mut line)
-            {
-                Ok(0) | Err(_) => {
-                    said(&log).open -= 1;
-                    log.1.notify_all();
-                    return;
-                }
-                Ok(_) => {}
-            }
-            // A closed stderr leaves the log unseen, never the server unwatched.
-            let _ = std::io::stderr().write_all(&line);
-            let text = String::from_utf8_lossy(&line);
-            {
-                let mut kept = output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                kept.push_back(cut(text.trim_end(), line_bytes));
-                while kept.len() > keep {
-                    kept.pop_front();
-                }
-            }
-            {
-                let mut s = said(&log);
-                s.lines += 1;
-                if let Some(bytes) = compute_bytes(&text) {
-                    s.compute_bytes = s.compute_bytes.saturating_add(bytes);
-                }
-                // The first of a burst explains it; one long past does not.
-                let stale = s
-                    .cause
-                    .as_ref()
-                    .is_none_or(|(_, _, at)| s.lines - at > keep);
-                if stale && let Some(c) = cause(&text) {
-                    let at = s.lines;
-                    s.cause = Some((c, cut(text.trim_end(), line_bytes), at));
-                }
-            }
-            if let Some(signal) = classify(&text) {
-                // Fails only once the supervisor has moved on to another
-                // server; this one's output is still passed on until it closes.
-                let _ = signals.send((signal, text.trim_end().to_string()));
-            }
-        }
-    });
-}
-
-/// The most read as one piece of a line: twice the kept length, so a
-/// signature that starts near the end of the kept part is still seen whole.
-fn cap(line_bytes: usize) -> u64 {
-    u64::try_from(line_bytes.saturating_mul(2)).unwrap_or(u64::MAX)
-}
-
-/// `text` cut to at most `max` bytes, on a character boundary.
-fn cut(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{} [cut]", &text[..end])
 }
 
 /// Closes the tether's pipe, which stops the server's process group with

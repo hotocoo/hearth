@@ -140,12 +140,16 @@ fn program(path: Option<&str>, process: &str) -> String {
     path.unwrap_or(process).to_string()
 }
 
-/// Answer times per program and port, from the recorded `ports` snapshots.
-/// Read loosely, field by field, so snapshots from other hearth versions
-/// still count.
-fn recorded_latencies(journal: &Journal, errors: &mut Vec<String>) -> BTreeMap<Key, Vec<u64>> {
+/// Answer times per program and port, from the latest `latest` recorded
+/// `ports` snapshots. Read loosely, field by field, so snapshots from other
+/// hearth versions still count.
+fn recorded_latencies(
+    journal: &Journal,
+    latest: usize,
+    errors: &mut Vec<String>,
+) -> BTreeMap<Key, Vec<u64>> {
     let mut samples: BTreeMap<Key, Vec<u64>> = BTreeMap::new();
-    let snapshots = match journal.recent(KIND, usize::MAX) {
+    let snapshots = match journal.recent(KIND, latest) {
         Ok(s) => s,
         Err(e) => {
             errors.push(e.to_string());
@@ -334,7 +338,7 @@ fn observe(runtimes_only: bool) -> Result<Report, String> {
         .ok();
     let learned = journal
         .as_ref()
-        .map(|j| recorded_latencies(j, &mut state_errors))
+        .map(|j| recorded_latencies(j, discovery.learned_from_snapshots, &mut state_errors))
         .unwrap_or_default();
     let (listeners, uninspectable) = listeners()?;
 

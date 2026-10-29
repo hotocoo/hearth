@@ -110,9 +110,15 @@ fn launchd_plist(hearthd: &Path, log_dir: &Path, env: &[(&str, String)]) -> Stri
     )
 }
 
-/// Quotes a value for a systemd unit line.
+/// Quotes a value for a systemd unit line. systemd expands `%` specifiers
+/// in every line, so a literal one is doubled.
 fn systemd_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+    )
 }
 
 /// The systemd user unit. `KillMode=process` because hearthd's servers stop
@@ -125,7 +131,8 @@ fn systemd_unit(hearthd: &Path, env: &[(&str, String)]) -> String {
     }
     format!(
         "[Unit]\nDescription=hearthd: keeps local model servers alive\n\n[Service]\nExecStart={}\n{vars}Restart=on-failure\nKillMode=process\n\n[Install]\nWantedBy=default.target\n",
-        systemd_quote(&hearthd.display().to_string())
+        // `ExecStart=` also expands `$VAR`; `Environment=` does not.
+        systemd_quote(&hearthd.display().to_string().replace('$', "$$"))
     )
 }
 
@@ -174,6 +181,15 @@ fn run_tool(program: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// Writes the unit whole or not at all: a half-written unit would be
+/// loaded by the service manager at the next login.
+fn write_unit(u: &Unit) -> Result<(), String> {
+    let temp = u.path.with_extension("tmp");
+    let fail = |e: std::io::Error| format!("{}: {e}", u.path.display());
+    std::fs::write(&temp, &u.text).map_err(fail)?;
+    std::fs::rename(&temp, &u.path).map_err(fail)
+}
+
 fn install(u: &Unit) -> Result<String, String> {
     // The service manager restarts hearthd whenever it exits; one with
     // nothing to keep and nothing to watch would exit and be restarted
@@ -192,13 +208,13 @@ fn install(u: &Unit) -> Result<String, String> {
         // A previous version must be unloaded before the new one loads.
         let path = u.path.display().to_string();
         let _ = run_tool("launchctl", &["unload", &path]);
-        std::fs::write(&u.path, &u.text).map_err(|e| format!("{path}: {e}"))?;
+        write_unit(u)?;
         if let Ok(dir) = hearth_core::state::dir() {
             std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         run_tool("launchctl", &["load", "-w", &path])?;
     } else {
-        std::fs::write(&u.path, &u.text).map_err(|e| format!("{}: {e}", u.path.display()))?;
+        write_unit(u)?;
         run_tool("systemctl", &["--user", "daemon-reload"])?;
         run_tool(
             "systemctl",
@@ -216,16 +232,26 @@ fn uninstall(u: &Unit) -> Result<String, String> {
         return Ok(format!("nothing installed at {}\n", u.path.display()));
     }
     let path = u.path.display().to_string();
-    if cfg!(target_os = "macos") {
-        run_tool("launchctl", &["unload", "-w", &path])?;
+    let unloaded = if cfg!(target_os = "macos") {
+        run_tool("launchctl", &["unload", "-w", &path])
     } else {
         run_tool(
             "systemctl",
             &["--user", "disable", "--now", "hearthd.service"],
-        )?;
-    }
+        )
+    };
+    remove_unit(u, unloaded)
+}
+
+/// Removes the unit file whether or not the service manager let go of it:
+/// a unit already unloaded makes the tool fail, and must not keep the file.
+fn remove_unit(u: &Unit, unloaded: Result<(), String>) -> Result<String, String> {
+    let path = u.path.display();
     std::fs::remove_file(&u.path).map_err(|e| format!("{path}: {e}"))?;
-    Ok(format!("removed {path}; hearthd is stopped\n"))
+    match unloaded {
+        Ok(()) => Ok(format!("removed {path}; hearthd is stopped\n")),
+        Err(e) => Err(format!("removed {path}, but stopping hearthd failed: {e}")),
+    }
 }
 
 pub fn run(args: &Args, json: bool) -> Result<String, String> {
@@ -264,7 +290,25 @@ mod tests {
         assert!(unit.contains("ExecStart=\"/opt/h b/hearthd\""));
         assert!(unit.contains("Environment=\"HEARTH_CONFIG=/a b/<c>&\\\"d\\\".toml\""));
         assert!(unit.contains("KillMode=process"));
+        // systemd expands `%` everywhere and `$` in ExecStart only.
+        let odd = systemd_unit(Path::new("/o/h$1%h"), &[("K", "a$b%c".to_string())]);
+        assert!(odd.contains("ExecStart=\"/o/h$$1%%h\""));
+        assert!(odd.contains("Environment=\"K=a$b%%c\""));
         assert!(plist.contains("<key>PATH</key>\n\t\t<string>/opt/homebrew/bin:/usr/bin</string>"));
         assert!(unit.contains("Environment=\"PATH=/opt/homebrew/bin:/usr/bin\""));
+    }
+
+    #[test]
+    fn uninstall_removes_the_unit_even_when_unloading_it_failed() {
+        let path = std::env::temp_dir().join(format!("hearth-unit-{}.test", std::process::id()));
+        let u = Unit {
+            path,
+            text: "x".into(),
+        };
+        write_unit(&u).unwrap();
+        assert!(!u.path.with_extension("tmp").exists());
+        let err = remove_unit(&u, Err("not loaded".into())).unwrap_err();
+        assert!(err.contains("not loaded"), "{err}");
+        assert!(!u.path.exists());
     }
 }

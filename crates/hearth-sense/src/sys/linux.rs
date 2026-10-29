@@ -1,4 +1,4 @@
-//! Linux sensing through procfs, PSI and cgroup v2. Accelerators (NVML, AMD
+//! Linux sensing through procfs, PSI and cgroup v2 (v1 as fallback). Accelerators (NVML, AMD
 //! sysfs) are read by later phases; until then none are reported.
 
 use std::fs;
@@ -63,14 +63,84 @@ struct Cgroup {
     pressure: Option<std::path::PathBuf>,
 }
 
-fn cgroup_memory() -> Cgroup {
+/// Where the v1 memory controller is mounted, on v1 and hybrid hosts.
+const CGROUP_V1_MEMORY_ROOT: &str = "/sys/fs/cgroup/memory";
+
+/// `host_total` is the machine's RAM: a v1 limit at or above it is the
+/// kernel's "unlimited" placeholder, not a limit.
+fn cgroup_memory(host_total: u64) -> Cgroup {
     let Ok(cgroup) = fs::read_to_string("/proc/self/cgroup") else {
         return Cgroup::default();
     };
-    let Some(rel) = cgroup.lines().find_map(|l| l.strip_prefix("0::")) else {
-        return Cgroup::default();
-    };
-    cgroup_memory_at(std::path::Path::new("/sys/fs/cgroup"), rel)
+    let v2 = cgroup
+        .lines()
+        .find_map(|l| l.strip_prefix("0::"))
+        .map(|rel| cgroup_memory_at(std::path::Path::new("/sys/fs/cgroup"), rel))
+        .unwrap_or_default();
+    if v2.max.is_some() {
+        return v2;
+    }
+    let root = std::path::Path::new(CGROUP_V1_MEMORY_ROOT);
+    cgroup_v1_at(root, v1_memory_rel(&cgroup).unwrap_or("/"), host_total)
+}
+
+/// The path on the v1 `memory` controller's line of `/proc/self/cgroup`
+/// (`4:memory:/docker/abc`).
+fn v1_memory_rel(proc_cgroup: &str) -> Option<&str> {
+    proc_cgroup.lines().find_map(|l| {
+        let mut parts = l.splitn(3, ':');
+        let (_, controllers, path) = (parts.next()?, parts.next()?, parts.next()?);
+        controllers
+            .split(',')
+            .any(|c| c == "memory")
+            .then_some(path)
+    })
+}
+
+/// One v1 level from its `memory.limit_in_bytes` and `memory.usage_in_bytes`
+/// contents as `(limit, usage)`; `None` when unreadable or unlimited.
+fn v1_level(limit: &str, usage: &str, host_total: u64) -> Option<(u64, u64)> {
+    let limit: u64 = limit.trim().parse().ok()?;
+    let usage: u64 = usage.trim().parse().ok()?;
+    (limit < host_total).then_some((limit, usage))
+}
+
+/// The v1 counterpart of [`cgroup_memory_at`]: the tightest limit from
+/// `rel` up to `root`. Falls back to the root's own files when `rel` does
+/// not exist under it (the path is relative to a namespace, in a container).
+fn cgroup_v1_at(root: &std::path::Path, rel: &str, host_total: u64) -> Cgroup {
+    let mut out = Cgroup::default();
+    let mut path = root.join(rel.trim_start_matches('/'));
+    if !path.is_dir() {
+        path = root.to_path_buf();
+    }
+    loop {
+        let text = |file: &str| fs::read_to_string(path.join(file)).unwrap_or_default();
+        if let Some((max, current)) = v1_level(
+            &text("memory.limit_in_bytes"),
+            &text("memory.usage_in_bytes"),
+            host_total,
+        ) {
+            let inactive = text("memory.stat")
+                .lines()
+                .find_map(|l| l.strip_prefix("total_inactive_file "))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let headroom = max
+                .saturating_sub(current)
+                .saturating_add(inactive)
+                .min(max);
+            out.max = Some(out.max.map_or(max, |m| m.min(max)));
+            if out.available.is_none_or(|a| headroom < a) {
+                out.available = Some(headroom);
+                out.current = Some(current);
+            }
+        }
+        if path == root || !path.pop() {
+            break;
+        }
+    }
+    out
 }
 
 /// [`cgroup_memory`] for the cgroup `rel` under the hierarchy mounted at
@@ -115,7 +185,8 @@ fn cgroup_memory_at(root: &std::path::Path, rel: &str) -> Cgroup {
 
 pub fn host_memory() -> Result<HostMemory> {
     let meminfo = read("/proc/meminfo", "read meminfo")?;
-    let cg = cgroup_memory();
+    let host_total = required(&meminfo, "MemTotal")?;
+    let cg = cgroup_memory(host_total);
     // Stalls of the tasks under the binding limit, when there is one: the
     // host can be idle while this cgroup thrashes against its own limit.
     let psi_path = cg
@@ -138,10 +209,7 @@ pub fn host_memory() -> Result<HostMemory> {
     // Inside a memory-limited cgroup the limit is the machine as far as
     // this process is concerned: both totals and availability are the
     // smaller of the host's and the cgroup's.
-    let (host_total, host_available) = (
-        required(&meminfo, "MemTotal")?,
-        required(&meminfo, "MemAvailable")?,
-    );
+    let host_available = required(&meminfo, "MemAvailable")?;
     let total = cg.max.map_or(host_total, |m| host_total.min(m));
     let available = cg
         .available
@@ -650,6 +718,10 @@ fn parse_proc_net_tcp(text: &str) -> Vec<(u64, TcpSocket)> {
 
 pub fn tcp_sockets(pid: i32) -> Result<Vec<TcpSocket>> {
     let inodes = socket_inodes(pid)?;
+    // No sockets: skip parsing the system-wide tables.
+    if inodes.is_empty() {
+        return Ok(Vec::new());
+    }
     // The process's own network namespace, which is what its sockets live in.
     let tables = ["tcp", "tcp6"]
         .iter()

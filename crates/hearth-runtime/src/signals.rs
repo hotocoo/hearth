@@ -138,13 +138,19 @@ pub fn cause(line: &str) -> Option<Cause> {
         .map(|(_, c)| *c)
 }
 
-/// The most serious signal in `line`, if any.
+/// The most serious signal in `line`, if any. A signature after a `"` is
+/// quoted text, not the runtime speaking: real ggml log lines never quote,
+/// while a verbose server echoes request bodies as JSON, and a prompt may
+/// contain a signature (this program's own source does).
 #[must_use]
 pub fn classify(line: &str) -> Option<Signal> {
     let line = line.to_ascii_lowercase();
     SIGNATURES
         .iter()
-        .filter(|(needle, _)| line.contains(needle))
+        .filter(|(needle, _)| {
+            line.find(needle)
+                .is_some_and(|at| !line[..at].contains('"'))
+        })
         .map(|(_, signal)| *signal)
         .max()
 }
@@ -177,6 +183,12 @@ mod tests {
             classify("ggml_metal_graph_compute: command buffer 0 failed with status 5"),
             None
         );
+    }
+
+    #[test]
+    fn a_signature_inside_an_echoed_request_is_not_the_runtime_speaking() {
+        let echoed = r#"srv  log_server_r: request: {"prompt": "recreate the backend to recover"}"#;
+        assert_eq!(classify(echoed), None);
     }
 
     #[test]

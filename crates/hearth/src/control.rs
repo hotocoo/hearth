@@ -177,6 +177,9 @@ pub fn status(_: &StatusArgs, json: bool) -> Result<String, String> {
     if servers.is_empty() {
         out.push_str("hearthd runs no servers: add [servers.NAME] to your config\n");
     }
+    if let Some(gateway) = answer["gateway"].as_str() {
+        let _ = writeln!(out, "clients use {gateway}");
+    }
     for s in servers {
         let _ = writeln!(out, "{}", line(&s));
     }

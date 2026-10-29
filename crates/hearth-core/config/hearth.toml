@@ -30,6 +30,11 @@ learned_deadline_multiplier = 10.0
 # first-contact one.
 learned_min_samples = 3
 
+# How many of the latest ports snapshots deadlines are learned from. Every
+# ports run reads them, hearthd's watch rounds included, so this bounds
+# that work however long the history grows.
+learned_from_snapshots = 100
+
 # Shortest learned deadline. Runtimes on loopback often answer in well under
 # a millisecond, and ten times that is less than the scheduling jitter of a
 # busy machine probing many ports at once; below this floor a healthy runtime
@@ -47,6 +52,11 @@ max_snapshots_per_kind = 1000
 # Longest note `hearth note` records, in bytes: a note is a sentence or
 # two about what was done, not a log.
 max_note_bytes = 4096
+
+# Most tags at once. Tagged snapshots are kept past retention, so without a
+# bound an agent naming moments in a loop would grow the history forever.
+# Moving an existing name is always allowed.
+max_tags = 100
 
 # Kinds that are states of the machine (ports, doctor), thinned with age by
 # the tiers below. Events (run, note) are only capped: every one matters.
@@ -90,8 +100,10 @@ psi_full_critical = 20.0
 # `hearth run` keeps one model server alive. These bound how hard it tries.
 # Defaults follow Aletheia's supervisor, which they were ported from.
 
-# Exits tolerated inside restart_window_ms before hearth gives up: more is a
-# crash loop, and restarting a model that cannot load only burns the machine.
+# Exits tolerated before hearth gives up, counted since the server last
+# stayed ready a whole restart_window_ms: more is a crash loop, and
+# restarting a model that cannot load only burns the machine. A run that
+# never stays ready that long counts, however long it took to fail.
 restart_budget = 5
 restart_window_ms = 60000
 
@@ -201,6 +213,17 @@ max_clients = 8
 # How many of the latest run events and notes `hearth bundle` includes.
 recent_events = 50
 
+[mcp]
+# How many entries the history tools (log, follow, diff) return to an agent
+# that asks for no limit: a whole history runs to hundreds of KB, past an
+# agent's context.
+history_limit = 50
+
+# Longest message `hearth mcp` reads from its client. A longer line is
+# answered with a parse error and skipped, so one bad message cannot stop
+# the server or fill its memory.
+max_message_bytes = 1048576
+
 [metrics]
 # Where hearthd serves Prometheus metrics (GET /metrics): each server's state
 # and restarts, the machine's memory, pressure, open files and threads.
@@ -238,7 +261,9 @@ idle_timeout_ms = 600000
 # turned away. A stopped or given-up server is refused at once.
 ready_wait_ms = 120000
 
-# How often a held request checks whether its server is ready.
+# How often a held request checks whether its server is ready, and a
+# request waiting for its server's first byte whether its client is still
+# there: a client that leaves cancels it then.
 ready_poll_ms = 200
 
 # How many times a request is sent again when its server fails before
@@ -266,11 +291,20 @@ per_server_concurrency = 0
 
 # Largest Ollama-API request (/api/chat, /api/generate) translated for a
 # server that only speaks OpenAI's API. The body is read whole to translate
-# it, so this bounds what one request holds; images in base64 count.
+# it, so this bounds what one request holds; images in base64 count. Parsed
+# and re-encoded, a body takes a few times its size, and max_clients
+# requests can translate at once: lower this on a machine short of memory.
 translate_body_bytes = 33554432
 
 # Requests forwarded at once; one beyond this is told the gateway is busy.
 max_clients = 64
+
+# Web pages allowed to call the gateway from a browser, by origin
+# ("http://localhost:3000", an app's "app://name", or "null"). A request carrying any other Origin is refused,
+# and so is a Host that is not an IP address or localhost, so a website
+# cannot spend this machine's models (cross-site requests, DNS rebinding).
+# Programs that are not browsers send no Origin and are not affected.
+allowed_origins = []
 
 [dashboard]
 # Where hearthd serves its dashboard: a web page with the servers it keeps,

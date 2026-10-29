@@ -495,12 +495,13 @@ struct DiffReport {
 }
 
 /// Notes and run events recorded after snapshot `from` and up to `to`,
-/// oldest first. Ids start with their zero-padded time, so comparing ids
-/// compares times.
+/// oldest first; only the latest `limit` of each kind are read. Ids start
+/// with their zero-padded time, so comparing ids compares times.
 fn meanwhile(
     journal: &Journal,
     from: &str,
     to: &str,
+    limit: Option<usize>,
 ) -> Result<(Vec<LogEntry>, Vec<String>), String> {
     let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
     let mut entries = Vec::new();
@@ -508,10 +509,13 @@ fn meanwhile(
     for kind in [Kind::Run, Kind::Note] {
         let ids = journal.ids(kind.name()).map_err(|e| e.to_string())?;
         let count = ids.len();
-        for (i, id) in ids.iter().enumerate() {
-            if id.as_str() <= lo || id.as_str() > hi {
-                continue;
-            }
+        let within: Vec<(usize, &String)> = ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| id.as_str() > lo && id.as_str() <= hi)
+            .collect();
+        let skip = limit.map_or(0, |n| within.len().saturating_sub(n));
+        for &(i, id) in &within[skip..] {
             match journal.read(id) {
                 Ok(s) => entries.push(LogEntry {
                     kind: kind.name(),
@@ -553,7 +557,12 @@ pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
             n <= limit.get()
         });
     }
-    let (mut meanwhile, unreadable) = meanwhile(&journal, &from.id, &to.id)?;
+    let (mut meanwhile, unreadable) = meanwhile(
+        &journal,
+        &from.id,
+        &to.id,
+        args.limit.map(std::num::NonZero::get),
+    )?;
     // --limit bounds these too, keeping the latest: a long span can hold
     // many events.
     if let Some(limit) = args.limit {

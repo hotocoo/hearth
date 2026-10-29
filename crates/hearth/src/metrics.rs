@@ -8,7 +8,6 @@
 //! a fixed set.
 
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -217,44 +216,14 @@ fn machine(out: &mut String) {
     }
 }
 
-/// The request head (up to the blank line), read within `max` bytes and
-/// before `deadline` in total: each read waits at most the time left when
-/// reading began, and the deadline is checked after every byte, so a client
-/// sending a byte at a time cannot hold the handler.
-pub(crate) fn read_head(
-    stream: &TcpStream,
-    max: u64,
-    deadline: Instant,
-) -> std::io::Result<String> {
-    use std::io::{Error, ErrorKind, Read as _};
-    let left = || {
-        deadline
-            .checked_duration_since(Instant::now())
-            .filter(|d| !d.is_zero())
-            .ok_or_else(|| Error::new(ErrorKind::TimedOut, "request took too long"))
-    };
-    stream.set_read_timeout(Some(left()?))?;
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    let mut limited = stream.take(max);
-    while !head.ends_with(b"\r\n\r\n") && !head.ends_with(b"\n\n") {
-        if limited.read(&mut byte)? == 0 {
-            break;
-        }
-        head.push(byte[0]);
-        left()?;
-    }
-    Ok(String::from_utf8_lossy(&head).into_owned())
-}
-
 /// Answers one scrape. Anything but `GET /metrics` is a 404.
 fn answer(
-    mut stream: TcpStream,
+    stream: TcpStream,
     config: &hearth_core::config::Control,
     servers: &dyn Fn() -> Vec<Value>,
 ) -> std::io::Result<()> {
     let deadline = Instant::now() + Duration::from_millis(config.timeout_ms);
-    let head = read_head(&stream, config.max_message_bytes, deadline)?;
+    let head = crate::listen::read_head(&stream, config.max_message_bytes, deadline)?;
     let (status, body) = if head.starts_with("GET /metrics ") {
         ("200 OK", render(&servers()))
     } else {
@@ -266,11 +235,7 @@ fn answer(
             .filter(|d| !d.is_zero())
             .unwrap_or(Duration::from_millis(config.timeout_ms)),
     ))?;
-    write!(
-        stream,
-        "HTTP/1.1 {status}\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
+    crate::listen::respond(stream, status, "text/plain; version=0.0.4", "", &body)
 }
 
 /// Serves metrics on `listener` until hearthd ends. Each scrape gets its

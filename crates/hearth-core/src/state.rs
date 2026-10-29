@@ -46,6 +46,10 @@ pub enum StateError {
     BadRef(String),
     #[error("no tag named {0:?}; `hearth tag` lists them")]
     NoTag(String),
+    #[error(
+        "already {0} tags, the most state.max_tags allows: delete one (`hearth tag --delete NAME`) or move an existing name"
+    )]
+    TooManyTags(usize),
     #[error("tag {tag:?} has no {kind} snapshot")]
     TagWithout { tag: String, kind: String },
     #[error("{id} is not a {kind} snapshot")]
@@ -138,14 +142,17 @@ fn thin(ids: &[String], tiers: &[crate::config::Tier], now: u64) -> (Vec<String>
     let ms = |ns: u64| ns / u64::try_from(Duration::from_millis(1).as_nanos()).unwrap_or(1);
     let mut seen = std::collections::BTreeSet::new();
     let (mut keep, mut drop) = (Vec::new(), Vec::new());
-    for id in ids.iter().rev() {
+    for (newest, id) in ids.iter().rev().enumerate().map(|(n, id)| (n == 0, id)) {
         let at = nanos_of(id).unwrap_or(now);
         let age = ms(now.saturating_sub(at));
-        let kept = tiers
-            .iter()
-            .enumerate()
-            .find(|(_, t)| age <= t.within_ms)
-            .is_some_and(|(i, t)| t.every_ms == 0 || seen.insert((i, ms(at) / t.every_ms)));
+        // The newest is what was just recorded: whatever the tiers say, it
+        // is kept, or recording would save nothing.
+        let kept = newest
+            || tiers
+                .iter()
+                .enumerate()
+                .find(|(_, t)| age <= t.within_ms)
+                .is_some_and(|(i, t)| t.every_ms == 0 || seen.insert((i, ms(at) / t.every_ms)));
         if kept {
             keep.push(id.clone());
         } else {
@@ -217,6 +224,8 @@ pub const STATE_KINDS: &[&str] = &["ports", "doctor"];
 pub struct Journal {
     dir: PathBuf,
     keep: usize,
+    /// Most tags; tagged snapshots are never pruned, so this bounds them.
+    max_tags: usize,
     thinned: Vec<String>,
     tiers: Vec<crate::config::Tier>,
 }
@@ -232,6 +241,7 @@ impl Journal {
     pub fn thinning(mut self, state: &crate::config::State) -> Self {
         self.thinned.clone_from(&state.thinned_kinds);
         self.tiers.clone_from(&state.tiers);
+        self.max_tags = state.max_tags;
         self
     }
 
@@ -240,6 +250,7 @@ impl Journal {
         Ok(Self {
             dir,
             keep,
+            max_tags: usize::MAX,
             thinned: Vec::new(),
             tiers: Vec::new(),
         })
@@ -256,7 +267,14 @@ impl Journal {
         if !valid_kind(kind) {
             return Err(StateError::BadRef(kind.to_string()));
         }
-        let nanos = unique_nanos();
+        // After the newest of its kind even if the clock stepped back (NTP,
+        // a resumed VM), so the latest snapshot is always ~0.
+        let after = self
+            .ids(kind)
+            .ok()
+            .and_then(|ids| ids.last().and_then(|id| nanos_of(id)))
+            .map_or(0, |n| n.saturating_add(1));
+        let nanos = unique_nanos().max(after);
         let id = format!("{nanos:020}-{}-{kind}", std::process::id());
         let snapshot = Snapshot {
             taken_at_ms: u64::try_from(std::time::Duration::from_nanos(nanos).as_millis())
@@ -461,6 +479,43 @@ impl Journal {
         self.dir.join("tags")
     }
 
+    /// Refuses a new tag name once `max_tags` exist; moving one is fine.
+    fn room_for_tag(&self, path: &Path) -> Result<(), StateError> {
+        if path.exists() {
+            return Ok(());
+        }
+        let count = std::fs::read_dir(self.tags_dir()).map_or(0, |entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .ends_with(&format!(".{EXTENSION}"))
+                })
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .count()
+        });
+        if count >= self.max_tags {
+            return Err(StateError::TooManyTags(self.max_tags));
+        }
+        Ok(())
+    }
+
+    /// Holds the journal's lock until dropped, so a prune and a tag in two
+    /// processes cannot interleave (a prune removing a snapshot a tag just
+    /// named). `None` where the filesystem has no locks: the checks after
+    /// each write still catch most races.
+    fn lock(&self) -> Option<std::fs::File> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join(".lock"))
+            .ok()?;
+        file.lock().ok()?;
+        Some(file)
+    }
+
     /// Names the latest snapshot of every kind `name`, so it can be referred
     /// to by that name and is never pruned. Naming a moment again moves the
     /// name. Returns the ids tagged, by kind.
@@ -484,6 +539,8 @@ impl Journal {
         let dir = self.tags_dir();
         ensure_dir(&dir)?;
         let path = dir.join(format!("{name}.{EXTENSION}"));
+        let _held = self.lock();
+        self.room_for_tag(&path)?;
         // A prune that ran between choosing the ids and writing the tag may
         // have removed one; choose again until the tag names what exists.
         loop {
@@ -519,12 +576,14 @@ impl Journal {
             path: file.clone(),
             source: std::io::Error::from(std::io::ErrorKind::NotFound),
         };
+        let _held = self.lock();
         if !file.exists() {
             return Err(gone());
         }
         let dir = self.tags_dir();
         ensure_dir(&dir)?;
         let path = dir.join(format!("{name}.{EXTENSION}"));
+        self.room_for_tag(&path)?;
         // What the name held before, to put back if the snapshot is pruned
         // before the new tag protects it.
         let before = match std::fs::read(&path) {
@@ -572,16 +631,6 @@ impl Journal {
         let path = self.tags_dir().join(format!("{name}.{EXTENSION}"));
         let text = std::fs::read(&path).map_err(|source| tag_error(name, path.clone(), source))?;
         serde_json::from_slice(&text).map_err(|source| StateError::Json { path, source })
-    }
-
-    /// Every tag, by name. One tag that cannot be read fails the whole list;
-    /// [`Self::tags_lenient`] skips it instead.
-    pub fn tags(&self) -> Result<Tags, StateError> {
-        let (tags, mut errors) = self.tags_lenient()?;
-        match errors.pop() {
-            Some(e) => Err(e),
-            None => Ok(tags),
-        }
     }
 
     /// Every readable tag, and the errors for those that are not.
@@ -634,6 +683,7 @@ impl Journal {
     /// that cannot be read protects nothing but does not stop pruning; it is
     /// returned as the error, after pruning.
     fn prune(&self, kind: &str) -> Result<(), StateError> {
+        let _held = self.lock();
         let (tags, mut bad) = self.tags_lenient()?;
         let tagged: std::collections::BTreeSet<String> = tags
             .into_values()

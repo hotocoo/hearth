@@ -28,6 +28,28 @@ pub struct Config {
     pub pressure: Pressure,
     pub accelerators: Accelerators,
     pub bundle: Bundle,
+    pub mcp: Mcp,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Mcp {
+    pub history_limit: u64,
+    pub max_message_bytes: u64,
+}
+
+impl Mcp {
+    fn positive(self) -> Result<(), ConfigError> {
+        for (key, value) in [
+            ("mcp.history_limit", self.history_limit),
+            ("mcp.max_message_bytes", self.max_message_bytes),
+        ] {
+            if value == 0 {
+                return invalid(key, &0, AT_LEAST_ONE);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -71,6 +93,8 @@ pub struct Gateway {
     pub per_server_concurrency: u64,
     pub translate_body_bytes: u64,
     pub max_clients: u64,
+    /// Browser origins allowed to send requests through the gateway.
+    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,7 +151,21 @@ impl Gateway {
                 return invalid(key, &0, AT_LEAST_ONE);
             }
         }
-        Ok(())
+        // Compared with the Origin header as is, so it must be written as a
+        // browser sends it.
+        match self
+            .allowed_origins
+            .iter()
+            // App webviews send their own schemes (app://) or `null`.
+            .find(|o| *o != "null" && (!o.contains("://") || o.ends_with('/')))
+        {
+            Some(o) => invalid(
+                "gateway.allowed_origins",
+                o,
+                "an origin is scheme://host[:port] or null, as a browser sends it, e.g. http://localhost:3000",
+            ),
+            None => Ok(()),
+        }
     }
 }
 
@@ -160,6 +198,30 @@ pub struct Server {
     pub cache_type: Option<String>,
 }
 
+impl Server {
+    /// What the server runs, as one value: equal for two definitions that
+    /// start the same thing, so what one start measured is used only for
+    /// starts of the same definition. Not the arguments themselves, which
+    /// may hold secrets.
+    #[must_use]
+    pub fn definition(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        // shortcut: std's hasher may change between Rust releases; a change
+        // only makes the next start count as unmeasured.
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (
+            &self.command,
+            &self.env,
+            &self.dir,
+            &self.model,
+            &self.ctx,
+            &self.cache_type,
+        )
+            .hash(&mut h);
+        format!("{:016x}", h.finish())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Watch {
@@ -185,6 +247,7 @@ pub struct Discovery {
     pub max_probe_response_bytes: u64,
     pub learned_deadline_multiplier: f64,
     pub learned_min_samples: usize,
+    pub learned_from_snapshots: usize,
     pub learned_deadline_floor_ms: u64,
 }
 
@@ -212,6 +275,7 @@ pub struct Supervise {
 pub struct State {
     pub max_snapshots_per_kind: usize,
     pub max_note_bytes: u64,
+    pub max_tags: usize,
     /// Kinds whose snapshots are states of the machine, and so can be
     /// thinned with age; the others (events) are only capped by count.
     pub thinned_kinds: Vec<String>,
@@ -347,16 +411,20 @@ impl Config {
         Ok(())
     }
 
-    /// Counts and durations for which zero means nothing.
-    fn positive(&self) -> Result<(), ConfigError> {
-        self.gateway.positive()?;
-        self.dashboard.check()?;
+    /// Every count and duration that must be at least 1, with why.
+    fn counts(&self) -> Vec<(&'static str, u64, &'static str)> {
         let (d, v, w) = (&self.discovery, &self.supervise, &self.watch);
-        let gone = "must be at least 1, or a snapshot would be deleted as it is written";
-        for (key, value, reason) in [
+        let gone: &'static str =
+            "must be at least 1, or a snapshot would be deleted as it is written";
+        vec![
             (
                 "discovery.first_contact_timeout_ms",
                 d.first_contact_timeout_ms,
+                AT_LEAST_ONE,
+            ),
+            (
+                "discovery.learned_from_snapshots",
+                d.learned_from_snapshots as u64,
                 AT_LEAST_ONE,
             ),
             (
@@ -375,6 +443,7 @@ impl Config {
                 self.state.max_note_bytes,
                 AT_LEAST_ONE,
             ),
+            ("state.max_tags", self.state.max_tags as u64, AT_LEAST_ONE),
             (
                 "control.max_message_bytes",
                 self.control.max_message_bytes,
@@ -429,11 +498,26 @@ impl Config {
                 AT_LEAST_ONE,
             ),
             (
+                // 0 would read nothing, so the server's output would stop
+                // being drained and the server would block on it.
+                "supervise.output_line_bytes",
+                v.output_line_bytes as u64,
+                AT_LEAST_ONE,
+            ),
+            (
                 "supervise.backoff_factor",
                 u64::from(v.backoff_factor),
                 AT_LEAST_ONE,
             ),
-        ] {
+        ]
+    }
+
+    /// Counts and durations for which zero means nothing.
+    fn positive(&self) -> Result<(), ConfigError> {
+        self.gateway.positive()?;
+        self.mcp.positive()?;
+        self.dashboard.check()?;
+        for (key, value, reason) in self.counts() {
             if value == 0 {
                 return invalid(key, &0, reason);
             }
@@ -590,196 +674,5 @@ fn merge(base: &mut toml::Table, overlay: toml::Table) {
 #[cfg(test)]
 mod tests;
 
-/// One effective setting: its value, where that value came from, and what
-/// the shipped file says it means.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Setting {
-    pub key: String,
-    /// `None` for an optional key nobody set.
-    pub value: Option<toml::Value>,
-    /// `built-in`, or the user file that set it.
-    pub source: String,
-    pub doc: String,
-}
-
-/// Comments in the shipped file, by `section.key`. A comment documents the
-/// keys right below it, up to the next blank line, so keys that belong
-/// together share one comment; a commented-out assignment (`# key = value`)
-/// documents an optional key the same way.
-fn docs() -> std::collections::BTreeMap<String, String> {
-    let mut out = std::collections::BTreeMap::new();
-    let mut section = String::new();
-    let mut comment: Vec<&str> = Vec::new();
-    let key_of = |line: &str| -> Option<String> {
-        let (key, _) = line.split_once('=')?;
-        let key = key.trim();
-        (!key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
-            .then(|| key.to_string())
-    };
-    for line in BASE.lines().map(str::trim) {
-        if line.is_empty() {
-            comment.clear();
-        } else if let Some(name) = line.strip_prefix("[[").and_then(|l| l.strip_suffix("]]")) {
-            // An array of tables is one setting; its comment documents it,
-            // and the keys inside its entries are not settings of their own.
-            if !comment.is_empty() {
-                out.entry(name.to_string())
-                    .or_insert_with(|| comment.join(" "));
-            }
-            section.clear();
-            comment.clear();
-        } else if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            section = name.to_string();
-            comment.clear();
-        } else if let Some(text) = line.strip_prefix('#') {
-            let text = text.trim();
-            match key_of(text) {
-                Some(key) if !section.is_empty() && !comment.is_empty() => {
-                    out.insert(format!("{section}.{key}"), comment.join(" "));
-                }
-                _ => comment.push(text),
-            }
-        } else if let Some(key) = key_of(line)
-            && !section.is_empty()
-        {
-            out.insert(format!("{section}.{key}"), comment.join(" "));
-        }
-    }
-    out
-}
-
-fn flatten(prefix: &str, table: &toml::Table, out: &mut Vec<(String, toml::Value)>) {
-    for (key, value) in table {
-        let path = if prefix.is_empty() {
-            key.clone()
-        } else {
-            format!("{prefix}.{key}")
-        };
-        match value {
-            toml::Value::Table(t) => flatten(&path, t, out),
-            v => out.push((path, v.clone())),
-        }
-    }
-}
-
-/// Every built-in setting with its default and meaning, as shipped.
-pub fn explain_builtin() -> Result<Vec<Setting>, ConfigError> {
-    let mut base = Vec::new();
-    let table = BASE
-        .parse::<toml::Table>()
-        .map_err(|source| ConfigError::Parse {
-            origin: "built-in config/hearth.toml".into(),
-            source,
-        })?;
-    flatten("", &table, &mut base);
-    let docs = docs();
-    let mut out: Vec<Setting> = base
-        .into_iter()
-        .map(|(key, value)| Setting {
-            doc: docs.get(&key).cloned().unwrap_or_default(),
-            key,
-            value: Some(value),
-            source: "built-in".into(),
-        })
-        .collect();
-    for (key, doc) in &docs {
-        if !out.iter().any(|s| &s.key == key) {
-            out.push(Setting {
-                key: key.clone(),
-                value: None,
-                source: "unset".into(),
-                doc: doc.clone(),
-            });
-        }
-    }
-    out.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(out)
-}
-
-/// Every setting in effect, after the user's file has been merged and the
-/// result validated, sorted by key.
-pub fn explain() -> Result<Vec<Setting>, ConfigError> {
-    load()?;
-    let overlay = match user_path() {
-        Some(path) => match std::fs::read_to_string(&path) {
-            Ok(text) => Some((path.display().to_string(), text)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(source) => return Err(ConfigError::Read { path, source }),
-        },
-        None => None,
-    };
-    let parse = |origin: &str, text: &str| {
-        text.parse::<toml::Table>()
-            .map_err(|source| ConfigError::Parse {
-                origin: origin.to_string(),
-                source,
-            })
-    };
-    let mut base = Vec::new();
-    flatten("", &parse("built-in config/hearth.toml", BASE)?, &mut base);
-    let mut user = Vec::new();
-    if let Some((origin, text)) = &overlay {
-        flatten("", &parse(origin, text)?, &mut user);
-    }
-    let docs = docs();
-    let user_value = |key: &str| user.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
-    let origin = overlay.as_ref().map_or("", |(o, _)| o.as_str());
-    let mut out: Vec<Setting> = base
-        .iter()
-        .map(|(key, value)| match user_value(key) {
-            Some(v) => Setting {
-                key: key.clone(),
-                value: Some(v),
-                source: origin.to_string(),
-                doc: docs.get(key).cloned().unwrap_or_default(),
-            },
-            None => Setting {
-                key: key.clone(),
-                value: Some(value.clone()),
-                source: "built-in".into(),
-                doc: docs.get(key).cloned().unwrap_or_default(),
-            },
-        })
-        .collect();
-    // Optional keys: documented in the shipped file but not set there, and
-    // keys only the user's file sets (validation has accepted them).
-    for (key, doc) in &docs {
-        if out.iter().any(|s| &s.key == key) {
-            continue;
-        }
-        out.push(Setting {
-            key: key.clone(),
-            source: if user_value(key).is_some() {
-                origin.to_string()
-            } else {
-                "unset".into()
-            },
-            value: user_value(key),
-            doc: doc.clone(),
-        });
-    }
-    out.sort_by(|a, b| a.key.cmp(&b.key));
-    Ok(out)
-}
-
-#[cfg(test)]
-mod explain_tests {
-    use super::*;
-
-    #[test]
-    fn every_shipped_key_is_documented() {
-        let mut keys = Vec::new();
-        flatten("", &BASE.parse::<toml::Table>().unwrap(), &mut keys);
-        let docs = docs();
-        for (key, _) in keys {
-            assert!(
-                docs.get(&key).is_some_and(|d| !d.is_empty()),
-                "{key} has no comment in config/hearth.toml"
-            );
-        }
-        assert!(
-            docs.contains_key("notify.webhook_url"),
-            "optional keys are documented too"
-        );
-    }
-}
+mod explain;
+pub use explain::{Setting, explain, explain_builtin};

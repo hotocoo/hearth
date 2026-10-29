@@ -10,7 +10,6 @@
 //! allowed). The page, its style and its script are files built into the
 //! binary and served under a CSP that allows nothing else.
 
-use std::io::Write as _;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -175,9 +174,9 @@ fn route(r: &Request, config: &Dashboard) -> Answer {
     }
 }
 
-fn answer(mut stream: TcpStream, config: &Dashboard, addr: SocketAddr) -> std::io::Result<()> {
+fn answer(stream: TcpStream, config: &Dashboard, addr: SocketAddr) -> std::io::Result<()> {
     let deadline = Instant::now() + Duration::from_millis(config.timeout_ms);
-    let head = crate::metrics::read_head(&stream, config.max_head_bytes, deadline)?;
+    let head = crate::listen::read_head(&stream, config.max_head_bytes, deadline)?;
     let a = match parse(&head) {
         None => error("400 Bad Request", "bad_request", "not an HTTP request", ""),
         Some(r) => guard(&r, addr).map_or_else(|refused| refused, |()| route(&r, config)),
@@ -187,14 +186,7 @@ fn answer(mut stream: TcpStream, config: &Dashboard, addr: SocketAddr) -> std::i
             .checked_duration_since(Instant::now())
             .unwrap_or(Duration::from_millis(config.timeout_ms)),
     ))?;
-    write!(
-        stream,
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{SECURITY_HEADERS}Connection: close\r\n\r\n{}",
-        a.status,
-        a.kind,
-        a.body.len(),
-        a.body
-    )
+    crate::listen::respond(stream, a.status, a.kind, SECURITY_HEADERS, &a.body)
 }
 
 /// Starts the dashboard when `dashboard.listen` is set; the address it
