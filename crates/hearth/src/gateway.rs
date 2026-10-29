@@ -286,7 +286,7 @@ fn kept_body(
     translate: bool,
     config: &Gateway,
 ) -> std::io::Result<Result<Option<Vec<u8>>, Refusal>> {
-    let by = Instant::now() + Duration::from_millis(config.head_timeout_ms);
+    let by = Instant::now() + Duration::from_millis(config.body_timeout_ms);
     if !translate {
         return retry::keepable_length(head, config.retry_body_bytes)
             .map(|length| retry::read_body(client, length, by))
@@ -354,9 +354,9 @@ fn handle(
                     "timeout",
                     format!(
                         "the body did not arrive within {} ms",
-                        config.head_timeout_ms
+                        config.body_timeout_ms
                     ),
-                    "send the body at once, or raise gateway.head_timeout_ms".into(),
+                    "send the body at once, or raise gateway.body_timeout_ms".into(),
                 ),
             );
         }

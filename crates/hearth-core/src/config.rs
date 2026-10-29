@@ -83,6 +83,7 @@ pub struct Gateway {
     pub listen: Option<std::net::SocketAddr>,
     pub max_head_bytes: u64,
     pub head_timeout_ms: u64,
+    pub body_timeout_ms: u64,
     pub connect_timeout_ms: u64,
     pub idle_timeout_ms: u64,
     pub ready_wait_ms: u64,
@@ -139,6 +140,7 @@ impl Gateway {
         for (key, value) in [
             ("gateway.max_head_bytes", self.max_head_bytes),
             ("gateway.head_timeout_ms", self.head_timeout_ms),
+            ("gateway.body_timeout_ms", self.body_timeout_ms),
             ("gateway.connect_timeout_ms", self.connect_timeout_ms),
             ("gateway.idle_timeout_ms", self.idle_timeout_ms),
             ("gateway.ready_wait_ms", self.ready_wait_ms),

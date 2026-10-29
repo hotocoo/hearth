@@ -375,10 +375,11 @@ pub(crate) fn keep(
     sending: &mut Vec<std::thread::JoinHandle<()>>,
     (title, event, record): (&str, &Event, &serde_json::Value),
 ) {
-    if let Some(journal) = journal
-        && let Err(e) = journal.record(KIND, record)
-    {
-        eprintln!("hearth: event not recorded: {e}");
+    if let Some(journal) = journal {
+        match journal.record(KIND, record) {
+            Ok(r) => crate::measured::remember_ready(journal, &r.snapshot.id, record),
+            Err(e) => eprintln!("hearth: event not recorded: {e}"),
+        }
     }
     if alarming(event) {
         sending.retain(|h| !h.is_finished());

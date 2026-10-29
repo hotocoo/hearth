@@ -14,6 +14,7 @@ Entries are timestamped (UTC+08) with the commit time. Versions follow semver on
 - **History.** Newest snapshot never thinned; ids ordered across clock steps; prune/tag locked; `state.max_tags`; deadlines learned from the latest `discovery.learned_from_snapshots`.
 - **Load.** `follow --limit` reads back only as far as it needs. `incidents` asks journalctl for the matching lines and `--since` only. A ready server is probed with one request, not a full fingerprint. Linux honours cgroup v1 memory limits.
 - **Bundle.** Credential-shaped text (`token=`, `key=`, `Bearer`, `hf_`, `sk-`, `ghp_`) in server log lines is redacted; the words stay.
+- **No journal scans for lookups.** The footprint a start is held on and the compute buffers `fit` uses are kept beside the journal at each ready event and read as one file each. `gateway.body_timeout_ms` (2 min) bounds a kept body instead of the head's 10 s.
 - **Lean.** One response writer and one head reader for every listener; Ollama GETs use `hearth_runtime::http::get`; `fingerprint_quick` and `Journal::tags` removed.
 - **Small.** Chunk-size overflow and short bodies rejected; panicking handlers free their slot; `incidents --since` compares times; systemd units escape `%`/`$`; `service uninstall` always removes the unit.
 

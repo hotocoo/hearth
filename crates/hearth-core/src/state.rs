@@ -740,5 +740,8 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
+mod memo;
+pub use memo::memo_key;
+
 #[cfg(test)]
 mod tests;

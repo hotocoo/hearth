@@ -246,6 +246,11 @@ max_head_bytes = 65536
 # How long a client may take to send its request line and headers.
 head_timeout_ms = 10000
 
+# How long a client may take, in all, to send a body the gateway reads
+# whole (one kept for retry, or an Ollama request to translate). Large
+# base64 images over a slow link need more than the head's time.
+body_timeout_ms = 120000
+
 # How long connecting to the server may take before the client is told it
 # could not be reached.
 connect_timeout_ms = 2000
