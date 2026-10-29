@@ -58,6 +58,12 @@ max_note_bytes = 4096
 # Moving an existing name is always allowed.
 max_tags = 100
 
+# How many entries `log`, `follow` and `diff` show when no --limit is given,
+# the latest first; they say when there is more. A whole history runs to
+# thousands of snapshots, and an agent's context to far less. `log --full`
+# (an archive) is not limited.
+history_limit = 50
+
 # Kinds that are states of the machine (ports, doctor), thinned with age by
 # the tiers below. Events (run, note) are only capped: every one matters.
 thinned_kinds = ["ports", "doctor"]
@@ -214,11 +220,6 @@ max_clients = 8
 recent_events = 50
 
 [mcp]
-# How many entries the history tools (log, follow, diff) return to an agent
-# that asks for no limit: a whole history runs to hundreds of KB, past an
-# agent's context.
-history_limit = 50
-
 # Longest message `hearth mcp` reads from its client. A longer line is
 # answered with a parse error and skipped, so one bad message cannot stop
 # the server or fill its memory.

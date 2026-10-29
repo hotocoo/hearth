@@ -177,7 +177,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the most recent N (default mcp.history_limit)."
+          "description": "Only the most recent N (default state.history_limit)."
         },
         "since": {
           "type": "string",
@@ -224,7 +224,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the N largest movements per unit and the latest N events between (default mcp.history_limit)."
+          "description": "Only the N largest movements per unit and the latest N events between (default state.history_limit)."
         }
       }
     },
@@ -292,7 +292,7 @@
         "limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "Only the most recent N steps (default mcp.history_limit)."
+          "description": "Only the most recent N steps (default state.history_limit)."
         }
       }
     },

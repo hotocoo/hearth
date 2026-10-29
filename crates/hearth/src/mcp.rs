@@ -436,17 +436,8 @@ fn call(name: &str, args: &Value) -> Result<Value, String> {
         .flatten()
         .find(|t| t["name"] == name && t.get("cli").is_some())
         .ok_or_else(|| format!("unknown tool {name}"))?;
-    // A whole history runs to hundreds of KB, past an agent's context.
-    let mut args = args.clone();
-    if ["log", "follow", "diff"].contains(&name)
-        && let Some(o) = args.as_object_mut()
-        && o.get("limit").is_none_or(Value::is_null)
-        && o.get("stats") != Some(&Value::Bool(true))
-    {
-        let limit = mcp_config()?.history_limit;
-        o.insert("limit".into(), json!(limit));
-    }
-    let text = crate::dispatch(&command_line(tool, &args)?)?;
+    // log, follow and diff bound themselves (state.history_limit).
+    let text = crate::dispatch(&command_line(tool, args)?)?;
     let mut value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     trim(name, &mut value);
     Ok(value)

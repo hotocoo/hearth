@@ -77,7 +77,8 @@ impl Kind {
 pub struct LogArgs {
     #[arg(long, value_enum, default_value_t = Kind::Ports)]
     kind: Kind,
-    /// Only the most recent N snapshots.
+    /// Only the most recent N snapshots (default `state.history_limit`;
+    /// `--full` is not limited).
     #[arg(long)]
     limit: Option<NonZeroUsize>,
     /// Only snapshots from this long ago until now: 90s, 30m, 2h, 1d.
@@ -121,7 +122,8 @@ pub struct DiffArgs {
     #[arg(long, default_value = "~0")]
     to: String,
     /// Only the N largest movements of each unit (bytes, counts), so byte
-    /// deltas cannot crowd out a growing count of open files or threads.
+    /// deltas cannot crowd out a growing count of open files or threads,
+    /// and the latest N events between (default `state.history_limit`).
     #[arg(long)]
     limit: Option<NonZeroUsize>,
 }
@@ -150,7 +152,7 @@ pub struct FollowArgs {
     /// Show every snapshot, not only those where something changed.
     #[arg(long)]
     all: bool,
-    /// Only the most recent N steps.
+    /// Only the most recent N steps (default `state.history_limit`).
     #[arg(long)]
     limit: Option<usize>,
 }
@@ -237,6 +239,21 @@ pub fn footer(snapshot: Option<&str>, errors: &[String]) -> String {
     out
 }
 
+/// How many entries a history command shows when given no --limit.
+fn default_limit() -> Result<usize, String> {
+    hearth_core::config::load()
+        .map(|c| c.state.history_limit)
+        .map_err(|e| e.to_string())
+}
+
+/// What a history command says when its default limit left entries out.
+fn more_note(out: &mut String, shown: usize) {
+    let _ = writeln!(
+        out,
+        "showing the latest {shown} (state.history_limit); --limit N for more"
+    );
+}
+
 fn journal() -> Result<Journal, String> {
     let config = hearth_core::config::load().map_err(|e| e.to_string())?;
     Journal::open(&config.state).map_err(|e| e.to_string())
@@ -283,6 +300,9 @@ struct LogReport {
     /// Newest first.
     snapshots: Vec<LogEntry>,
     unreadable: Vec<String>,
+    /// The default limit stopped the listing; more may be recorded.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    more: bool,
 }
 
 fn stats(journal: &Journal, json: bool) -> Result<String, String> {
@@ -362,6 +382,24 @@ fn json_lines(report: &LogReport) -> Result<String, String> {
     Ok(out)
 }
 
+/// What `log` says when nothing matched.
+fn nothing_logged(out: &mut String, args: &LogArgs, report: &LogReport) {
+    let _ = match &args.grep {
+        Some(g) if args.all => writeln!(out, "nothing recorded mentions {g:?}"),
+        Some(g) => writeln!(out, "no {} snapshot mentions {g:?}", report.kind),
+        None if args.all => writeln!(
+            out,
+            "nothing recorded in {} yet: run hearth ports or hearth doctor",
+            report.directory
+        ),
+        None => writeln!(
+            out,
+            "no {} snapshots in {} yet: run hearth {}",
+            report.kind, report.directory, report.kind
+        ),
+    };
+}
+
 pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
     if args.stats {
@@ -377,8 +415,15 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
         directory: journal.path().display().to_string(),
         snapshots: Vec::new(),
         unreadable: Vec::new(),
+        more: false,
     };
-    let limit = args.limit.map_or(usize::MAX, NonZeroUsize::get);
+    // An archive (--full) is everything asked for; a listing is bounded.
+    let defaulted = args.limit.is_none() && !args.full;
+    let limit = match args.limit {
+        Some(l) => l.get(),
+        None if args.full => usize::MAX,
+        None => default_limit()?,
+    };
     // (kind, id, ~N within its kind), newest first across kinds: ids begin
     // with their time, zero-padded, so they sort in time order.
     let mut timeline = Vec::new();
@@ -400,6 +445,7 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     // at the last one needed.
     for (kind, id, back) in timeline {
         if report.snapshots.len() == limit {
+            report.more = defaulted;
             break;
         }
         match journal.read(&id) {
@@ -427,20 +473,7 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     }
     let mut out = String::new();
     if report.snapshots.is_empty() {
-        let _ = match &args.grep {
-            Some(g) if args.all => writeln!(out, "nothing recorded mentions {g:?}"),
-            Some(g) => writeln!(out, "no {} snapshot mentions {g:?}", report.kind),
-            None if args.all => writeln!(
-                out,
-                "nothing recorded in {} yet: run hearth ports or hearth doctor",
-                report.directory
-            ),
-            None => writeln!(
-                out,
-                "no {} snapshots in {} yet: run hearth {}",
-                report.kind, report.directory, report.kind
-            ),
-        };
+        nothing_logged(&mut out, args, &report);
     }
     for s in &report.snapshots {
         let kind = if args.all {
@@ -459,6 +492,9 @@ pub fn log(args: &LogArgs, json: bool) -> Result<String, String> {
     }
     for e in &report.unreadable {
         let _ = writeln!(out, "unreadable: {e}");
+    }
+    if report.more {
+        more_note(&mut out, report.snapshots.len());
     }
     Ok(out)
 }
@@ -492,6 +528,9 @@ struct DiffReport {
     /// Events in that span that could not be read.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unreadable: Vec<String>,
+    /// The default limit left movements or events out.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    more: bool,
 }
 
 /// Notes and run events recorded after snapshot `from` and up to `to`,
@@ -545,30 +584,29 @@ pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
     let (changes, mut deltas) = kind.diff(&from.body, &to.body)?;
     deltas.retain(|d| d.by != 0);
     deltas.sort_by_key(|d| (d.unit, std::cmp::Reverse(d.by.unsigned_abs())));
-    if let Some(limit) = args.limit {
-        // Sorted by unit, so a running count per unit is enough.
-        let mut seen: Option<(Unit, usize)> = None;
-        deltas.retain(|d| {
-            let n = match seen {
-                Some((unit, n)) if unit == d.unit => n + 1,
-                _ => 1,
-            };
-            seen = Some((d.unit, n));
-            n <= limit.get()
-        });
-    }
-    let (mut meanwhile, unreadable) = meanwhile(
-        &journal,
-        &from.id,
-        &to.id,
-        args.limit.map(std::num::NonZero::get),
-    )?;
-    // --limit bounds these too, keeping the latest: a long span can hold
+    let limit = match args.limit {
+        Some(l) => l.get(),
+        None => default_limit()?,
+    };
+    let before = deltas.len();
+    // Sorted by unit, so a running count per unit is enough.
+    let mut seen: Option<(Unit, usize)> = None;
+    deltas.retain(|d| {
+        let n = match seen {
+            Some((unit, n)) if unit == d.unit => n + 1,
+            _ => 1,
+        };
+        seen = Some((d.unit, n));
+        n <= limit
+    });
+    // One more than shown tells whether events were left out.
+    let (mut meanwhile, unreadable) =
+        meanwhile(&journal, &from.id, &to.id, Some(limit.saturating_add(1)))?;
+    // The limit bounds these too, keeping the latest: a long span can hold
     // many events.
-    if let Some(limit) = args.limit {
-        let extra = meanwhile.len().saturating_sub(limit.get());
-        meanwhile.drain(..extra);
-    }
+    let extra = meanwhile.len().saturating_sub(limit);
+    meanwhile.drain(..extra);
+    let more = args.limit.is_none() && (deltas.len() < before || extra > 0);
     let report = DiffReport {
         kind: kind.name(),
         from: Side::from(&from),
@@ -577,12 +615,16 @@ pub fn diff(args: &DiffArgs, json: bool) -> Result<String, String> {
         deltas,
         meanwhile,
         unreadable,
+        more,
     };
     if json {
-        crate::to_json(&report)
-    } else {
-        Ok(render_diff(&report))
+        return crate::to_json(&report);
     }
+    let mut out = render_diff(&report);
+    if report.more {
+        more_note(&mut out, limit);
+    }
+    Ok(out)
 }
 
 fn render_diff(r: &DiffReport) -> String {

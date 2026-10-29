@@ -34,19 +34,13 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mcp {
-    pub history_limit: u64,
     pub max_message_bytes: u64,
 }
 
 impl Mcp {
     fn positive(self) -> Result<(), ConfigError> {
-        for (key, value) in [
-            ("mcp.history_limit", self.history_limit),
-            ("mcp.max_message_bytes", self.max_message_bytes),
-        ] {
-            if value == 0 {
-                return invalid(key, &0, AT_LEAST_ONE);
-            }
+        if self.max_message_bytes == 0 {
+            return invalid("mcp.max_message_bytes", &0, AT_LEAST_ONE);
         }
         Ok(())
     }
@@ -278,6 +272,7 @@ pub struct State {
     pub max_snapshots_per_kind: usize,
     pub max_note_bytes: u64,
     pub max_tags: usize,
+    pub history_limit: usize,
     /// Kinds whose snapshots are states of the machine, and so can be
     /// thinned with age; the others (events) are only capped by count.
     pub thinned_kinds: Vec<String>,
@@ -446,6 +441,11 @@ impl Config {
                 AT_LEAST_ONE,
             ),
             ("state.max_tags", self.state.max_tags as u64, AT_LEAST_ONE),
+            (
+                "state.history_limit",
+                self.state.history_limit as u64,
+                AT_LEAST_ONE,
+            ),
             (
                 "control.max_message_bytes",
                 self.control.max_message_bytes,

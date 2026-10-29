@@ -7,7 +7,7 @@ use hearth_core::state::{Journal, Snapshot};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{FollowArgs, Kind, TagArgs, age, journal};
+use super::{FollowArgs, Kind, TagArgs, age, default_limit, journal, more_note};
 
 #[derive(Serialize)]
 struct Step {
@@ -67,10 +67,14 @@ fn timeline(
 /// enough steps or the whole history. Steps at the window's oldest snapshot
 /// are not trusted (nothing before it was compared), unless the window
 /// reaches the first snapshot.
-fn latest_steps(journal: &Journal, args: &FollowArgs) -> Result<(Vec<Step>, Vec<String>), String> {
+fn latest_steps(
+    journal: &Journal,
+    args: &FollowArgs,
+    limit: usize,
+) -> Result<(Vec<Step>, Vec<String>), String> {
     let kind = args.kind.name();
     let total = journal.ids(kind).map_err(|e| e.to_string())?.len();
-    let mut window = args.limit.map_or(usize::MAX, |l| l.saturating_mul(2));
+    let mut window = limit.saturating_mul(2);
     loop {
         let (mut snapshots, mut unreadable) = (Vec::new(), Vec::new());
         for snapshot in journal.recent(kind, window).map_err(|e| e.to_string())? {
@@ -90,7 +94,7 @@ fn latest_steps(journal: &Journal, args: &FollowArgs) -> Result<(Vec<Step>, Vec<
         if !whole && let Some(oldest) = snapshots.first() {
             steps.retain(|s| s.id != oldest.id);
         }
-        if whole || args.limit.is_some_and(|l| steps.len() >= l) {
+        if whole || steps.len() >= limit {
             return Ok((steps, unreadable));
         }
         window = window.saturating_mul(2);
@@ -103,14 +107,21 @@ fn latest_steps(journal: &Journal, args: &FollowArgs) -> Result<(Vec<Step>, Vec<
 /// commits that touched a file.
 pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
     let journal = journal()?;
-    let (steps, unreadable) = latest_steps(&journal, args)?;
-    let steps = &steps[steps.len().saturating_sub(args.limit.unwrap_or(usize::MAX))..];
+    let limit = match args.limit {
+        Some(l) => l,
+        None => default_limit()?,
+    };
+    // One more than shown tells whether earlier steps were left out.
+    let (steps, unreadable) = latest_steps(&journal, args, limit.saturating_add(1))?;
+    let more = args.limit.is_none() && steps.len() > limit;
+    let steps = &steps[steps.len().saturating_sub(limit)..];
     if json {
         return crate::to_json(&serde_json::json!({
             "kind": args.kind.name(),
             "pattern": args.pattern,
             "steps": steps,
             "unreadable": unreadable,
+            "more": more,
         }));
     }
     let mut out = String::new();
@@ -127,6 +138,9 @@ pub fn follow(args: &FollowArgs, json: bool) -> Result<String, String> {
     }
     for e in &unreadable {
         let _ = writeln!(out, "unreadable: {e}");
+    }
+    if more {
+        more_note(&mut out, steps.len());
     }
     Ok(out)
 }
@@ -249,8 +263,8 @@ mod tests {
             all: false,
             limit,
         };
-        let (every, _) = latest_steps(&journal, &args(None)).unwrap();
-        let (last, _) = latest_steps(&journal, &args(Some(1))).unwrap();
+        let (every, _) = latest_steps(&journal, &args(None), usize::MAX).unwrap();
+        let (last, _) = latest_steps(&journal, &args(Some(1)), 1).unwrap();
         assert!(!every.is_empty());
         assert_eq!(last.last().map(|s| &s.id), every.last().map(|s| &s.id));
         assert!(last.len() < every.len() || every.len() == 1);
